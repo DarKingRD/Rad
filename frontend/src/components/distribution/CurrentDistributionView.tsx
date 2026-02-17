@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { studiesApi, doctorsApi } from '../../services/api';
-import { Filter, UserCheck } from 'lucide-react';
+import { UserCheck } from 'lucide-react';
 import { Study, DoctorWithLoad } from '../../types';
 
 export const CurrentDistributionView: React.FC = () => {
@@ -48,15 +48,29 @@ export const CurrentDistributionView: React.FC = () => {
     }
   };
 
-  const handleAssign = async (doctor_id: number) => {
+  const [selectedDoctor, setSelectedDoctor] = useState<number | null>(null);
+
+  const handleAssign = async (doctor_id?: number) => {
     if (!selectedStudy) return;
+    const targetDoctorId = doctor_id || selectedDoctor;
+    if (!targetDoctorId) {
+      alert('Выберите врача');
+      return;
+    }
     try {
-      await studiesApi.assign(selectedStudy.id, doctor_id);
+      await studiesApi.assign(selectedStudy.id, targetDoctorId);
       loadData();
       setSelectedStudy(null);
+      setSelectedDoctor(null);
     } catch (error) {
       console.error('Error assigning study:', error);
       alert('Ошибка при назначении');
+    }
+  };
+
+  const handleDoctorClick = (doctorId: number) => {
+    if (selectedStudy) {
+      setSelectedDoctor(doctorId);
     }
   };
 
@@ -76,19 +90,8 @@ export const CurrentDistributionView: React.FC = () => {
           <h3 className="font-semibold text-slate-800">
             Очередь исследований ({studies.length})
           </h3>
-          <div className="flex space-x-2">
-            <input 
-              type="text" 
-              placeholder="Поиск..." 
-              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm" 
-            />
-            <button className="p-1.5 bg-slate-100 rounded-md hover:bg-slate-200">
-              <Filter size={16} />
-            </button>
-          </div>
         </div>
         
-        {/* ✅ СКРОЛЛ ДЛЯ ИССЛЕДОВАНИЙ */}
         <div className="flex-1 overflow-y-auto p-2 space-y-2">
           {studies.length === 0 ? (
             <div className="p-8 text-center text-slate-500">
@@ -126,9 +129,7 @@ export const CurrentDistributionView: React.FC = () => {
         </div>
       </div>
 
-      {/* Doctors Status — Состояние врачей */}
       <div className="w-1/2 space-y-4 flex flex-col">
-        {/* ✅ СКРОЛЛ ДЛЯ ВРАЧЕЙ */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex-1 overflow-y-auto">
           <h3 className="font-semibold text-slate-800 mb-4 sticky top-0 bg-white">
             Состояние врачей ({doctors.length})
@@ -142,7 +143,12 @@ export const CurrentDistributionView: React.FC = () => {
               doctors.map((doc) => (
                 <div 
                   key={doc.id} 
-                  className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50"
+                  onClick={() => handleDoctorClick(doc.id)}
+                  className={`flex items-center justify-between p-3 border rounded-lg cursor-pointer transition-all ${
+                    selectedDoctor === doc.id && selectedStudy
+                      ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
+                      : 'border-slate-100 hover:bg-slate-50'
+                  }`}
                 >
                   <div className="flex items-center space-x-3">
                     <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold">
@@ -173,7 +179,6 @@ export const CurrentDistributionView: React.FC = () => {
           </div>
         </div>
 
-        {/* Панель действий для выбранного исследования */}
         {selectedStudy && (
           <div className="bg-blue-600 text-white p-4 rounded-xl shadow-lg">
             <h4 className="font-medium mb-2">Действия для: {selectedStudy.research_number}</h4>
@@ -181,20 +186,48 @@ export const CurrentDistributionView: React.FC = () => {
               Статус: <strong>{selectedStudy.status}</strong> | 
               Приоритет: <strong>{getPriorityLabel(selectedStudy)}</strong>
             </p>
+            {selectedDoctor && (
+              <p className="text-blue-100 text-sm mb-3">
+                Выбран врач: <strong>{doctors.find(d => d.id === selectedDoctor)?.fio_alias}</strong>
+              </p>
+            )}
             <div className="flex space-x-3">
+              {selectedDoctor ? (
+                <>
+                  <button 
+                    onClick={() => handleAssign()}
+                    className="flex-1 bg-white text-blue-600 py-2 rounded-md font-medium text-sm hover:bg-blue-50"
+                  >
+                    Назначить выбранному врачу
+                  </button>
+                  <button 
+                    onClick={() => setSelectedDoctor(null)}
+                    className="px-4 py-2 bg-blue-500 text-white rounded-md font-medium text-sm hover:bg-blue-400"
+                  >
+                    Сбросить выбор
+                  </button>
+                </>
+              ) : (
+                <button 
+                  onClick={() => handleAssign(doctors[0]?.id)}
+                  className="flex-1 bg-white text-blue-600 py-2 rounded-md font-medium text-sm hover:bg-blue-50"
+                >
+                  Назначить автоматически
+                </button>
+              )}
               <button 
-                onClick={() => handleAssign(doctors[0]?.id)}
-                className="flex-1 bg-white text-blue-600 py-2 rounded-md font-medium text-sm hover:bg-blue-50"
-              >
-                Назначить автоматически
-              </button>
-              <button 
-                onClick={() => setSelectedStudy(null)}
+                onClick={() => {
+                  setSelectedStudy(null);
+                  setSelectedDoctor(null);
+                }}
                 className="flex-1 bg-blue-700 text-white border border-blue-500 py-2 rounded-md font-medium text-sm hover:bg-blue-800"
               >
                 Отмена
               </button>
             </div>
+            <p className="text-blue-100 text-xs mt-3">
+              💡 Выберите врача из списка выше, затем нажмите "Назначить выбранному врачу"
+            </p>
           </div>
         )}
       </div>

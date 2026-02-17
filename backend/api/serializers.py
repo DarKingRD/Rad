@@ -3,7 +3,7 @@ from .models import Doctor, StudyType, Schedule, Study
 
 
 class DoctorSerializer(serializers.ModelSerializer):
-    specialty = serializers.SerializerMethodField()
+    specialty = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = Doctor
@@ -11,6 +11,7 @@ class DoctorSerializer(serializers.ModelSerializer):
             'id', 'fio_alias', 'position_type', 
             'max_up_per_day', 'is_active', 'specialty'
         ]
+        read_only_fields = ['id', 'specialty']
     
     def get_specialty(self, obj):
         if obj.position_type == 'radiologist':
@@ -44,6 +45,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
             'id', 'doctor', 'doctor_name', 'work_date', 
             'time_start', 'time_end', 'is_day_off', 'planned_up'
         ]
+        read_only_fields = ['id', 'doctor_name']
 
 
 class ScheduleWithDoctorSerializer(serializers.ModelSerializer):

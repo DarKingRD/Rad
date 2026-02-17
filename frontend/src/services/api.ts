@@ -13,6 +13,10 @@ export const api = axios.create({
 export const doctorsApi = {
   getAll: () => api.get('/doctors/'),
   getWithLoad: () => api.get('/doctors/with_load/'),
+  getById: (id: number) => api.get(`/doctors/${id}/`),
+  create: (data: any) => api.post('/doctors/', data),
+  update: (id: number, data: any) => api.put(`/doctors/${id}/`, data),
+  delete: (id: number) => api.delete(`/doctors/${id}/`),
 };
 
 // === STUDY TYPES ===
@@ -25,6 +29,10 @@ export const schedulesApi = {
   getAll: (params?: { date_from?: string; date_to?: string; doctor_id?: number }) => 
     api.get('/schedules/', { params }),
   getByDate: (date: string) => api.get('/schedules/by_date/', { params: { date } }),
+  getById: (id: number) => api.get(`/schedules/${id}/`),
+  create: (data: any) => api.post('/schedules/', data),
+  update: (id: number, data: any) => api.put(`/schedules/${id}/`, data),
+  delete: (id: number) => api.delete(`/schedules/${id}/`),
 };
 
 // === STUDIES ===

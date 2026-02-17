@@ -14,10 +14,18 @@ from .serializers import (
 )
 
 
-class DoctorViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Doctor.objects.filter(is_active=True)
+class DoctorViewSet(viewsets.ModelViewSet):
+    queryset = Doctor.objects.all()
     serializer_class = DoctorSerializer
     pagination_class = None
+    
+    def get_queryset(self):
+        # Для списка показываем всех врачей, можно фильтровать по is_active
+        queryset = Doctor.objects.all()
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active.lower() == 'true')
+        return queryset
 
     @action(detail=False, methods=['get'])
     def with_load(self, request):
@@ -69,7 +77,7 @@ class StudyTypeViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = StudyTypeSerializer
 
 
-class ScheduleViewSet(viewsets.ReadOnlyModelViewSet):
+class ScheduleViewSet(viewsets.ModelViewSet):
     queryset = Schedule.objects.all().select_related('doctor')
     serializer_class = ScheduleSerializer
     pagination_class = None
