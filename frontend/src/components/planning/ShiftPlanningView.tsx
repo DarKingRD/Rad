@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { schedulesApi, doctorsApi } from '../../services/api';
-import { ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { Schedule, Doctor } from '../../types';
+import { schedulesApi, doctorsApi, studiesApi } from '../../services/api';
+import { ChevronLeft, ChevronRight, X, CheckCircle2, AlertTriangle, AlertCircle, Copy, Printer, RefreshCw, Search, Download } from 'lucide-react';
+import { Schedule, Doctor, Study } from '../../types';
 
 interface ScheduleFormData {
   doctor_id: number;
@@ -15,6 +15,7 @@ interface ScheduleFormData {
 export const ShiftPlanningView: React.FC = () => {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [studies, setStudies] = useState<Study[]>([]);
   const [loading, setLoading] = useState(true);
   
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
@@ -61,34 +62,54 @@ export const ShiftPlanningView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const loadSchedules = async () => {
+    const loadData = async () => {
       try {
         setLoading(true);
-        const res = await schedulesApi.getAll({
-          date_from: dates[0],
-          date_to: dates[6],
-          ...(selectedDoctor !== 'all' && { doctor_id: Number(selectedDoctor) })
-        });
-        const schedulesData = res.data.results || res.data;
+        const [schedulesRes, studiesRes] = await Promise.all([
+          schedulesApi.getAll({
+            date_from: dates[0],
+            date_to: dates[6],
+            ...(selectedDoctor !== 'all' && { doctor_id: Number(selectedDoctor) })
+          }),
+          studiesApi.getAll({
+            date_from: dates[0],
+            date_to: dates[6],
+          })
+        ]);
+        
+        const schedulesData = schedulesRes.data.results || schedulesRes.data;
+        const studiesData = studiesRes.data.results || studiesRes.data;
+        
         setSchedules(Array.isArray(schedulesData) ? schedulesData : []);
+        setStudies(Array.isArray(studiesData) ? studiesData : []);
       } catch (err) {
-        console.error('Error loading schedules:', err);
+        console.error('Error loading data:', err);
       } finally {
         setLoading(false);
       }
     };
     
-    loadSchedules();
+    loadData();
   }, [dates, selectedDoctor]);
 
   const loadSchedulesData = async () => {
-    const res = await schedulesApi.getAll({
-      date_from: dates[0],
-      date_to: dates[6],
-      ...(selectedDoctor !== 'all' && { doctor_id: Number(selectedDoctor) })
-    });
-    const schedulesData = res.data.results || res.data;
+    const [schedulesRes, studiesRes] = await Promise.all([
+      schedulesApi.getAll({
+        date_from: dates[0],
+        date_to: dates[6],
+        ...(selectedDoctor !== 'all' && { doctor_id: Number(selectedDoctor) })
+      }),
+      studiesApi.getAll({
+        date_from: dates[0],
+        date_to: dates[6],
+      })
+    ]);
+    
+    const schedulesData = schedulesRes.data.results || schedulesRes.data;
+    const studiesData = studiesRes.data.results || studiesRes.data;
+    
     setSchedules(Array.isArray(schedulesData) ? schedulesData : []);
+    setStudies(Array.isArray(studiesData) ? studiesData : []);
   };
 
   const handlePrevWeek = () => {
@@ -199,11 +220,78 @@ export const ShiftPlanningView: React.FC = () => {
     });
   }, [schedules]);
 
-  const getStatusColor = (schedule?: Schedule) => {
+  const getLoadPercentage = (schedule: Schedule | undefined, doctor: Doctor): number => {
+    if (!schedule || schedule.is_day_off !== 0) return 0;
+    const maxUp = doctor.max_up_per_day || 120;
+    const plannedUp = schedule.planned_up || 0;
+    return maxUp > 0 ? (plannedUp / maxUp) * 100 : 0;
+  };
+
+  const getLoadStatus = (schedule: Schedule | undefined, doctor: Doctor): 'normal' | 'warning' | 'overload' | 'empty' => {
+    if (!schedule || schedule.is_day_off !== 0) return 'empty';
+    const percentage = getLoadPercentage(schedule, doctor);
+    if (percentage > 95) return 'overload';
+    if (percentage >= 80) return 'warning';
+    return 'normal';
+  };
+
+  const getStudiesCountForSchedule = useCallback((schedule: Schedule | undefined, doctorId: number, date: string): number => {
+    if (!schedule) return 0;
+    
+    const scheduleDoctorId = getDoctorIdFromSchedule(schedule, doctorId);
+    const scheduleDate = schedule.work_date?.split('T')[0] || date;
+    
+    return studies.filter(study => {
+      // Получаем ID врача из исследования
+      const studyDoctorId = study.diagnostician_id || 
+        (typeof study.diagnostician === 'object' && study.diagnostician?.id ? study.diagnostician.id : null);
+      
+      // Получаем дату создания исследования (только дата, без времени)
+      const studyDate = study.created_at ? study.created_at.split('T')[0] : null;
+      
+      // Сравниваем врача и дату
+      return studyDoctorId === scheduleDoctorId && studyDate === scheduleDate;
+    }).length;
+  }, [studies]);
+
+  const getStatusColor = (schedule: Schedule | undefined, doctor: Doctor): string => {
     if (!schedule) return 'bg-slate-100 text-slate-400';
     if (schedule.is_day_off !== 0) return 'bg-slate-100 text-slate-400';
-    return 'bg-green-100 text-green-700 border border-green-200';
+    
+    const percentage = getLoadPercentage(schedule, doctor);
+    
+    if (percentage > 95) return 'bg-red-100 text-red-700 border border-red-300';
+    if (percentage >= 80) return 'bg-amber-100 text-amber-700 border border-amber-300';
+    return 'bg-green-100 text-green-700 border border-green-300';
   };
+
+  const calculateStats = useMemo(() => {
+    const totalDoctors = doctors.length;
+    let filledShifts = 0;
+    let warningShifts = 0;
+    let overloadShifts = 0;
+    const totalPossibleShifts = totalDoctors * 7;
+
+    doctors.forEach(doctor => {
+      dates.forEach(date => {
+        const schedule = getScheduleForDoctor(doctor.id, date);
+        if (schedule && schedule.is_day_off === 0) {
+          filledShifts++;
+          const status = getLoadStatus(schedule, doctor);
+          if (status === 'warning') warningShifts++;
+          if (status === 'overload') overloadShifts++;
+        }
+      });
+    });
+
+    return {
+      totalDoctors,
+      filledShifts,
+      totalPossibleShifts,
+      warningShifts,
+      overloadShifts,
+    };
+  }, [doctors, schedules, dates]);
 
   if (loading && schedules.length === 0) {
     return (
@@ -245,8 +333,89 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
+      {/* Карточки статистики */}
+      <div className="grid grid-cols-4 gap-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-4">
+          <div className="text-sm text-slate-600 mb-1">Всего врачей</div>
+          <div className="text-2xl font-bold text-slate-900">{calculateStats.totalDoctors}</div>
+        </div>
+        <div className="bg-white rounded-lg border border-slate-200 p-4">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-sm text-slate-600">Смен заполнено</div>
+            <CheckCircle2 size={16} className="text-green-600" />
+          </div>
+          <div className="text-2xl font-bold text-slate-900">
+            {calculateStats.filledShifts}/{calculateStats.totalPossibleShifts}
+          </div>
+        </div>
+        <div className="bg-white rounded-lg border border-slate-200 p-4">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-sm text-slate-600">Близко к лимиту</div>
+            <AlertTriangle size={16} className="text-amber-600" />
+          </div>
+          <div className="text-2xl font-bold text-amber-600">{calculateStats.warningShifts}</div>
+        </div>
+        <div className="bg-white rounded-lg border border-slate-200 p-4">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-sm text-slate-600">Перегрузки</div>
+            <AlertCircle size={16} className="text-red-600" />
+          </div>
+          <div className="text-2xl font-bold text-red-600">{calculateStats.overloadShifts}</div>
+        </div>
+      </div>
+
+      {/* Кнопки действий */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-2">
+          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
+            <RefreshCw size={16} className="mr-2" />
+            Очистить неделю
+          </button>
+          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
+            <Search size={16} className="mr-2" />
+            Балансировать нагрузку
+          </button>
+          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
+            <Search size={16} className="mr-2" />
+            Найти пробелы
+          </button>
+          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
+            <Printer size={16} className="mr-2" />
+            Печать
+          </button>
+        </div>
+        <div className="flex items-center space-x-2">
+          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
+            <Copy size={16} className="mr-2" />
+            Копировать неделю
+          </button>
+          <button className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 font-medium">
+            Сгенерировать план
+          </button>
+        </div>
+      </div>
+
       <div className="text-sm text-slate-600 bg-slate-50 px-4 py-2 rounded-md">
         <span className="font-medium">Неделя:</span> {new Date(dates[0]).toLocaleDateString('ru-RU')} — {new Date(dates[6]).toLocaleDateString('ru-RU')}
+      </div>
+
+      {/* Легенда */}
+      <div className="bg-white rounded-lg border border-slate-200 p-4">
+        <div className="text-sm font-semibold text-slate-700 mb-2">Индикаторы нагрузки</div>
+        <div className="flex items-center space-x-6 text-xs">
+          <div className="flex items-center space-x-2">
+            <div className="w-4 h-4 rounded bg-green-100 border border-green-300"></div>
+            <span className="text-slate-600">Норма (&lt;80%)</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="w-4 h-4 rounded bg-amber-100 border border-amber-300"></div>
+            <span className="text-slate-600">Близко к лимиту (80-95%)</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="w-4 h-4 rounded bg-red-100 border border-red-300"></div>
+            <span className="text-slate-600">Перегруз (&gt;95%)</span>
+          </div>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -277,6 +446,7 @@ export const ShiftPlanningView: React.FC = () => {
                   </td>
                   {dates.map(date => {
                     const schedule = getScheduleForDoctor(doc.id, date);
+                    const studiesCount = getStudiesCountForSchedule(schedule, doc.id, date);
                     return (
                       <td 
                         key={date} 
@@ -284,8 +454,22 @@ export const ShiftPlanningView: React.FC = () => {
                         onClick={() => handleOpenModal(doc.id, date, schedule)}
                       >
                         {schedule ? (
-                          <div className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${getStatusColor(schedule)}`}>
-                            {schedule.time_start?.substring(0, 5) || '—'}–{schedule.time_end?.substring(0, 5) || '—'}
+                          <div className="space-y-1">
+                            <div className={`inline-flex flex-col items-center px-3 py-2 rounded-lg text-xs font-medium ${getStatusColor(schedule, doc)}`}>
+                              <div className="font-semibold">
+                                {schedule.time_start?.substring(0, 5) || '—'}–{schedule.time_end?.substring(0, 5) || '—'}
+                              </div>
+                              {schedule.planned_up > 0 && (
+                                <div className="mt-1 font-bold">
+                                  {schedule.planned_up} УП
+                                </div>
+                              )}
+                            </div>
+                            {studiesCount > 0 && (
+                              <div className="text-xs text-slate-600 mt-1">
+                                Исследований: {studiesCount}
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <span className="text-slate-400 text-xs">—</span>
@@ -298,6 +482,16 @@ export const ShiftPlanningView: React.FC = () => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Информационная панель */}
+      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <div className="text-sm font-semibold text-red-900 mb-2">Как работает планирование</div>
+        <ul className="text-xs text-red-800 space-y-1">
+          <li>• Кликните на ячейку со сменой, чтобы отредактировать время и план по УП.</li>
+          <li>• Кнопка «Сгенерировать план» автоматически распределит смены с учётом максимальной нагрузки врачей и выходных дней.</li>
+          <li>• Красным выделяются перегрузки (&gt;95% от максимума УП), жёлтым — близкие к лимиту (80-95%).</li>
+        </ul>
       </div>
 
       {isModalOpen && (
