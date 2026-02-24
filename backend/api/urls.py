@@ -7,6 +7,8 @@ from .views import (
     StudyViewSet,
     dashboard_stats,
     chart_data,
+    distribute_studies_view,
+    distribution_preview
 )
 
 router = DefaultRouter()
@@ -19,4 +21,6 @@ urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/stats/", dashboard_stats, name="dashboard-stats"),
     path("dashboard/chart/", chart_data, name="chart-data"),
+    path("distribute/", distribute_studies_view, name='distribute'),
+    path("distribute/preview/", distribution_preview, name="distribution-preview")
 ]
