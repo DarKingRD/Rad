@@ -22,6 +22,8 @@ INSTALLED_APPS = [
     "drf_spectacular",
     # Local
     "api",
+    # postgre,
+    "django.contrib.postgres",
 ]
 
 MIDDLEWARE = [
