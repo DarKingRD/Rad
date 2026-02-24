@@ -60,7 +60,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
             ).count()
 
             # Расчёт нагрузки: количество исследований * средний УП (1.5)
-            current_load = active_studies * 1.5
+            current_load = int(active_studies * 1.5)
 
             data.append(
                 {
@@ -253,6 +253,8 @@ def dashboard_stats(request):
     avg_load = 0
     if active_doctors > 0:
         avg_load = int(pending_studies / active_doctors * 1.5)
+    else:
+        avg_load = 0
 
     data = {
         "total_studies": total_studies,

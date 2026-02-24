@@ -18,6 +18,16 @@ class DoctorSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "specialty"]
 
+    def validate_max_up_per_day(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Максимальное количество УП не может быть отрицательным")
+        return value
+
+    def validate_fio_alias(self, value):
+        if value and len(value.strip()) < 2:
+            raise serializers.ValidationError("ФИО должно содержать минимум 2 символа")
+        return value.strip() if value else None
+    
     def get_specialty(self, obj):
         if obj.position_type == "radiologist":
             return "Рентгенолог"
@@ -62,6 +72,21 @@ class ScheduleSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "doctor_name"]
 
+    def validate_planned_up(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Планируемое количество УП не может быть отрицательным")
+        return value
+
+    def validate(self, attrs):
+        # Проверка, что время окончания не раньше времени начала
+        time_start = attrs.get('time_start')
+        time_end = attrs.get('time_end')
+        
+        if time_start and time_end and time_start > time_end:
+            raise serializers.ValidationError("Время окончания работы не может быть раньше времени начала")
+        
+        return attrs
+
 
 class ScheduleWithDoctorSerializer(serializers.ModelSerializer):
     doctor = DoctorSerializer(read_only=True)
@@ -83,6 +108,11 @@ class StudySerializer(serializers.ModelSerializer):
     class Meta:
         model = Study
         fields = "__all__"
+
+    def validate_priority(self, value):
+        if value not in ['normal', 'cito', 'asap']:
+            raise serializers.ValidationError("Недопустимое значение приоритета")
+        return value
 
 
 class StudyWithDetailsSerializer(serializers.ModelSerializer):

@@ -21,7 +21,7 @@ class Doctor(models.Model):
 
     Представляет медицинского работника с его основными атрибутами:
     - id: Уникальный идентификатор врача
-    - fio_alias: ФИО диагностаp
+    - fio_alias: ФИО диагноста
     - position_type: Должность врача
     - max_up_per_day: Максимальное количество УП (условных пунктов) в день
     - is_active: Статус активности врача
@@ -54,7 +54,7 @@ class Doctor(models.Model):
         managed = False
 
     def __str__(self):
-        return self.fio_alias or f"Doctor {self.id}"
+        return str(self.fio_alias) if self.fio_alias else f"Doctor {self.id}"
 
 
 class StudyType(models.Model):
@@ -91,7 +91,7 @@ class StudyType(models.Model):
         managed = False
 
     def __str__(self):
-        return f"{self.id} - {self.name}" if self.name else f"StudyType {self.id}"
+        return str(f"{self.id} - {self.name}" if self.name else f"StudyType {self.id}")
 
 
 class Schedule(models.Model):
