@@ -1,5 +1,5 @@
 from django.db import models
-
+from django.contrib.postgres.fields import ArrayField
 
 class Doctor(models.Model):
     id = models.IntegerField(primary_key=True)
@@ -7,6 +7,12 @@ class Doctor(models.Model):
     position_type = models.CharField(max_length=50, blank=True, null=True)
     max_up_per_day = models.IntegerField(default=120, blank=True, null=True)
     is_active = models.BooleanField(default=True, blank=True, null=True)
+    modality = ArrayField(
+        models.CharField(max_length=50),
+        blank=True,
+        default=list,
+        verbose_name="Модальности"
+    )
 
     class Meta:
         db_table = "doctors"

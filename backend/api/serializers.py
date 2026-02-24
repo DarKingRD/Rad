@@ -14,6 +14,7 @@ class DoctorSerializer(serializers.ModelSerializer):
             "max_up_per_day",
             "is_active",
             "specialty",
+            "modality",
         ]
         read_only_fields = ["id", "specialty"]
 
