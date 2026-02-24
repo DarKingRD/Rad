@@ -1,13 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { studiesApi, doctorsApi } from '../../services/api';
-import { UserCheck } from 'lucide-react';
+import { UserCheck, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Study, DoctorWithLoad } from '../../types';
 
 export const CurrentDistributionView: React.FC = () => {
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
-  const [studies, setStudies] = useState<Study[]>([]);
+  const [allStudies, setAllStudies] = useState<Study[]>([]);
   const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(20);
 
   useEffect(() => {
     loadData();
@@ -19,13 +21,46 @@ export const CurrentDistributionView: React.FC = () => {
         studiesApi.getPending(),
         doctorsApi.getWithLoad()
       ]);
-      setStudies(studiesRes.data);
+      setAllStudies(studiesRes.data || []);
       setDoctors(doctorsRes.data);
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Сортировка исследований: CITO -> ASAP -> План
+  const sortedStudies = useMemo(() => {
+    return [...allStudies].sort((a, b) => {
+      const getPriorityOrder = (study: Study): number => {
+        if (study.is_cito || study.priority === 'cito') return 1;
+        if (study.is_asap || study.priority === 'asap') return 2;
+        return 3;
+      };
+      
+      const orderA = getPriorityOrder(a);
+      const orderB = getPriorityOrder(b);
+      
+      if (orderA !== orderB) {
+        return orderA - orderB;
+      }
+      
+      // Если приоритет одинаковый, сортируем по дате создания (новые первыми)
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+  }, [allStudies]);
+
+  // Пагинация
+  const totalPages = Math.ceil(sortedStudies.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedStudies = sortedStudies.slice(startIndex, endIndex);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    setSelectedStudy(null);
+    setSelectedDoctor(null);
   };
 
   const getPriorityColor = (study: Study) => {
@@ -59,7 +94,7 @@ export const CurrentDistributionView: React.FC = () => {
     }
     try {
       await studiesApi.assign(selectedStudy.id, targetDoctorId);
-      loadData();
+      await loadData();
       setSelectedStudy(null);
       setSelectedDoctor(null);
     } catch (error) {
@@ -88,17 +123,17 @@ export const CurrentDistributionView: React.FC = () => {
       <div className="w-1/2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
         <div className="p-4 border-b border-slate-200 flex justify-between items-center">
           <h3 className="font-semibold text-slate-800">
-            Очередь исследований ({studies.length})
+            Очередь исследований ({sortedStudies.length})
           </h3>
         </div>
         
         <div className="flex-1 overflow-y-auto p-2 space-y-2">
-          {studies.length === 0 ? (
+          {paginatedStudies.length === 0 ? (
             <div className="p-8 text-center text-slate-500">
               Нет исследований в очереди
             </div>
           ) : (
-            studies.map((study) => (
+            paginatedStudies.map((study) => (
               <div 
                 key={study.id}
                 onClick={() => setSelectedStudy(study)}
@@ -127,6 +162,69 @@ export const CurrentDistributionView: React.FC = () => {
             ))
           )}
         </div>
+
+        {/* Пагинация */}
+        {totalPages > 1 && (
+          <div className="p-4 border-t border-slate-200 flex items-center justify-between">
+            <div className="text-sm text-slate-600">
+              Показано {startIndex + 1}-{Math.min(endIndex, sortedStudies.length)} из {sortedStudies.length}
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage === 1}
+                className={`p-2 rounded-md border ${
+                  currentPage === 1
+                    ? 'border-slate-200 text-slate-400 cursor-not-allowed'
+                    : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <ChevronLeft size={16} />
+              </button>
+              
+              <div className="flex items-center space-x-1">
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNum: number;
+                  if (totalPages <= 5) {
+                    pageNum = i + 1;
+                  } else if (currentPage <= 3) {
+                    pageNum = i + 1;
+                  } else if (currentPage >= totalPages - 2) {
+                    pageNum = totalPages - 4 + i;
+                  } else {
+                    pageNum = currentPage - 2 + i;
+                  }
+                  
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => handlePageChange(pageNum)}
+                      className={`px-3 py-1 rounded-md text-sm ${
+                        currentPage === pageNum
+                          ? 'bg-blue-600 text-white'
+                          : 'border border-slate-300 text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
+              
+              <button
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage === totalPages}
+                className={`p-2 rounded-md border ${
+                  currentPage === totalPages
+                    ? 'border-slate-200 text-slate-400 cursor-not-allowed'
+                    : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="w-1/2 space-y-4 flex flex-col">
