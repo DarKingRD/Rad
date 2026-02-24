@@ -40,8 +40,6 @@ export interface Study {
   study_type_id: number;
   status: string;
   priority: 'normal' | 'cito' | 'asap';
-  is_asap: boolean;
-  is_cito: boolean;
   created_at: string;
   planned_at: string;
   diagnostician_id: number | null;

@@ -7,48 +7,76 @@ export const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 10000, // 10 seconds timeout
 });
 
-// === DOCTORS ===
+// Добавляем перехватчик для обработки ошибок
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response) {
+      // Сервер ответил кодом состояния, выходящим за пределы 2xx
+      console.error('API Error Response:', error.response.data);
+    } else if (error.request) {
+      // Запрос был сделан, но ответа не получено
+      console.error('API Error Request:', error.request);
+    } else {
+      // Что-то пошло не так при настройке запроса
+      console.error('API Error Message:', error.message);
+    }
+    return Promise.reject(error);
+  }
+);
+
+// Функция для повторных попыток запроса
+const retryRequest = async (requestFn: () => Promise<any>, retries = 3, delay = 1000): Promise<any> => {
+  try {
+    return await requestFn();
+  } catch (error) {
+    if (retries > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryRequest(requestFn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+};
+
+// Обновленные API функции с повторными попытками
 export const doctorsApi = {
-  getAll: () => api.get('/doctors/'),
-  getWithLoad: () => api.get('/doctors/with_load/'),
-  getById: (id: number) => api.get(`/doctors/${id}/`),
-  create: (data: any) => api.post('/doctors/', data),
-  update: (id: number, data: any) => api.put(`/doctors/${id}/`, data),
-  delete: (id: number) => api.delete(`/doctors/${id}/`),
+  getAll: () => retryRequest(() => api.get('/doctors/')),
+  getWithLoad: () => retryRequest(() => api.get('/doctors/with_load/')),
+  getById: (id: number) => retryRequest(() => api.get(`/doctors/${id}/`)),
+  create: (data: any) => retryRequest(() => api.post('/doctors/', data)),
+  update: (id: number, data: any) => retryRequest(() => api.put(`/doctors/${id}/`, data)),
+  delete: (id: number) => retryRequest(() => api.delete(`/doctors/${id}/`)),
 };
 
-// === STUDY TYPES ===
 export const studyTypesApi = {
-  getAll: () => api.get('/study-types/'),
+  getAll: () => retryRequest(() => api.get('/study-types/')),
 };
 
-// === SCHEDULES ===
 export const schedulesApi = {
-  getAll: (params?: { date_from?: string; date_to?: string; doctor_id?: number }) => 
-    api.get('/schedules/', { params }),
-  getByDate: (date: string) => api.get('/schedules/by_date/', { params: { date } }),
-  getById: (id: number) => api.get(`/schedules/${id}/`),
-  create: (data: any) => api.post('/schedules/', data),
-  update: (id: number, data: any) => api.put(`/schedules/${id}/`, data),
-  delete: (id: number) => api.delete(`/schedules/${id}/`),
+  getAll: (params?: { date_from?: string; date_to?: string; doctor_id?: number }) =>
+    retryRequest(() => api.get('/schedules/', { params })),
+  getByDate: (date: string) => retryRequest(() => api.get('/schedules/by_date/', { params: { date } })),
+  getById: (id: number) => retryRequest(() => api.get(`/schedules/${id}/`)),
+  create: (data: any) => retryRequest(() => api.post('/schedules/', data)),
+  update: (id: number, data: any) => retryRequest(() => api.put(`/schedules/${id}/`, data)),
+  delete: (id: number) => retryRequest(() => api.delete(`/schedules/${id}/`)),
 };
 
-// === STUDIES ===
 export const studiesApi = {
-  getAll: (params?: { status?: string; priority?: string; date_from?: string; date_to?: string }) => 
-    api.get('/studies/', { params }),
-  getPending: () => api.get('/studies/pending/'),
-  getCito: () => api.get('/studies/cito/'),
-  getAsap: () => api.get('/studies/asap/'),
-  assign: (id: number, doctor_id: number) => api.post(`/studies/${id}/assign/`, { doctor_id }),
-  updateStatus: (id: number, status: string) => api.put(`/studies/${id}/update_status/`, { status }),
+  getAll: (params?: { status?: string; priority?: string; date_from?: string; date_to?: string }) =>
+    retryRequest(() => api.get('/studies/', { params })),
+  getPending: () => retryRequest(() => api.get('/studies/pending/')),
+  getCito: () => retryRequest(() => api.get('/studies/cito/')),
+  getAsap: () => retryRequest(() => api.get('/studies/asap/')),
+  assign: (id: number, doctor_id: number) => retryRequest(() => api.post(`/studies/${id}/assign/`, { doctor_id })),
+  updateStatus: (id: number, status: string) => retryRequest(() => api.put(`/studies/${id}/update_status/`, { status })),
 };
 
-// === DASHBOARD ===
 export const dashboardApi = {
-  getStats: (date?: string) => api.get('/dashboard/stats/', { params: { date } }),
-  getChartData: (date_from: string, date_to: string) => 
-    api.get('/dashboard/chart/', { params: { date_from, date_to } }),
+  getStats: (date?: string) => retryRequest(() => api.get('/dashboard/stats/', { params: { date } })),
+  getChartData: (date_from: string, date_to: string) =>
+    retryRequest(() => api.get('/dashboard/chart/', { params: { date_from, date_to } })),
 };

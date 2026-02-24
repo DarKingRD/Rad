@@ -34,8 +34,8 @@ export const CurrentDistributionView: React.FC = () => {
   const sortedStudies = useMemo(() => {
     return [...allStudies].sort((a, b) => {
       const getPriorityOrder = (study: Study): number => {
-        if (study.is_cito || study.priority === 'cito') return 1;
-        if (study.is_asap || study.priority === 'asap') return 2;
+        if (study.priority === 'cito') return 1;
+        if (study.priority === 'asap') return 2;
         return 3;
       };
       
@@ -64,14 +64,14 @@ export const CurrentDistributionView: React.FC = () => {
   };
 
   const getPriorityColor = (study: Study) => {
-    if (study.is_cito || study.priority === 'cito') return 'bg-red-100 text-red-700';
-    if (study.is_asap || study.priority === 'asap') return 'bg-amber-100 text-amber-700';
+    if (study.priority === 'cito') return 'bg-red-100 text-red-700';
+    if (study.priority === 'asap') return 'bg-amber-100 text-amber-700';
     return 'bg-slate-100 text-slate-600';
   };
 
   const getPriorityLabel = (study: Study) => {
-    if (study.is_cito || study.priority === 'cito') return 'CITO';
-    if (study.is_asap || study.priority === 'asap') return 'ASAP';
+    if (study.priority === 'cito') return 'CITO';
+    if (study.priority === 'asap') return 'ASAP';
     return 'План';
   };
 
