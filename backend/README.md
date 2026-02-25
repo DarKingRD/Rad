@@ -54,7 +54,7 @@ backend/
 ### Study (Исследование)
 - `study_type` - тип исследования
 - `patient_name` - имя пациента
-- `priority` - приоритет (routine/cito/asap)
+- `priority` - приоритет (normal/cito/asap)
 - `status` - статус (pending/confirmed/signed)
 - `diagnostician` - врач-диагност
 - `created_at` - дата создания
@@ -102,7 +102,7 @@ backend/
 - `signed` - исследование выполнено и подписано врачом
 
 ### Приоритеты исследований
-- `routine` - плановое исследование
+- `normal` - плановое исследование
 - `cito` - срочное исследование
 - `asap` - немедленное исследование
 

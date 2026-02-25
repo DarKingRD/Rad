@@ -160,7 +160,7 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
     def pending(self, request):
         """Ожидающие исследования (без врача)"""
         studies = (
-            Study.objects.filter(diagnostician_id__isnull=True, status="pending")
+            Study.objects.filter(diagnostician_id__isnull=True)
             .select_related("study_type", "diagnostician")
             .order_by("-created_at")
         )
