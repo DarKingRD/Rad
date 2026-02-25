@@ -64,7 +64,7 @@ class StudyType(models.Model):
     Определяет виды медицинских исследований с их характеристиками:
     - id: Уникальный идентификатор типа исследования
     - name: Название вида исследования
-    - modality: Модальность исследования
+    - modality: Модальность исследования (массив для совместимости)
     - up_value: Количество условных пунктов (УП) за выполнение исследования
 
     Модель привязана к таблице 'study_types' в базе данных.
@@ -75,8 +75,11 @@ class StudyType(models.Model):
     name = models.CharField(
         max_length=500, blank=True, null=True, verbose_name="Название вида исследования"
     )
-    modality = models.CharField(
-        max_length=50, blank=True, null=True, verbose_name="Модальность исследования"
+    modality = ArrayField(
+        models.CharField(max_length=50),
+        blank=True,
+        default=list,
+        verbose_name="Модальности",
     )
     up_value = models.DecimalField(
         max_digits=5,
@@ -145,7 +148,7 @@ class Study(models.Model):
     - research_number: Уникальный номер исследования
     - study_type: Тип исследования
     - status: Статус исследования
-    - priority: Приоритет исследования (normal, high)
+    - priority: Приоритет исследования (normal, cito, asap)
     - created_at: Дата и время создания записи об исследовании
     - planned_at: Плановая дата и время проведения исследования
     - diagnostician: Диагност, назначенный для выполнения исследования
@@ -168,7 +171,12 @@ class Study(models.Model):
         verbose_name="Тип исследования",
     )
     status = models.CharField(
-        max_length=50, blank=True, null=True, verbose_name="Статус исследования"
+        max_length=50, blank=True, null=True, verbose_name="Статус исследования",
+        choices=[
+            ("pending", "Ожидает назначения"),
+            ("confirmed", "Назначено"),
+            ("signed", "Выполнено")
+        ]
     )
     priority = models.CharField(
         max_length=20,
@@ -176,6 +184,11 @@ class Study(models.Model):
         blank=True,
         null=True,
         verbose_name="Приоритет исследования",
+        choices=[
+            ("normal", "Нормальный"),
+            ("cito", "Cito"),
+            ("asap", "Asap")
+        ]
     )
     created_at = models.DateTimeField(
         blank=True, null=True, verbose_name="Дата создания"
