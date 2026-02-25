@@ -21,6 +21,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from .services.distribution import distribute_studies
 
+
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.all()
     serializer_class = DoctorSerializer
@@ -159,7 +160,7 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
     def pending(self, request):
         """Ожидающие исследования (без врача)"""
         studies = (
-            Study.objects.filter(diagnostician_id__isnull=True)
+            Study.objects.filter(diagnostician_id__isnull=True, status="pending")
             .select_related("study_type", "diagnostician")
             .order_by("-created_at")
         )
@@ -320,43 +321,49 @@ def chart_data(request):
     return Response(serializer.data)
 
 
-@api_view(['GET', 'POST'])  # ← Было ['POST'], стало ['GET', 'POST']
+@api_view(["GET", "POST"])  # ← Было ['POST'], стало ['GET', 'POST']
 def distribute_studies_view(request):
     """Автоматическое распределение исследований по врачам"""
-    if request.method == 'POST':
+    if request.method == "POST":
         try:
             result = distribute_studies()
             return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({
-                'error': str(e),
-                'message': 'Ошибка при распределении исследований'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": str(e), "message": "Ошибка при распределении исследований"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
     else:  # GET
         # Предварительный просмотр без выполнения
         from api.models import Study, Doctor, Schedule
         from django.utils import timezone
-        
-        pending = Study.objects.filter(diagnostician__isnull=True).count()
+
+        pending = Study.objects.filter(
+            diagnostician__isnull=True, status="pending"
+        ).count()
         today = timezone.now().date()
-        doctors = Doctor.objects.filter(
-            is_active=True,
-            schedule__work_date=today,
-            schedule__is_day_off=0
-        ).distinct().count()
-        
-        return Response({
-            'pending_studies': pending,
-            'available_doctors': doctors,
-            'message': 'Отправьте POST-запрос для запуска распределения'
-        })
+        doctors = (
+            Doctor.objects.filter(
+                is_active=True, schedule__work_date=today, schedule__is_day_off=0
+            )
+            .distinct()
+            .count()
+        )
+
+        return Response(
+            {
+                "pending_studies": pending,
+                "available_doctors": doctors,
+                "message": "Отправьте POST-запрос для запуска распределения",
+            }
+        )
 
 
-@api_view(['GET'])
+@api_view(["GET"])
 def distribution_preview(request):
     """
     Предварительный просмотр распределения (без сохранения).
-    
+
     Request: GET /api/distribute/preview/
     Response: {
         'pending_studies': 50,
@@ -364,17 +371,23 @@ def distribution_preview(request):
         'estimated_tardiness': 15.3
     }
     """
-    pending = Study.objects.filter(diagnostician__isnull=True).count()
-    
+    pending = Study.objects.filter(diagnostician__isnull=True, status="pending").count()
+
     today = timezone.now().date()
-    doctors = Doctor.objects.filter(
-        is_active=True,
-        schedule__work_date=today,
-        schedule__is_day_off=0
-    ).distinct().count()
-    
-    return Response({
-        'pending_studies': pending,
-        'available_doctors': doctors,
-        'message': 'Готов к распределению' if pending > 0 and doctors > 0 else 'Нет данных'
-    })
+    doctors = (
+        Doctor.objects.filter(
+            is_active=True, schedule__work_date=today, schedule__is_day_off=0
+        )
+        .distinct()
+        .count()
+    )
+
+    return Response(
+        {
+            "pending_studies": pending,
+            "available_doctors": doctors,
+            "message": "Готов к распределению"
+            if pending > 0 and doctors > 0
+            else "Нет данных",
+        }
+    )
