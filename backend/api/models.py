@@ -75,12 +75,7 @@ class StudyType(models.Model):
     name = models.CharField(
         max_length=500, blank=True, null=True, verbose_name="Название вида исследования"
     )
-    modality = ArrayField(
-        models.CharField(max_length=50),
-        blank=True,
-        default=list,
-        verbose_name="Модальности",
-    )
+    modality = models.CharField(max_length=50)
     up_value = models.DecimalField(
         max_digits=5,
         decimal_places=2,

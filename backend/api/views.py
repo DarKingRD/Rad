@@ -339,7 +339,7 @@ def distribute_studies_view(request):
         from django.utils import timezone
 
         pending = Study.objects.filter(
-            diagnostician__isnull=True, status="pending"
+            diagnostician__isnull=True
         ).count()
         today = timezone.now().date()
         doctors = (
@@ -371,7 +371,7 @@ def distribution_preview(request):
         'estimated_tardiness': 15.3
     }
     """
-    pending = Study.objects.filter(diagnostician__isnull=True, status="pending").count()
+    pending = Study.objects.filter(diagnostician__isnull=True).count()
 
     today = timezone.now().date()
     doctors = (
