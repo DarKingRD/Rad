@@ -151,8 +151,13 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
                     <div className="text-xs font-medium text-slate-800 truncate">
                       {study.research_number}
                     </div>
-                    <div className="text-xs text-slate-500 truncate">
-                      {study.study_type?.name || `Тип ${study.study_type_id}`}
+                    <div className="text-xs text-slate-500 truncate flex items-center gap-1 flex-wrap">
+                      <span>{study.study_type?.name || `Тип ${study.study_type_id}`}</span>
+                      {study.study_type?.modality && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                          {study.study_type.modality}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-slate-400">
                       {formatDate(study.created_at)} {formatTime(study.created_at)}
@@ -219,7 +224,6 @@ export const CurrentDistributionView: React.FC = () => {
     }));
 
     try {
-      // Используем существующий фильтр: GET /api/studies/?diagnostician_id=X&status=confirmed
       const res = await studiesApi.getList({ diagnostician_id: doctorId, status: 'confirmed' });
       setDoctorStudies(prev => ({
         ...prev,
@@ -329,8 +333,13 @@ export const CurrentDistributionView: React.FC = () => {
                     {getPriorityLabel(study.priority)}
                   </span>
                 </div>
-                <div className="text-sm text-slate-600 mb-2">
-                  {study.study_type?.name || `ID: ${study.study_type_id}`}
+                <div className="text-sm text-slate-600 mb-2 flex items-center gap-2 flex-wrap">
+                  <span>{study.study_type?.name || `ID: ${study.study_type_id}`}</span>
+                  {study.study_type?.modality && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                      {study.study_type.modality}
+                    </span>
+                  )}
                 </div>
                 <div className="flex justify-between text-xs text-slate-400">
                   <span>Создано: {formatDate(study.created_at)}</span>
@@ -428,11 +437,16 @@ export const CurrentDistributionView: React.FC = () => {
             <h4 className="font-medium mb-1">
               {selectedStudy.research_number}
             </h4>
-            <p className="text-blue-100 text-sm mb-3">
+            <p className="text-blue-100 text-sm mb-3 flex items-center gap-2 flex-wrap">
               <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium mr-2 ${getPriorityColor(selectedStudy.priority)} !bg-blue-500 !text-white`}>
                 {getPriorityLabel(selectedStudy.priority)}
               </span>
-              {selectedStudy.study_type?.name}
+              <span>{selectedStudy.study_type?.name}</span>
+              {selectedStudy.study_type?.modality && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-500/30 text-blue-100 text-[10px] font-medium uppercase tracking-wide">
+                  {selectedStudy.study_type.modality}
+                </span>
+              )}
             </p>
 
             {selectedDoctor && (
