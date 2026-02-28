@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from django.utils import timezone
 from datetime import datetime, timedelta
-from django.db.models import Q
+from django.db.models import Q, Sum, F, Case, When, IntegerField, Value
 from .models import Doctor, StudyType, Schedule, Study
 from .serializers import (
     DoctorSerializer,
@@ -35,39 +35,51 @@ class DoctorViewSet(viewsets.ModelViewSet):
     def with_load(self, request):
         """Врачи с текущей загрузкой ЗА ТЕКУЩИЙ МЕСЯЦ"""
         from django.utils import timezone
+        from django.db.models import Sum, F
         from datetime import datetime
 
-        # Получаем первый и последний день текущего месяца
         now = timezone.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        # Последний день месяца
         if now.month == 12:
             month_end = now.replace(year=now.year + 1, month=1, day=1)
         else:
             month_end = now.replace(month=now.month + 1, day=1)
 
-        doctors = Doctor.objects.all()  # ← Убрали фильтр is_active
+        doctors = Doctor.objects.all()
 
         data = []
         for doctor in doctors:
-            # Считаем ТОЛЬКО неподписанные исследования ЗА ТЕКУЩИЙ МЕСЯЦ
-            active_studies = Study.objects.filter(
+            # Считаем УП по формуле: ∑ (количество исследований * весовой коэффициент)
+            # Используем агрегацию для суммирования весовых коэффициентов
+            up_data = Study.objects.filter(
                 diagnostician=doctor,
                 created_at__gte=month_start,
                 created_at__lt=month_end,
-                status__in=["confirmed", "pending"],  # ← НЕ считаем signed
-            ).count()
+                status__in=["confirmed", "pending", "signed"],  # Считаем все описанные
+            ).aggregate(
+                total_up=Sum(F('study_type__up_value')),  # ← Поле с коэффициентом в StudyType
+                active_count=Sum(
+                    Case(
+                        When(status__in=["confirmed", "pending"], then=1),
+                        default=0,
+                        output_field=IntegerField()
+                    )
+                )
+            )
 
-            # Расчёт нагрузки: количество исследований * средний УП (1.5)
-            current_load = int(active_studies * 1.5)
+            current_load = round(up_data['total_up'] or 0, 3)
+            active_studies = up_data['active_count'] or 0
+
+            # Норма УП в месяц согласно положению
+            norm_up = 40 if doctor.position_type == "head" else 50
 
             data.append(
                 {
                     "id": doctor.id,
                     "fio_alias": doctor.fio_alias or f"Врач {doctor.id}",
                     "position_type": doctor.position_type,
-                    "max_up_per_day": doctor.max_up_per_day or 120,
+                    "max_up_per_day": doctor.max_up_per_day or norm_up,
                     "is_active": (
                         doctor.is_active if doctor.is_active is not None else True
                     ),
@@ -76,9 +88,10 @@ class DoctorViewSet(viewsets.ModelViewSet):
                         if doctor.position_type == "radiologist"
                         else "КТ-диагност"
                     ),
-                    "current_load": round(current_load, 1),
-                    "max_load": doctor.max_up_per_day or 120,
+                    "current_load": current_load,
+                    "max_load": norm_up,
                     "active_studies": active_studies,
+                    "load_percentage": round((current_load / norm_up) * 100, 1) if norm_up > 0 else 0,
                 }
             )
 
