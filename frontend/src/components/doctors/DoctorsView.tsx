@@ -8,6 +8,7 @@ interface DoctorFormData {
   position_type: string;
   max_up_per_day: number;
   is_active: boolean;
+  modality: string[];
 }
 
 export const DoctorsView: React.FC = () => {
@@ -20,6 +21,7 @@ export const DoctorsView: React.FC = () => {
     position_type: 'radiologist',
     max_up_per_day: 120,
     is_active: true,
+    modality: [] as string[],
   });
 
   useEffect(() => {
@@ -44,6 +46,7 @@ export const DoctorsView: React.FC = () => {
     position_type: 'radiologist',
     max_up_per_day: 120,
     is_active: true,
+    modality: [],
   });
 
   const handleOpenModal = (doctor?: Doctor) => {
@@ -52,7 +55,8 @@ export const DoctorsView: React.FC = () => {
       setFormData({
         fio_alias: doctor.fio_alias || '',
         position_type: doctor.position_type || 'radiologist',
-        max_up_per_day: doctor.max_up_per_day || 120,
+        max_up_per_day: doctor.max_up_per_day || 50,
+        modality: doctor.modality || [],
         is_active: doctor.is_active !== undefined ? doctor.is_active : true,
       });
     } else {
@@ -111,6 +115,7 @@ export const DoctorsView: React.FC = () => {
               <th className="px-6 py-4 font-semibold text-slate-700">ФИО</th>
               <th className="px-6 py-4 font-semibold text-slate-700">Специализация</th>
               <th className="px-6 py-4 font-semibold text-slate-700">Макс. УП/день</th>
+              <th className="px-6 py-4 font-semibold text-slate-700">Модальности</th>
               <th className="px-6 py-4 font-semibold text-slate-700">Статус</th>
               <th className="px-6 py-4 font-semibold text-slate-700 text-right">Действия</th>
             </tr>
@@ -118,7 +123,7 @@ export const DoctorsView: React.FC = () => {
           <tbody className="divide-y divide-slate-100">
             {doctors.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
+                <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
                   Врачи не найдены
                 </td>
               </tr>
@@ -128,6 +133,22 @@ export const DoctorsView: React.FC = () => {
                   <td className="px-6 py-4 font-medium text-slate-900">{doc.fio_alias || 'Не указано'}</td>
                   <td className="px-6 py-4 text-slate-600">{doc.specialty}</td>
                   <td className="px-6 py-4 text-slate-600">{doc.max_up_per_day || 120}</td>
+                  <td className="px-6 py-4 text-slate-600">
+                    {doc.modality && doc.modality.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {doc.modality.map((mod, index) => (
+                          <span
+                            key={index}
+                            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800"
+                          >
+                            {mod}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">Не указано</span>
+                    )}
+                  </td>
                   <td className="px-6 py-4">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                       doc.is_active ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-800'
@@ -207,6 +228,24 @@ export const DoctorsView: React.FC = () => {
                   required
                 />
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Модальности (через пробел)
+                </label>
+                <input
+                  type="text"
+                  value={(formData.modality || []).join(' ')}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      modality: e.target.value.split(',').map((m) => m.trim()).filter(Boolean),
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="КТ МРТ Рентген"
+                />
+            </div>
 
               <div className="flex items-center">
                 <input

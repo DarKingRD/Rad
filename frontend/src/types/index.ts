@@ -5,6 +5,7 @@ export interface Doctor {
   fio_alias: string;
   position_type: string;
   max_up_per_day: number;
+  modality?: string[];
   is_active: boolean;
   specialty: string;
 }
