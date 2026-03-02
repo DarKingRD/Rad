@@ -1,17 +1,29 @@
 """
-Сервис автоматизированного распределения исследований по врачам.
-Реализует алгоритм ATC для минимизации:
-MIN Z = Σᵢ w_i × T_i
-где T_i = max(0, C_i - d_i)
+Сервис оффлайн-распределения исследований по врачам.
+
+Постановка задачи: Parallel Machine Weighted Tardiness (PMWT)
+Цель: MIN Z = Σᵢ wᵢ × Tᵢ, где Tᵢ = max(0, Cᵢ - dᵢ)
+
+Реализация:
+  - Основной метод: MIP через PuLP + CBC (pip install pulp)
+  - Fallback: жадный WSPT алгоритм (работает без зависимостей)
+
+УП согласно Положению об оплате ОМС:
+  Рентген = 0.083 УП, КТ = 0.25 УП, МРТ = 0.333 УП
+  Норма = 50 УП/месяц (рентгенолог), 40 УП (завед.)
+  max_up_per_day в Doctor — дневной лимит УП (используется напрямую)
 """
 
-from datetime import timedelta, datetime, time
-from django.utils import timezone
-from api.models import Study, Doctor, Schedule, StudyType
-from typing import List, Dict, Tuple, Optional, Set
-from dataclasses import dataclass, field
-import math
+from __future__ import annotations
+
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime, time, timedelta
+from typing import Dict, List, Optional, Set, Tuple
+
+from django.utils import timezone
+
+from api.models import Doctor, Schedule, Study, StudyType
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +32,7 @@ logger = logging.getLogger(__name__)
 # МАППИНГ МОДАЛЬНОСТЕЙ
 # ==============================================================================
 
-MODALITY_ALIASES = {
+MODALITY_ALIASES: Dict[str, str] = {
     "KT": "CT",
     "КТ": "CT",
     "COMPUTED_TOMOGRAPHY": "CT",
@@ -33,58 +45,46 @@ MODALITY_ALIASES = {
     "US": "US",
     "УЗИ": "US",
     "ULTRASOUND": "US",
-    "OTHER": "OTHER",
-    "ПРОЧЕЕ": "OTHER",
-    "": "OTHER",
 }
 
 
-def normalize_modality(modality: str) -> str:
-    if not modality:
+def normalize_modality(m: str) -> str:
+    if not m:
         return "OTHER"
-    normalized = modality.strip().upper()
-    return MODALITY_ALIASES.get(normalized, normalized)
+    return MODALITY_ALIASES.get(m.strip().upper(), m.strip().upper())
 
 
-def parse_modalities(modality_data) -> Set[str]:
-    if modality_data is None:
+def parse_modalities(data) -> Set[str]:
+    if not data:
         return set()
-    if isinstance(modality_data, list):
-        modalities = modality_data
-    elif isinstance(modality_data, str):
-        modalities = modality_data.split("/")
-    else:
-        return set()
-
-    result = set()
-    for m in modalities:
-        if m and str(m).strip():
-            normalized = normalize_modality(str(m))
-            result.add(normalized)
-    return result
+    items = data if isinstance(data, list) else str(data).split("/")
+    return {normalize_modality(str(m)) for m in items if m and str(m).strip()}
 
 
 # ==============================================================================
 # КОНФИГУРАЦИЯ
 # ==============================================================================
 
+PRIORITY_WEIGHTS = {"cito": 100.0, "asap": 10.0, "normal": 1.0}
+DEADLINE_HOURS = {"cito": 2, "asap": 24, "normal": 72}
 
-@dataclass
-class Config:
-    PRIORITY_WEIGHTS = {
-        "cito": 100.0,
-        "asap": 10.0,
-        "normal": 1.0,
-    }
+# Рекомендованное время описания (мин) из Положения об оплате
+MODALITY_DURATION_MINUTES = {
+    "XRAY": 5,
+    "CT": 15,
+    "CT_CON": 25,
+    "MRI": 20,
+    "MRI_CON": 30,
+    "MAMMO": 6,
+    "FLUORO": 4,
+    "ECG": 4,
+    "HOLTER": 25,
+    "EEG": 20,
+    "US": 10,
+}
 
-    DEADLINES = {
-        "cito": 2,
-        "asap": 24,
-        "normal": 72,
-    }
-
-    MINUTES_PER_UP = 15
-    ATC_K_PARAM = 2.0
+MIP_TIME_LIMIT = 120
+MIP_GAP_REL = 0.05
 
 
 # ==============================================================================
@@ -100,564 +100,492 @@ class StudyData:
     created_at: datetime
     modality: Set[str]
     up_value: float
+    duration_minutes: float
     deadline: datetime
     weight: float
-    duration_minutes: float
 
-    def get_processing_time_hours(self) -> float:
-        return self.duration_minutes / 60
-
-    def get_slack_time(self, current_time: datetime) -> float:
-        time_to_deadline = (self.deadline - current_time).total_seconds() / 3600
-        return time_to_deadline - self.get_processing_time_hours()
+    @property
+    def duration_hours(self) -> float:
+        return self.duration_minutes / 60.0
 
 
 @dataclass
 class DoctorData:
     id: int
-    fio_alias: str
+    name: str
     modality: Set[str]
-    max_up_per_day: int
-    max_minutes: float
-    time_start: Optional[time] = None
-    time_end: Optional[time] = None
-
-    current_load: float = 0.0
-    current_minutes: float = 0.0
-    available_time: Optional[datetime] = None
-    assigned_study_ids: List[int] = field(default_factory=list)
+    max_up: float
+    shift_start: datetime
+    shift_end: datetime
+    assigned_ids: List[int] = field(default_factory=list)
+    used_up: float = 0.0
+    used_minutes: float = 0.0
 
     @property
-    def remaining_up(self) -> float:
-        return max(0, self.max_up_per_day - self.current_load)
+    def shift_hours(self) -> float:
+        return (self.shift_end - self.shift_start).total_seconds() / 3600.0
 
     @property
-    def remaining_minutes(self) -> float:
-        return max(0, self.max_minutes - self.current_minutes)
+    def free_up(self) -> float:
+        return max(0.0, self.max_up - self.used_up)
 
 
 # ==============================================================================
-# СЕРВИС РАСПРЕДЕЛЕНИЯ
+# СЕРВИС
 # ==============================================================================
 
 
 class DistributionService:
-    """
-    Сервис распределения на основе алгоритма ATC.
-    Минимизирует ТОЛЬКО: Σ(w_i × T_i)
-    """
-
     def __init__(self):
         self.now = timezone.now()
-        self.config = Config()
+        self._debug: List[str] = []
 
-    def make_aware(self, dt: Optional[datetime]) -> Optional[datetime]:
+    def _log(self, msg: str):
+        logger.info(msg)
+        self._debug.append(msg)
+
+    def _make_aware(self, dt: Optional[datetime]) -> Optional[datetime]:
         if dt is None:
             return None
-        if timezone.is_aware(dt):
-            return dt
-        return timezone.make_aware(dt)
+        return dt if timezone.is_aware(dt) else timezone.make_aware(dt)
 
-    def check_modality_compatibility(
-        self, study_mods: Set[str], doctor_mods: Set[str]
-    ) -> bool:
-        if not doctor_mods:
+    def _modality_ok(self, study_mods: Set[str], doc_mods: Set[str]) -> bool:
+        if not study_mods or not doc_mods:
             return True
-        if not study_mods:
-            return True
-        return bool(study_mods & doctor_mods)
+        return bool(study_mods & doc_mods)
 
-    def get_deadline(self, study: Study) -> datetime:
-        priority = study.priority or "normal"
-        hours = self.config.DEADLINES.get(priority, 72)
-        created_at = self.make_aware(study.created_at) or self.now
-        return created_at + timedelta(hours=hours)
+    # ── Загрузка данных ──────────────────────────────────────────────
 
-    def get_pending_studies(self) -> List[Study]:
-        studies = list(
-            Study.objects.filter(diagnostician__isnull=True).select_related(
-                "study_type"
-            )
+    def _get_duration(self, study: Study) -> float:
+        if study.study_type:
+            mod = normalize_modality(study.study_type.modality or "")
+            return float(MODALITY_DURATION_MINUTES.get(mod, 15))
+        return 15.0
+
+    def _get_up(self, study: Study) -> float:
+        if study.study_type and study.study_type.up_value:
+            return float(study.study_type.up_value)
+        if study.study_type:
+            mod = normalize_modality(study.study_type.modality or "")
+            return {"XRAY": 0.083, "CT": 0.25, "MRI": 0.333, "US": 0.10}.get(mod, 0.25)
+        return 0.25
+
+    def load_studies(self) -> List[StudyData]:
+        qs = Study.objects.filter(diagnostician__isnull=True).select_related(
+            "study_type"
         )
 
-        # ✅ Сортировка: CITO → ASAP → Normal, внутри по времени
-        studies.sort(
-            key=lambda s: (
-                0 if s.priority == "cito" else (1 if s.priority == "asap" else 2),
-                self.make_aware(s.created_at) or self.now,
+        result = []
+        for s in qs:
+            priority = s.priority or "normal"
+            created = self._make_aware(s.created_at) or self.now
+            deadline = created + timedelta(hours=DEADLINE_HOURS.get(priority, 72))
+            result.append(
+                StudyData(
+                    id=s.id,
+                    research_number=s.research_number,
+                    priority=priority,
+                    created_at=created,
+                    modality=parse_modalities(
+                        s.study_type.modality if s.study_type else ""
+                    ),
+                    up_value=self._get_up(s),
+                    duration_minutes=self._get_duration(s),
+                    deadline=deadline,
+                    weight=PRIORITY_WEIGHTS.get(priority, 1.0),
+                )
             )
-        )
-        return studies
 
-    def get_available_doctors(self, date: datetime = None) -> List[Doctor]:
-        if date is None:
-            date = timezone.now().date()
+        self._log(f"Исследований без назначения: {len(result)}")
+        if result:
+            sample = result[:3]
+            for s in sample:
+                self._log(
+                    f"  Пример: id={s.id}, priority={s.priority}, "
+                    f"modality={s.modality}, up={s.up_value}, dur={s.duration_minutes}мин"
+                )
+        return result
 
+    def load_doctors(self) -> List[DoctorData]:
+        today = self.now.date()
         schedules = Schedule.objects.filter(
-            work_date=date, is_day_off=0
+            work_date=today, is_day_off=0
         ).select_related("doctor")
 
-        doctor_ids = schedules.values_list("doctor_id", flat=True)
-        return Doctor.objects.filter(id__in=doctor_ids, is_active=True)
+        self._log(f"Расписаний на {today}: {schedules.count()}")
 
-    def prepare_doctors_data(
-        self, doctors: List[Doctor], today: datetime
-    ) -> List[DoctorData]:
-        doctor_data_list = []
-
-        for doctor in doctors:
-            schedule = Schedule.objects.filter(
-                doctor=doctor, work_date=today.date(), is_day_off=0
-            ).first()
-
-            if not schedule:
+        result = []
+        for sch in schedules:
+            doc = sch.doctor
+            if not doc or not doc.is_active:
+                self._log(
+                    f"  Пропуск: врач {getattr(doc, 'id', '?')}, active={getattr(doc, 'is_active', '?')}"
+                )
                 continue
 
-            modality_set = parse_modalities(doctor.modality)
+            max_up = float(doc.max_up_per_day or 50)
 
-            if schedule.time_start and schedule.time_end:
-                start_dt = datetime.combine(today.date(), schedule.time_start)
-                end_dt = datetime.combine(today.date(), schedule.time_end)
-                start_dt = timezone.make_aware(start_dt)
-                end_dt = timezone.make_aware(end_dt)
-                max_minutes = (end_dt - start_dt).total_seconds() / 60
-                available_time = start_dt
+            if sch.time_start and sch.time_end:
+                s_start = timezone.make_aware(datetime.combine(today, sch.time_start))
+                s_end = timezone.make_aware(datetime.combine(today, sch.time_end))
             else:
-                max_minutes = 480
-                available_time = self.now
+                s_start = self.now.replace(hour=9, minute=0, second=0, microsecond=0)
+                s_end = self.now.replace(hour=17, minute=0, second=0, microsecond=0)
 
-            doctor_data = DoctorData(
-                id=doctor.id,
-                fio_alias=doctor.fio_alias,
-                modality=modality_set,
-                max_up_per_day=doctor.max_up_per_day or 120,
-                max_minutes=max_minutes,
-                time_start=schedule.time_start,
-                time_end=schedule.time_end,
-                current_load=0.0,
-                current_minutes=0.0,
-                available_time=available_time,
-            )
-            doctor_data_list.append(doctor_data)
+            shift_h = (s_end - s_start).total_seconds() / 3600.0
+            mods = parse_modalities(doc.modality)
 
-        logger.info(f"Prepared {len(doctor_data_list)} doctors")
-        for d in doctor_data_list:
-            logger.info(
-                f"  Doctor {d.id}: modality={d.modality}, max_minutes={d.max_minutes}, max_up={d.max_up_per_day}"
+            self._log(
+                f"  Врач {doc.fio_alias} (id={doc.id}): "
+                f"max_up={max_up}, смена={shift_h:.1f}ч, мод={list(mods)}"
             )
 
-        return doctor_data_list
-
-    def prepare_study_data(self, study: Study) -> StudyData:
-        study_type = study.study_type
-        modality_set = parse_modalities(study_type.modality if study_type else [])
-        up_value = (
-            float(study_type.up_value) if study_type and study_type.up_value else 1.0
-        )
-        priority = study.priority or "normal"
-        created_at = self.make_aware(study.created_at) or self.now
-        deadline = self.get_deadline(study)
-
-        return StudyData(
-            id=study.id,
-            research_number=study.research_number,
-            priority=priority,
-            created_at=created_at,
-            modality=modality_set,
-            up_value=up_value,
-            deadline=deadline,
-            weight=self.config.PRIORITY_WEIGHTS.get(priority, 1.0),
-            duration_minutes=up_value * self.config.MINUTES_PER_UP,
-        )
-
-    def calculate_atc_index(self, study: StudyData, current_time: datetime) -> float:
-        """
-        ATC_i(t) = (w_i / p_i) × exp(-max(0, d_i - t - p_i) / (k × p_avg))
-        """
-        processing_time = study.get_processing_time_hours()
-        if processing_time <= 0:
-            processing_time = 0.25
-
-        # Используем реальное значение UP для расчета времени обработки
-        p_avg = processing_time
-
-        # Рассчитываем slack time с учетом времени обработки
-        time_to_deadline = (study.deadline - current_time).total_seconds() / 3600
-        slack = time_to_deadline - processing_time
-
-        weight_density = study.weight / processing_time
-        exp_component = math.exp(-max(0, slack) / (self.config.ATC_K_PARAM * p_avg))
-
-        atc_index = weight_density * exp_component
-        return atc_index
-
-    def calculate_tardiness(
-        self, completion_time: datetime, deadline: datetime
-    ) -> float:
-        """T_i = max(0, C_i - d_i)"""
-        if not timezone.is_aware(completion_time):
-            completion_time = timezone.make_aware(completion_time)
-        if not timezone.is_aware(deadline):
-            deadline = timezone.make_aware(deadline)
-
-        if completion_time <= deadline:
-            return 0.0
-
-        tardiness = (completion_time - deadline).total_seconds() / 3600
-        return max(0, tardiness)
-
-    def find_best_study_for_doctor(
-        self, studies: List[StudyData], doctor: DoctorData
-    ) -> Optional[Tuple[StudyData, float]]:
-        """Находит исследование с НАИБОЛЬШИМ ATC индексом для врача"""
-        best_study = None
-        best_atc_index = -float("inf")
-
-        for study in studies:
-            # Проверка модальности
-            if not self.check_modality_compatibility(study.modality, doctor.modality):
-                continue
-
-            # ✅ Проверка загрузки по УП (было >=, стало >)
-            if doctor.remaining_up < study.up_value:
-                continue
-
-            # Проверка совместимости по времени (дедлайн уже прошел)
-            if study.deadline < doctor.available_time:
-                continue
-
-            # ✅ Проверка времени смены (более мягкая)
-            completion_time = doctor.available_time + timedelta(
-                minutes=study.duration_minutes
+            result.append(
+                DoctorData(
+                    id=doc.id,
+                    name=doc.fio_alias or f"Врач {doc.id}",
+                    modality=mods,
+                    max_up=max_up,
+                    shift_start=s_start,
+                    shift_end=s_end,
+                )
             )
-            if doctor.time_end:
-                end_dt = datetime.combine(self.now.date(), doctor.time_end)
-                end_dt = timezone.make_aware(end_dt)
-                # ✅ Разрешаем превышение на 30 минут (овертайм)
-                if completion_time > end_dt + timedelta(minutes=30):
-                    continue
 
-            # Расчёт ATC индекса
-            atc_index = self.calculate_atc_index(study, doctor.available_time)
+        self._log(f"Врачей загружено: {len(result)}")
+        return result
 
-            if atc_index > best_atc_index:
-                best_atc_index = atc_index
-                best_study = study
+    # ── Жадный WSPT (основной + fallback) ───────────────────────────
 
-        if best_study:
-            return (best_study, best_atc_index)
-        return None
+    def solve_greedy(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        ignore_up_limit: bool = False,
+    ) -> Dict[int, int]:
+        label = "Жадный (без лимита УП)" if ignore_up_limit else "Жадный WSPT"
+        self._log(f"Запуск: {label}...")
 
-    def assign_study_to_doctor(self, study: StudyData, doctor: DoctorData):
-        """Назначает исследование врачу"""
-        doctor.current_load += study.up_value
-        doctor.current_minutes += study.duration_minutes
-        doctor.available_time = doctor.available_time + timedelta(
-            minutes=study.duration_minutes
+        sorted_s = sorted(
+            studies,
+            key=lambda s: (
+                {"cito": 0, "asap": 1, "normal": 2}.get(s.priority, 2),
+                -(s.weight / s.duration_hours) if s.duration_hours > 0 else 0,
+                s.deadline,
+            ),
         )
-        doctor.assigned_study_ids.append(study.id)
 
-    def distribute_atc(
-        self, studies: List[StudyData], doctors: List[DoctorData]
-    ) -> Dict:
-        """
-        АЛГОРИТМ ATC для минимизации Σ(w_i × T_i)
-        ✅ ИСПРАВЛЕНО: увеличен лимит итераций и consecutive_failures
-        """
-        logger.info("=" * 60)
-        logger.info("Starting ATC Distribution Algorithm")
-        logger.info(f"Studies: {len(studies)}, Doctors: {len(doctors)}")
-        logger.info("=" * 60)
+        doc_up: Dict[int, float] = {d.id: 0.0 for d in doctors}
+        doc_min: Dict[int, float] = {d.id: 0.0 for d in doctors}
 
-        assignments = []
-        total_tardiness = 0.0
-        total_weighted_tardiness = 0.0
-        assigned_count = 0
+        assignment: Dict[int, int] = {}
 
-        remaining_studies = studies.copy()
+        for s in sorted_s:
+            best_id = None
+            best_score = float("inf")
 
-        # ✅ УВЕЛИЧЕНО: было len(studies)*len(doctors), стало больше
-        max_iterations = len(studies) * len(doctors) * 2
-
-        # ✅ УВЕЛИЧЕНО: было len(doctors)*2=10, стало 100
-        consecutive_failures = 0
-        max_consecutive_failures = 100
-
-        iteration = 0
-        while remaining_studies and iteration < max_iterations:
-            iteration += 1
-
-            best_atc_index = -float("inf")
-            best_doctor = None
-            best_study = None
-
-            for doctor in doctors:
-                # Пропускаем врачей, у которых НЕТ места
-                if doctor.remaining_up <= 0:
+            for d in doctors:
+                if not self._modality_ok(s.modality, d.modality):
                     continue
-                if doctor.remaining_minutes <= 0:
+                if not ignore_up_limit:
+                    if doc_up[d.id] + s.up_value > d.max_up + 1e-9:
+                        continue
+                if (doc_min[d.id] + s.duration_minutes) / 60.0 > d.shift_hours + 1e-9:
                     continue
-
-                # Сортируем исследования по ATC индексу в порядке убывания
-                doctor_studies = []
-                for study in remaining_studies:
-                    # Проверка модальности
-                    if not self.check_modality_compatibility(study.modality, doctor.modality):
-                        continue
-
-                    # Проверка загрузки по УП
-                    if doctor.remaining_up < study.up_value:
-                        continue
-
-                    # Проверка совместимости по времени
-                    if study.deadline < doctor.available_time:
-                        continue
-
-                    # Расчёт ATC индекса
-                    atc_index = self.calculate_atc_index(study, doctor.available_time)
-                    doctor_studies.append((study, atc_index))
-
-                # Сортировка по ATC индексу в порядке убывания
-                doctor_studies.sort(key=lambda x: x[1], reverse=True)
-
-                # Выбираем лучшее исследование для врача
-                if doctor_studies:
-                    study, atc_index = doctor_studies[0]
-
-                    if atc_index > best_atc_index:
-                        best_atc_index = atc_index
-                        best_doctor = doctor
-                        best_study = study
-
-                result = self.find_best_study_for_doctor(remaining_studies, doctor)
-
-                if result:
-                    study, atc_index = result
-
-                    if atc_index > best_atc_index:
-                        best_atc_index = atc_index
-                        best_doctor = doctor
-                        best_study = study
-
-            if best_doctor and best_study:
-                self.assign_study_to_doctor(best_study, best_doctor)
-
-                completion_time = best_doctor.available_time
-                tardiness = self.calculate_tardiness(
-                    completion_time, best_study.deadline
+                score = (
+                    doc_min[d.id] / (d.shift_hours * 60) if d.shift_hours > 0 else 1.0
                 )
-                weighted_tardiness = tardiness * best_study.weight
+                if score < best_score:
+                    best_score = score
+                    best_id = d.id
 
-                total_tardiness += tardiness
-                total_weighted_tardiness += weighted_tardiness
-                assigned_count += 1
-                consecutive_failures = 0  # ✅ Сброс при успешном назначении
+            if best_id is not None:
+                assignment[s.id] = best_id
+                doc_up[best_id] += s.up_value
+                doc_min[best_id] += s.duration_minutes
 
-                remaining_studies.remove(best_study)
+        self._log(f"{label}: назначено {len(assignment)} / {len(studies)}")
+        for d in doctors:
+            cnt = sum(1 for did in assignment.values() if did == d.id)
+            up = doc_up[d.id]
+            mins = doc_min[d.id]
+            self._log(
+                f"  {d.name}: {cnt} исслед., {up:.2f}/{d.max_up} УП, "
+                f"{mins:.0f}/{d.shift_hours * 60:.0f} мин"
+            )
+        return assignment
 
-                if assigned_count % 100 == 0:
-                    logger.info(
-                        f"Assigned {assigned_count} studies, ATC index: {best_atc_index:.2f}"
-                    )
+    # ── MIP (опциональный) ───────────────────────────────────────────
 
-                assignments.append(
-                    {
-                        "study_id": best_study.id,
-                        "study_number": best_study.research_number,
-                        "doctor_id": best_doctor.id,
-                        "doctor_name": best_doctor.fio_alias,
-                        "priority": best_study.priority,
-                        "weight": best_study.weight,
-                        "deadline": best_study.deadline.isoformat(),
-                        "completion_time": completion_time.isoformat(),
-                        "tardiness_hours": round(tardiness, 2),
-                        "weighted_tardiness": round(weighted_tardiness, 2),
-                        "up_value": best_study.up_value,
-                        "atc_index": round(best_atc_index, 2),
-                    }
-                )
-            else:
-                consecutive_failures += 1
+    def solve_mip(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+    ) -> Dict[int, int]:
+        try:
+            import pulp
+        except ImportError:
+            self._log("PuLP не установлен → жадный (pip install pulp для MIP)")
+            return self.solve_greedy(studies, doctors)
 
-                # ✅ Логирование каждые 50 неудач
-                if consecutive_failures % 50 == 0:
-                    logger.warning(
-                        f"{consecutive_failures} consecutive failures, remaining studies: {len(remaining_studies)}"
-                    )
+        n, m = len(studies), len(doctors)
+        self._log(f"MIP: {n} × {m}")
 
-                if consecutive_failures >= max_consecutive_failures:
-                    logger.warning(
-                        f"Stopping after {max_consecutive_failures} consecutive failures"
-                    )
-                    break
-
-        unassigned_count = len(studies) - assigned_count
-
-        logger.info("=" * 60)
-        logger.info(f"ATC Distribution Complete:")
-        logger.info(f"  Assigned: {assigned_count}")
-        logger.info(f"  Unassigned: {unassigned_count}")
-        logger.info(f"  Total Tardiness: {round(total_tardiness, 2)} hours")
-        logger.info(
-            f"  Total Weighted Tardiness (Z): {round(total_weighted_tardiness, 2)}"
-        )
-        logger.info("=" * 60)
-
-        return {
-            "assignments": assignments,
-            "total_tardiness": total_tardiness,
-            "total_weighted_tardiness": total_weighted_tardiness,
-            "assigned_count": assigned_count,
-            "unassigned_count": unassigned_count,
-        }
-
-    def save_to_db(self, doctors: List[DoctorData]) -> Tuple[List[Dict], float]:
-        """Сохраняет назначения в БД"""
-        assignments = []
-        total_tardiness = 0.0
-
-        for doctor in doctors:
-            if not doctor.assigned_study_ids:
-                continue
-
-            studies_map = {
-                s.id: self.prepare_study_data(s)
-                for s in Study.objects.filter(id__in=doctor.assigned_study_ids)
-            }
-
-            if doctor.time_start:
-                current_time = datetime.combine(self.now.date(), doctor.time_start)
-                current_time = timezone.make_aware(current_time)
-            else:
-                current_time = self.now
-
-            for study_id in doctor.assigned_study_ids:
-                study = studies_map.get(study_id)
-                if not study:
-                    continue
-
-                completion_time = current_time + timedelta(
-                    minutes=study.duration_minutes
-                )
-
-                if completion_time > study.deadline:
-                    tardiness = (
-                        completion_time - study.deadline
-                    ).total_seconds() / 3600
-                else:
-                    tardiness = 0.0
-
-                total_tardiness += tardiness
-
-                Study.objects.filter(id=study.id).update(
-                    diagnostician_id=doctor.id, status="confirmed"
-                )
-
-                assignments.append(
-                    {
-                        "study_id": study.id,
-                        "study_number": study.research_number,
-                        "doctor_id": doctor.id,
-                        "doctor_name": doctor.fio_alias,
-                        "priority": study.priority,
-                        "deadline": study.deadline.isoformat(),
-                        "completion_time": completion_time.isoformat(),
-                        "tardiness_hours": round(tardiness, 2),
-                        "up_value": study.up_value,
-                    }
-                )
-
-                current_time = completion_time
-
-        return assignments, total_tardiness
-
-    def distribute(self) -> Dict:
-        """Основной метод распределения (ATC алгоритм)"""
-        logger.info("=" * 60)
-        logger.info("ATC DISTRIBUTION SERVICE")
-        logger.info(f"Time: {self.now}")
-        logger.info("Objective: MIN Z = Σ(w_i × T_i)")
-        logger.info("=" * 60)
-
-        today = timezone.now()
-        studies_qs = self.get_pending_studies()
-        doctors_qs = self.get_available_doctors()
-
-        logger.info(f"Pending studies: {len(studies_qs)}")
-        logger.info(f"Available doctors: {len(doctors_qs)}")
-
-        if not studies_qs or not doctors_qs:
-            return {
-                "assigned": 0,
-                "unassigned": 0,
-                "total_tardiness": 0,
-                "total_weighted_tardiness": 0,
-                "assignments": [],
-                "doctor_stats": [],
-                "message": "Нет исследований или врачей для распределения",
-            }
-
-        studies_data = [self.prepare_study_data(s) for s in studies_qs]
-        doctors_data = self.prepare_doctors_data(doctors_qs, today)
-
-        if not studies_data or not doctors_data:
-            return {
-                "assigned": 0,
-                "unassigned": len(studies_data),
-                "total_tardiness": 0,
-                "total_weighted_tardiness": 0,
-                "assignments": [],
-                "doctor_stats": [],
-                "message": "Ошибка подготовки данных",
-            }
-
-        result = self.distribute_atc(studies_data, doctors_data)
-
-        assignments, total_tardiness = self.save_to_db(doctors_data)
-
-        assigned_count = result["assigned_count"]
-        unassigned_count = result["unassigned_count"]
-
-        doctor_stats = [
-            {
-                "doctor_id": d.id,
-                "doctor_name": d.fio_alias,
-                "assigned_studies": len(d.assigned_study_ids),
-                "total_up": round(d.current_load, 1),
-                "max_up": d.max_up_per_day,
-                "load_percent": round(
-                    (d.current_load / d.max_up_per_day * 100)
-                    if d.max_up_per_day > 0
-                    else 0,
-                    1,
-                ),
-                "remaining_up": round(d.remaining_up, 1),
-            }
-            for d in doctors_data
+        pairs = [
+            (i, j)
+            for i, s in enumerate(studies)
+            for j, d in enumerate(doctors)
+            if self._modality_ok(s.modality, d.modality)
         ]
+        self._log(f"  Совместимых пар: {len(pairs)}")
 
-        priority_stats = {"cito": 0, "asap": 0, "normal": 0}
-        for a in assignments:
-            priority_stats[a["priority"]] = priority_stats.get(a["priority"], 0) + 1
+        sidx: Dict[int, int] = {s.id: i for i, s in enumerate(studies)}
+        C: Dict[Tuple[int, int], float] = {}
+        for j, d in enumerate(doctors):
+            j_st = sorted(
+                [studies[i] for (ii, jj) in pairs if jj == j for i in [ii]],
+                key=lambda s: s.deadline,
+            )
+            acc = 0.0
+            for s in j_st:
+                acc += s.duration_hours
+                C[(sidx[s.id], j)] = (
+                    d.shift_start + timedelta(hours=acc) - self.now
+                ).total_seconds() / 3600.0
+
+        d_h = [(s.deadline - self.now).total_seconds() / 3600.0 for s in studies]
+        BIG_M = (
+            max((abs(v) for v in C.values()), default=200.0)
+            + max((abs(v) for v in d_h), default=200.0)
+            + 100.0
+        )
+
+        prob = pulp.LpProblem("PMWT", pulp.LpMinimize)
+        x = {(i, j): pulp.LpVariable(f"x_{i}_{j}", cat="Binary") for (i, j) in pairs}
+        T = {i: pulp.LpVariable(f"T_{i}", lowBound=0) for i in range(n)}
+
+        prob += pulp.lpSum(studies[i].weight * T[i] for i in range(n))
+
+        for i in range(n):
+            row = [x[(i, j)] for (ii, jj) in pairs if ii == i for j in [jj]]
+            if row:
+                prob += pulp.lpSum(row) <= 1, f"A{i}"
+
+        for j, d in enumerate(doctors):
+            col = [
+                studies[i].up_value * x[(i, j)]
+                for (ii, jj) in pairs
+                if jj == j
+                for i in [ii]
+            ]
+            if col:
+                prob += pulp.lpSum(col) <= d.max_up, f"UP{j}"
+
+        for j, d in enumerate(doctors):
+            col = [
+                studies[i].duration_hours * x[(i, j)]
+                for (ii, jj) in pairs
+                if jj == j
+                for i in [ii]
+            ]
+            if col:
+                prob += pulp.lpSum(col) <= d.shift_hours, f"TM{j}"
+
+        for i, j in pairs:
+            c_ij = C.get((i, j), 0.0)
+            prob += T[i] >= c_ij - d_h[i] - BIG_M * (1 - x[(i, j)]), f"TD{i}_{j}"
+
+        try:
+            solver = pulp.PULP_CBC_CMD(
+                timeLimit=MIP_TIME_LIMIT, msg=0, gapRel=MIP_GAP_REL
+            )
+            prob.solve(solver)
+            status = pulp.LpStatus[prob.status]
+            obj = pulp.value(prob.objective)
+            self._log(f"CBC: {status}, Z_оценка={obj}")
+
+            if prob.status == -1:
+                self._log("MIP INFEASIBLE → жадный")
+                return self.solve_greedy(studies, doctors)
+
+            result = {
+                studies[i].id: doctors[j].id
+                for (i, j) in pairs
+                if (pulp.value(x[(i, j)]) or 0) > 0.5
+            }
+            self._log(f"MIP назначил {len(result)} / {n}")
+            return result
+
+        except Exception as e:
+            self._log(f"CBC ошибка: {e} → жадный")
+            return self.solve_greedy(studies, doctors)
+
+    # ── Sequencing + расчёт tardiness ───────────────────────────────
+
+    def sequence(self, studies: List[StudyData]) -> List[StudyData]:
+        return sorted(
+            studies,
+            key=lambda s: (
+                {"cito": 0, "asap": 1, "normal": 2}.get(s.priority, 2),
+                s.deadline,
+            ),
+        )
+
+    def build_schedule(
+        self, doctor: DoctorData, ordered: List[StudyData]
+    ) -> List[Dict]:
+        results = []
+        t = doctor.shift_start
+        for s in ordered:
+            finish = t + timedelta(minutes=s.duration_minutes)
+            tardiness = max(0.0, (finish - s.deadline).total_seconds() / 3600.0)
+            results.append(
+                {
+                    "study": s,
+                    "completion_time": finish,
+                    "tardiness_hours": tardiness,
+                    "weighted_tardiness": tardiness * s.weight,
+                }
+            )
+            t = finish
+        return results
+
+    # ── Сохранение ───────────────────────────────────────────────────
+
+    def save_to_db(self, assignment: Dict[int, int]) -> None:
+        for study_id, doc_id in assignment.items():
+            Study.objects.filter(id=study_id).update(
+                diagnostician_id=doc_id, status="confirmed"
+            )
+
+    # ── Главный метод ────────────────────────────────────────────────
+
+    def distribute(self, use_mip: bool = True) -> Dict:
+        self._log("=" * 60)
+        self._log("OFFLINE DISTRIBUTION SERVICE")
+        self._log(f"Время: {self.now}")
+        self._log("=" * 60)
+
+        studies = self.load_studies()
+        doctors = self.load_doctors()
+
+        if not doctors:
+            return self._empty("Нет врачей с расписанием на сегодня", studies)
+        if not studies:
+            return self._empty("Нет исследований без назначения", studies)
+
+        avg_dur = sum(s.duration_minutes for s in studies) / len(studies)
+        total_time_supply = sum(d.shift_hours * 60 for d in doctors)
+        self._log(f"Среднее время на исследование: {avg_dur:.1f} мин")
+        self._log(f"Суммарное время смен: {total_time_supply:.0f} мин")
+        self._log(f"Теор. макс. назначений: ~{int(total_time_supply / avg_dur)}")
+
+        # ── Этап 1: назначение ───────────────────────────────────────
+        if use_mip:
+            assignment = self.solve_mip(studies, doctors)
+        else:
+            assignment = self.solve_greedy(studies, doctors)
+
+        # Если ничего не назначили — финальный fallback без лимита УП
+        if not assignment:
+            self._log("0 назначений → fallback без лимита УП")
+            assignment = self.solve_greedy(studies, doctors, ignore_up_limit=True)
+
+        # ── Этап 2: sequencing ───────────────────────────────────────
+        study_map = {s.id: s for s in studies}
+        doctor_map = {d.id: d for d in doctors}
+
+        for sid, did in assignment.items():
+            d = doctor_map[did]
+            d.assigned_ids.append(sid)
+            d.used_up += study_map[sid].up_value
+            d.used_minutes += study_map[sid].duration_minutes
+
+        all_assignments = []
+        total_tardiness = 0.0
+        total_w_tardiness = 0.0
+        pstats = {"cito": 0, "asap": 0, "normal": 0}
+
+        for d in doctors:
+            if not d.assigned_ids:
+                continue
+            ordered = self.sequence([study_map[sid] for sid in d.assigned_ids])
+            schedule = self.build_schedule(d, ordered)
+            for entry in schedule:
+                s = entry["study"]
+                tar = entry["tardiness_hours"]
+                wt = entry["weighted_tardiness"]
+                total_tardiness += tar
+                total_w_tardiness += wt
+                pstats[s.priority] = pstats.get(s.priority, 0) + 1
+                all_assignments.append(
+                    {
+                        "study_id": s.id,
+                        "study_number": s.research_number,
+                        "doctor_id": d.id,
+                        "doctor_name": d.name,
+                        "priority": s.priority,
+                        "deadline": s.deadline.isoformat(),
+                        "completion_time": entry["completion_time"].isoformat(),
+                        "tardiness_hours": round(tar, 2),
+                        "up_value": s.up_value,
+                    }
+                )
+
+        self.save_to_db(assignment)
+
+        n_asgn = len(assignment)
+        z = round(total_w_tardiness, 3)
+        self._log(f"Итого: {n_asgn}/{len(studies)}, Z={z}")
 
         return {
-            "assigned": assigned_count,
-            "unassigned": unassigned_count,
+            "assigned": n_asgn,
+            "unassigned": len(studies) - n_asgn,
             "total_tardiness": round(total_tardiness, 2),
-            "total_weighted_tardiness": round(result["total_weighted_tardiness"], 2),
-            "avg_tardiness": round(total_tardiness / assigned_count, 2)
-            if assigned_count > 0
-            else 0,
-            "assignments": assignments,
-            "doctor_stats": doctor_stats,
-            "priority_stats": priority_stats,
-            "objective_function": f"MIN Z = Σ(w_i × T_i) = {round(result['total_weighted_tardiness'], 2)}",
-            "message": f"ATC: Распределено {assigned_count} из {len(studies_data)} исследований. "
-            f"Целевая функция Z = {round(result['total_weighted_tardiness'], 2)}",
+            "total_weighted_tardiness": z,
+            "avg_tardiness": round(total_tardiness / n_asgn, 2) if n_asgn else 0,
+            "assignments": all_assignments,
+            "doctor_stats": [
+                {
+                    "doctor_id": d.id,
+                    "doctor_name": d.name,
+                    "assigned_studies": len(d.assigned_ids),
+                    "total_up": round(d.used_up, 3),
+                    "max_up": round(d.max_up, 3),
+                    "load_percent": round(d.used_up / d.max_up * 100, 1)
+                    if d.max_up
+                    else 0,
+                    "remaining_up": round(d.free_up, 3),
+                }
+                for d in doctors
+            ],
+            "priority_stats": pstats,
+            "objective_function": f"MIN Z = Σ(wᵢ × Tᵢ) = {z}",
+            "message": f"Оффлайн: назначено {n_asgn} из {len(studies)} исследований. Z = {z}",
+            "_debug": self._debug,
         }
+
+    def _empty(self, message: str, studies: List = None) -> Dict:
+        self._log(f"ПУСТО: {message}")
+        return {
+            "assigned": 0,
+            "unassigned": len(studies or []),
+            "total_tardiness": 0.0,
+            "total_weighted_tardiness": 0.0,
+            "avg_tardiness": 0,
+            "assignments": [],
+            "doctor_stats": [],
+            "priority_stats": {"cito": 0, "asap": 0, "normal": 0},
+            "objective_function": "Z = 0",
+            "message": message,
+            "_debug": self._debug,
+        }
+
+
+# ==============================================================================
+# ТОЧКА ВХОДА
+# ==============================================================================
 
 
 def distribute_studies() -> Dict:
-    """Точка входа"""
     service = DistributionService()
-    return service.distribute()
+    return service.distribute(use_mip=True)
