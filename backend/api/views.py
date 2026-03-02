@@ -1,25 +1,30 @@
-from rest_framework import viewsets
-from rest_framework.decorators import api_view, action
-from rest_framework.response import Response
-from django.utils import timezone
 from datetime import datetime, timedelta
-from django.db.models import Q, Sum, F, Case, When, IntegerField, Value
-from .models import Doctor, StudyType, Schedule, Study
+from django.utils import timezone
+
+from django.db.models import (
+    Case,
+    F,
+    IntegerField,
+    Sum,
+    When,
+)
+from rest_framework import status, viewsets
+from rest_framework.decorators import action, api_view
+from rest_framework.response import Response
+
+from .models import Doctor, Study, StudyType, Schedule
 from .serializers import (
+    ChartDataSerializer,
+    DashboardStatsSerializer,
     DoctorSerializer,
-    DoctorWithLoadSerializer,
-    StudyTypeSerializer,
     ScheduleSerializer,
     ScheduleWithDoctorSerializer,
     StudySerializer,
     StudyWithDetailsSerializer,
-    DashboardStatsSerializer,
-    ChartDataSerializer,
+    StudyTypeSerializer,
 )
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
 from .services.distribution import distribute_studies
+
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -38,9 +43,6 @@ class DoctorViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def with_load(self, request):
         """Врачи с текущей загрузкой ЗА ТЕКУЩИЙ МЕСЯЦ"""
-        from django.utils import timezone
-        from django.db.models import Sum, F
-        from datetime import datetime
 
         now = timezone.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -62,18 +64,20 @@ class DoctorViewSet(viewsets.ModelViewSet):
                 created_at__lt=month_end,
                 status__in=["confirmed", "pending", "signed"],  # Считаем все описанные
             ).aggregate(
-                total_up=Sum(F('study_type__up_value')),  # ← Поле с коэффициентом в StudyType
+                total_up=Sum(
+                    F("study_type__up_value")
+                ),  # ← Поле с коэффициентом в StudyType
                 active_count=Sum(
                     Case(
                         When(status__in=["confirmed", "pending"], then=1),
                         default=0,
-                        output_field=IntegerField()
+                        output_field=IntegerField(),
                     )
-                )
+                ),
             )
 
-            current_load = round(up_data['total_up'] or 0, 3)
-            active_studies = up_data['active_count'] or 0
+            current_load = round(up_data["total_up"] or 0, 3)
+            active_studies = up_data["active_count"] or 0
 
             # Норма УП в месяц согласно положению
             norm_up = 40 if doctor.position_type == "head" else 50
@@ -95,7 +99,9 @@ class DoctorViewSet(viewsets.ModelViewSet):
                     "current_load": current_load,
                     "max_load": norm_up,
                     "active_studies": active_studies,
-                    "load_percentage": round((current_load / norm_up) * 100, 1) if norm_up > 0 else 0,
+                    "load_percentage": (
+                        round((current_load / norm_up) * 100, 1) if norm_up > 0 else 0
+                    ),
                 }
             )
 
@@ -234,9 +240,6 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 @api_view(["GET"])
 def dashboard_stats(request):
     """Статистика для дашборда ЗА ТЕКУЩИЙ МЕСЯЦ"""
-    from django.utils import timezone
-    from datetime import datetime
-
     now = timezone.now()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -290,9 +293,6 @@ def dashboard_stats(request):
 @api_view(["GET"])
 def chart_data(request):
     """Данные для графиков ЗА ТЕКУЩИЙ МЕСЯЦ"""
-    from django.utils import timezone
-    from datetime import datetime, timedelta
-
     date_from = request.query_params.get("date_from")
     date_to = request.query_params.get("date_to")
 
@@ -348,12 +348,7 @@ def distribute_studies_view(request):
             )
     else:  # GET
         # Предварительный просмотр без выполнения
-        from api.models import Study, Doctor, Schedule
-        from django.utils import timezone
-
-        pending = Study.objects.filter(
-            diagnostician__isnull=True
-        ).count()
+        pending = Study.objects.filter(diagnostician__isnull=True).count()
         today = timezone.now().date()
         doctors = (
             Doctor.objects.filter(
@@ -399,8 +394,8 @@ def distribution_preview(request):
         {
             "pending_studies": pending,
             "available_doctors": doctors,
-            "message": "Готов к распределению"
-            if pending > 0 and doctors > 0
-            else "Нет данных",
+            "message": (
+                "Готов к распределению" if pending > 0 and doctors > 0 else "Нет данных"
+            ),
         }
     )
