@@ -189,7 +189,7 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
                       )}
                     </div>
                     <div className="text-xs text-slate-400">
-                      {formatDate(study.planned_at)} {formatTime(study.planned_at)}
+                      {formatDate(study.created_at)} {formatTime(study.created_at)}
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
@@ -344,7 +344,7 @@ export const CurrentDistributionView: React.FC = () => {
     return [...allStudies].sort((a, b) => {
       const diff = (PRIORITY_ORDER[a.priority] || 3) - (PRIORITY_ORDER[b.priority] || 3);
       if (diff !== 0) return diff;
-      return new Date(a.planned_at).getTime() - new Date(b.planned_at).getTime();
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
     });
   }, [allStudies]);
 
@@ -496,7 +496,7 @@ export const CurrentDistributionView: React.FC = () => {
                     )}
                   </div>
                   <div className="flex justify-between text-xs text-slate-400">
-                    <span>План: {formatDate(study.planned_at)}</span>
+                    <span>Создано: {formatDate(study.created_at)}</span>
                     <span className={`px-1.5 py-0.5 rounded ${getStatusColor(study.status)}`}>
                       {study.status === 'pending' ? 'Ожидает'
                        : study.status === 'confirmed' ? 'Назначено'
