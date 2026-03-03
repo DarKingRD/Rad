@@ -171,11 +171,8 @@ class Study(models.Model):
     Модель привязана к таблице 'studies' в базе данных.
     Исследования упорядочены по дате создания (сначала новые).
     """
-    id = models.IntegerField(
-        primary_key=True, verbose_name="Идентификатор исследования"
-    )
     research_number = models.CharField(
-        max_length=50, unique=True, verbose_name="Номер исследования"
+        max_length=50, primary_key=True, verbose_name="Номер исследования"
     )
     study_type = models.ForeignKey(
         StudyType,
