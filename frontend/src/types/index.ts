@@ -36,7 +36,6 @@ export interface Schedule {
 }
 
 export interface Study {
-  id: number;
   research_number: string;
   study_type_id: number;
   status: string;

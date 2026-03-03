@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { doctorsApi } from '../../services/api';
-import { Plus, X } from 'lucide-react';
+import { Plus, X, Search, ArrowUpDown } from 'lucide-react';
 import { Doctor } from '../../types';
 
 interface DoctorFormData {
@@ -11,29 +11,139 @@ interface DoctorFormData {
   modality: string[];
 }
 
+type SortDirection = 'asc' | 'desc' | null;
+type SortColumn = keyof Doctor | 'modality_count' | null;
+
 export const DoctorsView: React.FC = () => {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [filteredDoctors, setFilteredDoctors] = useState<Doctor[]>([]);
+  const [sortedDoctors, setSortedDoctors] = useState<Doctor[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDoctor, setEditingDoctor] = useState<Doctor | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortColumn, setSortColumn] = useState<SortColumn>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+
   const [formData, setFormData] = useState<DoctorFormData>({
     fio_alias: '',
     position_type: 'radiologist',
     max_up_per_day: 120,
     is_active: true,
-    modality: [] as string[],
+    modality: [],
   });
 
   useEffect(() => {
     loadDoctors();
   }, []);
 
+  // Фильтрация по поиску
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredDoctors(doctors);
+      return;
+    }
+
+    const query = searchQuery.toLowerCase().trim();
+
+    const filtered = doctors.filter((doc) => {
+      const fio = (doc.fio_alias || '').toLowerCase();
+      const specialty = (doc.specialty || doc.position_type || '').toLowerCase();
+      const modalities = (doc.modality || []).join(' ').toLowerCase();
+      const status = doc.is_active ? 'активен' : 'в архиве';
+
+      return (
+        fio.includes(query) ||
+        specialty.includes(query) ||
+        modalities.includes(query) ||
+        status.includes(query) ||
+        String(doc.max_up_per_day || '').includes(query) ||
+        String(doc.id || '').includes(query)
+      );
+    });
+
+    setFilteredDoctors(filtered);
+  }, [searchQuery, doctors]);
+
+  // Сортировка (зависит от filteredDoctors)
+  useMemo(() => {
+    let result = [...filteredDoctors];
+
+    if (!sortColumn || !sortDirection) {
+      setSortedDoctors(result);
+      return;
+    }
+
+    result = result.sort((a, b) => {
+      let valA: any;
+      let valB: any;
+
+      switch (sortColumn) {
+        case 'fio_alias':
+          valA = (a.fio_alias || '').toLowerCase();
+          valB = (b.fio_alias || '').toLowerCase();
+          break;
+        case 'position_type':
+        case 'specialty':
+          valA = (a.specialty || a.position_type || '').toLowerCase();
+          valB = (b.specialty || b.position_type || '').toLowerCase();
+          break;
+        case 'max_up_per_day':
+          valA = a.max_up_per_day || 0;
+          valB = b.max_up_per_day || 0;
+          break;
+        case 'is_active':
+          valA = a.is_active ? 1 : 0;
+          valB = b.is_active ? 1 : 0;
+          break;
+        case 'modality_count':
+          valA = (a.modality || []).length;
+          valB = (b.modality || []).length;
+          break;
+        default:
+          return 0;
+      }
+
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    setSortedDoctors(result);
+  }, [filteredDoctors, sortColumn, sortDirection]);
+
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      if (sortDirection === 'asc') {
+        setSortDirection('desc');
+      } else if (sortDirection === 'desc') {
+        setSortColumn(null);
+        setSortDirection(null);
+      } else {
+        setSortDirection('asc');
+      }
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
+  const getSortIcon = (column: SortColumn) => {
+    if (sortColumn !== column) return <ArrowUpDown size={14} className="ml-1 opacity-30" />;
+    if (sortDirection === 'asc') return <ArrowUpDown size={14} className="ml-1" />;
+    if (sortDirection === 'desc') return <ArrowUpDown size={14} className="ml-1 rotate-180" />;
+    return null;
+  };
+
   const loadDoctors = async () => {
     try {
       setLoading(true);
       const res = await doctorsApi.getAll();
       const doctorsData = res.data.results || res.data;
-      setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
+      const dataArray = Array.isArray(doctorsData) ? doctorsData : [];
+      setDoctors(dataArray);
+      setFilteredDoctors(dataArray);
+      setSortedDoctors(dataArray);
     } catch (err: any) {
       console.error('Error loading doctors:', err);
     } finally {
@@ -97,71 +207,144 @@ export const DoctorsView: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-slate-900">Справочник врачей ({doctors.length})</h2>
-        <button 
+    <div className="space-y-6 p-6">
+      {/* Заголовок + кнопка добавления */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <h2 className="text-2xl font-bold text-slate-900">
+          Справочник врачей ({sortedDoctors.length})
+        </h2>
+        <button
           onClick={() => handleOpenModal()}
-          className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 flex items-center"
+          className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center whitespace-nowrap shadow-sm"
         >
-          <Plus size={16} className="mr-2" /> Добавить врача
+          <Plus size={18} className="mr-2" /> Добавить врача
         </button>
       </div>
 
+      {/* Поиск */}
+      <div className="relative max-w-lg">
+        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+          <Search size={18} className="text-slate-400" />
+        </div>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Поиск по ФИО, специализации, модальностям, статусу..."
+          className="w-full pl-11 pr-10 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        )}
+      </div>
+
+      {/* Таблица */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th className="px-6 py-4 font-semibold text-slate-700">ФИО</th>
-              <th className="px-6 py-4 font-semibold text-slate-700">Специализация</th>
-              <th className="px-6 py-4 font-semibold text-slate-700">Макс. УП/день</th>
-              <th className="px-6 py-4 font-semibold text-slate-700">Модальности</th>
-              <th className="px-6 py-4 font-semibold text-slate-700">Статус</th>
+              <th
+                className="px-6 py-4 font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                onClick={() => handleSort('fio_alias')}
+              >
+                <div className="flex items-center gap-1">
+                  ФИО {getSortIcon('fio_alias')}
+                </div>
+              </th>
+              <th
+                className="px-6 py-4 font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                onClick={() => handleSort('position_type')}
+              >
+                <div className="flex items-center gap-1">
+                  Специализация {getSortIcon('position_type')}
+                </div>
+              </th>
+              <th
+                className="px-6 py-4 font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                onClick={() => handleSort('max_up_per_day')}
+              >
+                <div className="flex items-center gap-1">
+                  Макс. УП/день {getSortIcon('max_up_per_day')}
+                </div>
+              </th>
+              <th
+                className="px-6 py-4 font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                onClick={() => handleSort('modality_count')}
+              >
+                <div className="flex items-center gap-1">
+                  Модальности (кол-во) {getSortIcon('modality_count')}
+                </div>
+              </th>
+              <th
+                className="px-6 py-4 font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                onClick={() => handleSort('is_active')}
+              >
+                <div className="flex items-center gap-1">
+                  Статус {getSortIcon('is_active')}
+                </div>
+              </th>
               <th className="px-6 py-4 font-semibold text-slate-700 text-right">Действия</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {doctors.length === 0 ? (
+            {sortedDoctors.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
-                  Врачи не найдены
+                <td colSpan={6} className="px-6 py-16 text-center text-slate-500">
+                  {searchQuery
+                    ? 'По вашему запросу ничего не найдено'
+                    : 'Врачи не найдены'}
                 </td>
               </tr>
             ) : (
-              doctors.map((doc) => (
-                <tr key={doc.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-4 font-medium text-slate-900">{doc.fio_alias || 'Не указано'}</td>
-                  <td className="px-6 py-4 text-slate-600">{doc.specialty}</td>
-                  <td className="px-6 py-4 text-slate-600">{doc.max_up_per_day || 120}</td>
+              sortedDoctors.map((doc) => (
+                <tr key={doc.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-6 py-4 font-medium text-slate-900">
+                    {doc.fio_alias || 'Не указано'}
+                  </td>
+                  <td className="px-6 py-4 text-slate-600">
+                    {doc.specialty || doc.position_type || '—'}
+                  </td>
+                  <td className="px-6 py-4 text-slate-600">
+                    {doc.max_up_per_day || 120}
+                  </td>
                   <td className="px-6 py-4 text-slate-600">
                     {doc.modality && doc.modality.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
+                      <div className="flex flex-wrap gap-1.5">
                         {doc.modality.map((mod, index) => (
                           <span
                             key={index}
-                            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800"
+                            className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-800 border border-blue-200"
                           >
                             {mod}
                           </span>
                         ))}
                       </div>
                     ) : (
-                      <span className="text-slate-400">Не указано</span>
+                      <span className="text-slate-400 italic">Не указано</span>
                     )}
                   </td>
                   <td className="px-6 py-4">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      doc.is_active ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-800'
-                    }`}>
+                    <span
+                      className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
+                        doc.is_active
+                          ? 'bg-green-100 text-green-800 border border-green-200'
+                          : 'bg-slate-100 text-slate-700 border border-slate-200'
+                      }`}
+                    >
                       {doc.is_active ? 'Активен' : 'В архиве'}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button 
+                    <button
                       onClick={() => handleOpenModal(doc)}
-                      className="text-slate-400 hover:text-blue-600"
+                      className="text-blue-600 hover:text-blue-800 font-medium transition-colors"
                     >
-                      Ред.
+                      Редактировать
                     </button>
                   </td>
                 </tr>
@@ -171,81 +354,85 @@ export const DoctorsView: React.FC = () => {
         </table>
       </div>
 
-      {/* Модальное окно для добавления/редактирования врача */}
+      {/* Модальное окно добавления/редактирования врача */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
             <div className="flex justify-between items-center p-6 border-b border-slate-200">
               <h3 className="text-xl font-bold text-slate-900">
                 {editingDoctor ? 'Редактировать врача' : 'Добавить врача'}
               </h3>
               <button
                 onClick={handleCloseModal}
-                className="text-slate-400 hover:text-slate-600"
+                className="text-slate-500 hover:text-slate-700 transition-colors"
               >
                 <X size={24} />
               </button>
             </div>
-            
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+
+            <form onSubmit={handleSubmit} className="p-6 space-y-5">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
                   ФИО
                 </label>
                 <input
                   type="text"
                   value={formData.fio_alias}
                   onChange={(e) => setFormData({ ...formData, fio_alias: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
                   Специализация
                 </label>
                 <select
                   value={formData.position_type}
                   onChange={(e) => setFormData({ ...formData, position_type: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 >
                   <option value="radiologist">Рентгенолог</option>
                   <option value="diagnostician">КТ-диагност</option>
+                  <option value="other">Другое</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
                   Макс. УП/день
                 </label>
                 <input
                   type="number"
                   value={formData.max_up_per_day}
-                  onChange={(e) => setFormData({ ...formData, max_up_per_day: parseInt(e.target.value) || 120 })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onChange={(e) => setFormData({ ...formData, max_up_per_day: Number(e.target.value) || 120 })}
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                   min="1"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Модальности (через пробел)
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Модальности (через запятую)
                 </label>
                 <input
                   type="text"
-                  value={(formData.modality || []).join(' ')}
+                  value={formData.modality.join(', ')}
                   onChange={(e) =>
                     setFormData({
                       ...formData,
-                      modality: e.target.value.split(',').map((m) => m.trim()).filter(Boolean),
+                      modality: e.target.value
+                        .split(',')
+                        .map((m) => m.trim())
+                        .filter(Boolean),
                     })
                   }
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="КТ МРТ Рентген"
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  placeholder="КТ, МРТ, Рентген"
                 />
-            </div>
+              </div>
 
               <div className="flex items-center">
                 <input
@@ -253,24 +440,24 @@ export const DoctorsView: React.FC = () => {
                   id="is_active"
                   checked={formData.is_active}
                   onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                  className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                  className="w-5 h-5 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
                 />
-                <label htmlFor="is_active" className="ml-2 text-sm font-medium text-slate-700">
+                <label htmlFor="is_active" className="ml-3 text-sm font-medium text-slate-700">
                   Активен
                 </label>
               </div>
 
-              <div className="flex space-x-3 pt-4">
+              <div className="flex gap-4 pt-6">
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700"
+                  className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm"
                 >
-                  {editingDoctor ? 'Сохранить' : 'Добавить'}
+                  {editingDoctor ? 'Сохранить изменения' : 'Добавить врача'}
                 </button>
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  className="flex-1 px-4 py-2 bg-slate-200 text-slate-700 rounded-md font-medium hover:bg-slate-300"
+                  className="flex-1 px-6 py-3 bg-slate-100 text-slate-700 rounded-lg font-medium hover:bg-slate-200 transition-colors"
                 >
                   Отмена
                 </button>

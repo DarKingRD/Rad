@@ -54,7 +54,6 @@ interface DoctorDistStat {
 }
 
 interface Assignment {
-  study_id: number;
   study_number: string;
   doctor_id: number;
   doctor_name: string;
@@ -208,7 +207,7 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
             <div className="p-2 space-y-1 max-h-64 overflow-y-auto">
               {studiesState.studies.map((study) => (
                 <div
-                  key={study.id}
+                  key={study.research_number}
                   className="bg-white rounded-md border border-slate-200 px-3 py-2 flex items-center justify-between gap-2"
                 >
                   <div className="min-w-0">
@@ -354,7 +353,7 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
                   </thead>
                   <tbody>
                     {assignments.slice(0, 100).map((assignment) => (
-                      <tr key={assignment.study_id} className="border-t border-slate-100 hover:bg-slate-50">
+                      <tr key={assignment.study_number} className="border-t border-slate-100 hover:bg-slate-50">
                         <td className="px-3 py-2 font-medium text-slate-900">{assignment.study_number}</td>
                         <td className="px-3 py-2">
                           <span className={`px-2 py-0.5 rounded text-xs font-medium ${getPriorityColor(assignment.priority)}`}>
@@ -362,7 +361,7 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
                           </span>
                         </td>
                         <td className="px-3 py-2">
-                          {editingAssignment?.study_id === assignment.study_id ? (
+                          {editingAssignment?.study_number === assignment.study_number ? (
                             <select
                               className="border rounded px-2 py-1 text-xs bg-white"
                               value={assignment.doctor_id}
@@ -612,10 +611,10 @@ export const CurrentDistributionView: React.FC = () => {
 
   const handleReassign = async (assignment: Assignment, newDoctorId: number) => {
     try {
-      await studiesApi.assign(assignment.study_id, newDoctorId);
+      await studiesApi.assign(assignment.study_number, newDoctorId);
       setAssignments((prev) =>
         prev.map((a) =>
-          a.study_id === assignment.study_id
+          a.study_number === assignment.study_number
             ? {
                 ...a,
                 doctor_id: newDoctorId,
@@ -859,13 +858,13 @@ export const CurrentDistributionView: React.FC = () => {
             ) : (
               paginatedStudies.map((study) => (
                 <div
-                  key={study.id}
+                  key={study.research_number}
                   onClick={() => {
                     setSelectedStudy(study);
                     setSelectedDoctor(null);
                   }}
                   className={`p-3 rounded-lg border cursor-pointer transition-all ${
-                    selectedStudy?.id === study.id
+                    selectedStudy?.research_number === study.research_number
                       ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
                       : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
                   }`}
@@ -1064,3 +1063,6 @@ export const CurrentDistributionView: React.FC = () => {
     </div>
   );
 };
+
+
+
