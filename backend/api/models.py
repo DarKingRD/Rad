@@ -3,7 +3,7 @@
 
 Этот модуль содержит модели Django, представляющие основные сущности системы:
 - Doctor: Представляет медицинского работника с его атрибутами и возможностями.
-- StudyType: Определяет типы медицинских исследований с соответствующими 
+- StudyType: Определяет типы медицинских исследований с соответствующими
 модальностями и значениями УП.
 - Schedule: Управляет расписанием врачей, включая рабочие часы и выходные дни.
 - Study: Представляет отдельные медицинские исследования со статусом, приоритетом и назначениями.
@@ -12,8 +12,13 @@
 и метаданные для интеграции с существующей схемой базы данных.
 """
 
+from typing import TYPE_CHECKING
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
+
+if TYPE_CHECKING:
+    from django.db.models.manager import Manager
+
 
 class Doctor(models.Model):
     """
@@ -49,9 +54,14 @@ class Doctor(models.Model):
         verbose_name="Модальности",
     )
 
+    if TYPE_CHECKING:
+        objects: Manager["Doctor"]
+
     class Meta:
         db_table = "doctors"
         managed = False
+        verbose_name = "Врач"
+        verbose_name_plural = "Врачи"
 
     def __str__(self):
         return str(self.fio_alias) if self.fio_alias else f"Doctor {self.id}"
@@ -84,9 +94,14 @@ class StudyType(models.Model):
         verbose_name="УП за исследование",
     )
 
+    if TYPE_CHECKING:
+        objects: Manager["StudyType"]
+
     class Meta:
         db_table = "study_types"
         managed = False
+        verbose_name = "Тип исследования"
+        verbose_name_plural = "Типы исследований"
 
     def __str__(self):
         return str(f"{self.id} - {self.name}" if self.name else f"StudyType {self.id}")
@@ -125,10 +140,15 @@ class Schedule(models.Model):
     )
     planned_up = models.IntegerField(blank=True, null=True, verbose_name="План УП")
 
+    if TYPE_CHECKING:
+        objects: Manager["Schedule"]
+
     class Meta:
         db_table = "schedules"
         managed = False
         ordering = ["work_date", "time_start"]
+        verbose_name = "Расписание"
+        verbose_name_plural = "Расписания"
 
     def __str__(self):
         return f"Schedule {self.id} - {self.work_date}"
@@ -166,12 +186,15 @@ class Study(models.Model):
         verbose_name="Тип исследования",
     )
     status = models.CharField(
-        max_length=50, blank=True, null=True, verbose_name="Статус исследования",
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name="Статус исследования",
         choices=[
             ("pending", "Ожидает назначения"),
             ("confirmed", "Назначено"),
-            ("signed", "Выполнено")
-        ]
+            ("signed", "Выполнено"),
+        ],
     )
     priority = models.CharField(
         max_length=20,
@@ -179,11 +202,7 @@ class Study(models.Model):
         blank=True,
         null=True,
         verbose_name="Приоритет исследования",
-        choices=[
-            ("normal", "Нормальный"),
-            ("cito", "Cito"),
-            ("asap", "Asap")
-        ]
+        choices=[("normal", "Нормальный"), ("cito", "Cito"), ("asap", "Asap")],
     )
     created_at = models.DateTimeField(
         blank=True, null=True, verbose_name="Дата создания"
@@ -201,10 +220,14 @@ class Study(models.Model):
         verbose_name="Диагност",
     )
 
+    if TYPE_CHECKING:
+        objects: Manager["Study"]
     class Meta:
         db_table = "studies"
         managed = False
         ordering = ["-created_at"]
+        verbose_name = "Исследование"
+        verbose_name_plural = "Исследования"
 
     def __str__(self):
         return self.research_number

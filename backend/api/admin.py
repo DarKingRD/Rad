@@ -19,24 +19,10 @@ class DoctorAdmin(admin.ModelAdmin):
     list_display_links = ('id', 'fio_alias')
     list_filter = ('is_active', 'position_type', 'modality')
     search_fields = ('fio_alias', 'id', 'position_type')
-    list_editable = ('is_active',)
-    readonly_fields = ('id',)
-    
-    # Оптимизация: если бы были связи, использовали бы list_select_related
-    
-    fieldsets = (
-        ('Основная информация', {
-            'fields': ('id', 'fio_alias', 'position_type', 'is_active')
-        }),
-        ('Параметры работы', {
-            'fields': ('max_up_per_day', 'modality')
-        }),
-    )
 
-    @admin.display(description='Кол-во модальностей')
+    @admin.display(description='Количество модальностей')
     def get_modality_count(self, obj):
         return len(obj.modality) if obj.modality else 0
-
 
 @admin.register(StudyType)
 class StudyTypeAdmin(admin.ModelAdmin):
@@ -77,4 +63,10 @@ class StudyAdmin(admin.ModelAdmin):
     Настройка админки для исследований.
     Самая нагруженная модель, поэтому важно настроить фильтры и поиск.
     """
-    list
+    list_display = ('id', 'research_number', 'study_type', 'diagnostician', 'created_at', 'planned_at', 'status')
+    list_display_links = ('id', 'research_number')
+    search_fields = ('research_number', 'id', 'doctor__fio_alias')
+    date_hierarchy = 'created_at'
+    readonly_fields = ('id', 'created_at')
+    list_select_related = ('study_type', 'diagnostician')
+    list_per_page = 100
