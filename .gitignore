@@ -108,3 +108,7 @@ Thumbs.db
 # dev скрипты
 backend/clear.py
 backend/scripts/
+
+// файлы данных
+*.csv
+*.xlsx

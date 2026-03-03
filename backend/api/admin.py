@@ -63,10 +63,10 @@ class StudyAdmin(admin.ModelAdmin):
     Настройка админки для исследований.
     Самая нагруженная модель, поэтому важно настроить фильтры и поиск.
     """
-    list_display = ('id', 'research_number', 'study_type', 'diagnostician', 'created_at', 'planned_at', 'status')
-    list_display_links = ('id', 'research_number')
-    search_fields = ('research_number', 'id', 'doctor__fio_alias')
+    list_display = ('research_number', 'study_type', 'diagnostician', 'created_at', 'planned_at', 'status')
+    list_display_links = ('research_number', 'study_type')
+    search_fields = ('research_number', 'doctor__fio_alias')
     date_hierarchy = 'created_at'
-    readonly_fields = ('id', 'created_at')
+    readonly_fields = ('research_number', 'created_at')
     list_select_related = ('study_type', 'diagnostician')
     list_per_page = 100
