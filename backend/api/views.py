@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
+from django.db import models
 from django.utils import timezone
-
+from django.core.cache import cache
+import uuid
 from django.db.models import (
     Case,
     F,
@@ -24,7 +26,6 @@ from .serializers import (
     StudyTypeSerializer,
 )
 from .services.distribution import distribute_studies
-
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -334,22 +335,93 @@ def chart_data(request):
     return Response(serializer.data)
 
 
-@api_view(["GET", "POST"])  # ← Было ['POST'], стало ['GET', 'POST']
+@api_view(["GET", "POST"])
 def distribute_studies_view(request):
-    """Автоматическое распределение исследований по врачам"""
+    """
+    Распределение исследований с поддержкой:
+    - Выбора даты
+    - Режима предпросмотра
+    - Фильтрации по периоду создания исследований
+    """
     if request.method == "POST":
+        # Получаем параметры
+        target_date_str = request.data.get("date")
+        preview = request.data.get("preview", True)  # По умолчанию превью
+        date_from_str = request.data.get("date_from")
+        date_to_str = request.data.get("date_to")
+        use_mip = request.data.get("use_mip", True)
+
+        # Парсим дату распределения
+        target_date = None
+        if target_date_str:
+            try:
+                target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                return Response(
+                    {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+                    status=400,
+                )
+
+        # Парсим период исследований
+        date_from = None
+        date_to = None
+        if date_from_str:
+            try:
+                date_from = datetime.strptime(date_from_str, "%Y-%m-%d")
+            except ValueError:
+                return Response({"error": "Неверный формат date_from"}, status=400)
+        if date_to_str:
+            try:
+                date_to = datetime.strptime(date_to_str, "%Y-%m-%d")
+            except ValueError:
+                return Response({"error": "Неверный формат date_to"}, status=400)
+
         try:
-            result = distribute_studies()
-            return Response(result, status=status.HTTP_200_OK)
+            from .services.distribution import DistributionService
+
+            service = DistributionService(target_date=target_date)
+            service.set_preview_mode(preview)
+
+            result = service.distribute(
+                use_mip=use_mip, date_from=date_from, date_to=date_to
+            )
+
+            # Если это превью - сохраняем результат во временное хранилище
+            if preview:
+                distribution_id = str(uuid.uuid4())
+                cache.set(
+                    f"distribution_preview_{distribution_id}",
+                    result,
+                    timeout=3600,  # 1 час
+                )
+                result["distribution_id"] = distribution_id
+                result["message"] = (
+                    "Предварительное распределение выполнено. Отправьте POST на /api/distribute/confirm/ для сохранения."
+                )
+
+            return Response(result, status=200)
+
         except Exception as e:
             return Response(
                 {"error": str(e), "message": "Ошибка при распределении исследований"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status=500,
             )
-    else:  # GET
-        # Предварительный просмотр без выполнения
+
+    else:  # GET - информация о доступных данных
+        # Получаем диапазон доступных дат с исследованиями
+        date_range = Study.objects.aggregate(
+            min_date=models.Min("created_at__date"),
+            max_date=models.Max("created_at__date"),
+        )
+
+        # Получаем диапазон дат с расписаниями врачей
+        schedule_range = Schedule.objects.aggregate(
+            min_date=models.Min("work_date"), max_date=models.Max("work_date")
+        )
+
         pending = Study.objects.filter(diagnostician__isnull=True).count()
         today = timezone.now().date()
+
         doctors = (
             Doctor.objects.filter(
                 is_active=True, schedule__work_date=today, schedule__is_day_off=0
@@ -362,29 +434,113 @@ def distribute_studies_view(request):
             {
                 "pending_studies": pending,
                 "available_doctors": doctors,
-                "message": "Отправьте POST-запрос для запуска распределения",
+                "study_date_range": {
+                    "min": date_range["min_date"].isoformat()
+                    if date_range["min_date"]
+                    else None,
+                    "max": date_range["max_date"].isoformat()
+                    if date_range["max_date"]
+                    else None,
+                },
+                "schedule_date_range": {
+                    "min": schedule_range["min_date"].isoformat()
+                    if schedule_range["min_date"]
+                    else None,
+                    "max": schedule_range["max_date"].isoformat()
+                    if schedule_range["max_date"]
+                    else None,
+                },
+                "message": "Отправьте POST-запрос с параметром date для распределения",
             }
+        )
+
+
+@api_view(["POST"])
+def confirm_distribution(request):
+    """
+    Подтверждение и сохранение распределения в БД.
+    Request: POST /api/distribute/confirm/
+    Body: {"distribution_id": "uuid-из-превью"}
+    """
+    distribution_id = request.data.get("distribution_id")
+
+    if not distribution_id:
+        return Response({"error": "distribution_id обязателен"}, status=400)
+
+    # Получаем сохранённое превью
+    preview_data = cache.get(f"distribution_preview_{distribution_id}")
+
+    if not preview_data:
+        return Response(
+            {"error": "Распределение не найдено или истекло время (1 час)"}, status=404
+        )
+
+    try:
+        from .services.distribution import DistributionService
+        from .models import Study
+
+        # Повторно выполняем распределение, но уже с сохранением
+        target_date_str = preview_data.get("target_date")
+        target_date = None
+        if target_date_str:
+            target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+
+        service = DistributionService(target_date=target_date)
+        service.set_preview_mode(False)  # Теперь сохраняем
+
+        # Получаем assignments из превью и сохраняем
+        assignments = preview_data.get("assignments", [])
+        assignment_dict = {a["study_id"]: a["doctor_id"] for a in assignments}
+
+        # Сохраняем в БД
+        for study_id, doc_id in assignment_dict.items():
+            Study.objects.filter(id=study_id).update(
+                diagnostician_id=doc_id, status="confirmed"
+            )
+
+        # Очищаем кэш
+        cache.delete(f"distribution_preview_{distribution_id}")
+
+        return Response(
+            {
+                "status": "confirmed",
+                "assigned": len(assignment_dict),
+                "distribution_id": distribution_id,
+                "message": f"Успешно сохранено {len(assignment_dict)} назначений",
+            }
+        )
+
+    except Exception as e:
+        return Response(
+            {"error": str(e), "message": "Ошибка при сохранении распределения"},
+            status=500,
         )
 
 
 @api_view(["GET"])
 def distribution_preview(request):
     """
-    Предварительный просмотр распределения (без сохранения).
-
-    Request: GET /api/distribute/preview/
-    Response: {
-        'pending_studies': 50,
-        'available_doctors': 12,
-        'estimated_tardiness': 15.3
-    }
+    Быстрый превью без выполнения распределения.
+    Показывает сколько исследований и врачей доступно на дату.
     """
-    pending = Study.objects.filter(diagnostician__isnull=True).count()
+    date_str = request.query_params.get("date")
 
-    today = timezone.now().date()
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({"error": "Неверный формат даты"}, status=400)
+    else:
+        target_date = timezone.now().date()
+
+    pending = Study.objects.filter(
+        diagnostician__isnull=True, created_at__date__lte=target_date
+    ).count()
+
     doctors = (
         Doctor.objects.filter(
-            is_active=True, schedule__work_date=today, schedule__is_day_off=0
+            is_active=True, schedule__work_date=target_date, schedule__is_day_off=0
         )
         .distinct()
         .count()
@@ -394,8 +550,9 @@ def distribution_preview(request):
         {
             "pending_studies": pending,
             "available_doctors": doctors,
-            "message": (
-                "Готов к распределению" if pending > 0 and doctors > 0 else "Нет данных"
-            ),
+            "target_date": target_date.isoformat(),
+            "message": "Готов к распределению"
+            if pending > 0 and doctors > 0
+            else "Нет данных",
         }
     )
