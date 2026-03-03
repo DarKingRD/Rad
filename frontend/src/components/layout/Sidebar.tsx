@@ -41,7 +41,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       <div className="p-6 border-b border-slate-100">
         <div className="flex items-center space-x-2 text-blue-600">
           <Activity size={28} />
-          <span className="text-xl font-bold text-slate-900 tracking-tight">RadPlan</span>
+          <span className="text-xl font-bold text-slate-900 tracking-tight">РадПлан</span>
         </div>
         <p className="text-xs text-slate-500 mt-1">Система планирования</p>
       </div>
