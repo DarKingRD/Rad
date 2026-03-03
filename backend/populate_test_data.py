@@ -6,7 +6,7 @@ import os
 import sys
 import random
 import django
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta  # Добавлен timedelta
 from django.utils import timezone
 from django.db import models
 
@@ -59,7 +59,7 @@ TEST_DOCTORS = [
         "is_active": True,
         "modality": ["XRAY", "CT", "MRI"],
     },
-        {
+    {
         "id": 6,
         "fio_alias": "Баранов Денис Алексеевич",
         "position_type": "radiologist",
@@ -67,7 +67,7 @@ TEST_DOCTORS = [
         "is_active": True,
         "modality": ["MRI"],
     },
-      {
+    {
         "id": 7,
         "fio_alias": "Баранов Алексей Алексеевич",
         "position_type": "radiologist",
@@ -92,12 +92,22 @@ STUDY_TYPES = [
     {"id": 6, "name": "МРТ", "modality": "MRI", "up_value": 0.333},
 ]
 
+# Дедлайны в часах по приоритетам
+DEADLINE_HOURS = {
+    "cito": 2,
+    "asap": 24,
+    "normal": 72
+}
+
 
 def clear_data():
     """Очистка таблиц"""
     print("Очистка таблиц...")
+    # Используем delete() напрямую на QuerySet
     Study.objects.all().delete()
     Schedule.objects.all().delete()
+    Doctor.objects.all().delete()
+    StudyType.objects.all().delete()
     print("Таблицы очищены")
 
 
@@ -115,13 +125,23 @@ def create_doctors():
 
 
 def create_schedules():
-    """Создание расписаний на 01.03 и 02.03"""
-    print("Создание расписаний на 01.03 и 02.03...")
+    """Создание расписаний с 03.03 по 07.03 (чтобы покрыть дедлайны исследований)"""
+    print("Создание расписаний...")
     
-    # Фиксируем даты
-    target_dates = [date(2026, 3, 2)]
+    # Расширяем диапазон дат, чтобы хватило на normal priority (72 часа = 3 дня)
+    # Start: 3 марта, End: 6 марта (включительно)
+    start_date = date(2026, 3, 3)
+    end_date = date(2026, 3, 6)
     
-    current_id = Schedule.objects.aggregate(models.Max("id"))["id__max"] or 0
+    current_date = start_date
+    target_dates = []
+    while current_date <= end_date:
+        target_dates.append(current_date)
+        current_date += timedelta(days=1)
+
+    # Получаем текущий максимальный ID
+    agg = Schedule.objects.aggregate(models.Max("id"))
+    current_id = agg["id__max"] or 0
 
     for work_date in target_dates:
         for i, doctor_data in enumerate(TEST_DOCTORS):
@@ -129,7 +149,7 @@ def create_schedules():
             schedule_data = {
                 "id": current_id,
                 "doctor_id": doctor_data["id"],
-                "work_date": work_date,  # <-- Используем дату из цикла
+                "work_date": work_date,
                 "time_start": time(9, 0),
                 "time_end": time(17, 0),
                 "is_day_off": 0,
@@ -142,7 +162,7 @@ def create_schedules():
                 defaults=schedule_data,
             )
             
-    print(f"Расписания созданы на {len(target_dates)} дня")
+    print(f"Расписания созданы на {len(target_dates)} дней (с {start_date} по {end_date})")
 
 
 def create_study_types():
@@ -159,7 +179,7 @@ def create_study_types():
 
 
 def create_studies(count):
-    """Создание исследований без назначенных врачей"""
+    """Создание исследований с расчетом плановой даты от дедлайна"""
     print(f"Создание {count} исследований...")
 
     study_types = list(StudyType.objects.all())
@@ -167,29 +187,30 @@ def create_studies(count):
         print("Нет доступных типов исследований")
         return
 
-    max_study_id = Study.objects.aggregate(models.Max("id"))["id__max"] or 0
+    agg = Study.objects.aggregate(models.Max("id"))
+    max_study_id = agg["id__max"] or 0
+    
     priorities = ["normal", "cito", "asap"]
-    priority_weights = [0.5, 0.3, 0.2]
+    # Веса приоритетов: чаще нормальные, реже срочные
+    priority_weights = [0.6, 0.01, 0.39]
 
-    # Даты для генерации исследований
-    target_dates = [date(2026, 3, 1), date(2026, 3, 2)]
+    # Базовая дата создания исследований (3 марта)
+    base_created_date = date(2026, 3, 2)
 
     created_count = 0
     for i in range(count):
-        research_number = f"TEST-20260301-{i + 1:06d}"
+        research_number = f"TEST-20260303-{i + 1:06d}"
         study_type = random.choice(study_types)
         priority = random.choices(priorities, weights=priority_weights)[0]
 
-        # 1. Генерируем дату создания (за 1-2 дня до плановой)
-        planned_date = random.choice(target_dates)
-        created_at = timezone.make_aware(
-            datetime.combine(planned_date, time(0, 0)) - timezone.timedelta(days=random.randint(1, 2))
-        )
+        # 1. Генерируем дату создания (3 марта, случайное время)
+        created_time = time(random.randint(0, 23), random.randint(0, 59), random.randint(0, 59))
+        created_at_naive = datetime.combine(base_created_date, created_time)
+        created_at = timezone.make_aware(created_at_naive)
 
-        # 2. Генерируем плановую дату (только 01.03 или 02.03 в рабочее время)
-        planned_at = timezone.make_aware(
-            datetime.combine(planned_date, time(random.randint(9, 16), random.randint(0, 59)))
-        )
+        # 2. Рассчитываем плановую дату на основе дедлайна
+        deadline_hours = DEADLINE_HOURS[priority]
+        planned_at = created_at + timedelta(hours=deadline_hours)
 
         study_data = {
             "id": max_study_id + i + 1,
@@ -210,6 +231,7 @@ def create_studies(count):
             continue
 
     print(f"Создано {created_count} исследований")
+    print(f"Диапазон плановых дат: от {base_created_date} до {base_created_date + timedelta(hours=72)}")
 
 
 def main():
@@ -223,7 +245,7 @@ def main():
     create_doctors()
     create_study_types()
     create_schedules()
-    create_studies(400)
+    create_studies(900)
 
     print("Заполнение тестовыми данными завершено")
 
