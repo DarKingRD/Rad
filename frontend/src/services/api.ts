@@ -71,8 +71,8 @@ export const studiesApi = {
   getPending: () => retryRequest(() => api.get('/studies/pending/')),
   getCito: () => retryRequest(() => api.get('/studies/cito/')),
   getAsap: () => retryRequest(() => api.get('/studies/asap/')),
-  assign: (id: number, doctor_id: number) => retryRequest(() => api.post(`/studies/${id}/assign/`, { doctor_id })),
-  updateStatus: (id: number, status: string) => retryRequest(() => api.put(`/studies/${id}/update_status/`, { status })),
+  assign: (id: string, doctor_id: number) => retryRequest(() => api.post(`/studies/${id}/assign/`, { doctor_id })),
+  updateStatus: (id: string, status: string) => retryRequest(() => api.put(`/studies/${id}/update_status/`, { status })),
 };
 
 export const dashboardApi = {

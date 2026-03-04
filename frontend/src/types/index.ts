@@ -14,6 +14,7 @@ export interface DoctorWithLoad extends Doctor {
   current_load: number;
   max_load: number;
   active_studies: number;
+  load_percentage: number;  // бэкенд возвращает в with_load
 }
 
 export interface StudyType {
@@ -36,12 +37,12 @@ export interface Schedule {
 }
 
 export interface Study {
-  research_number: string;
-  study_type_id: number;
-  status: string;
+  research_number: string;  // PK — строка, не число
+  study_type_id: number | null;
+  status: 'pending' | 'confirmed' | 'signed';  // строгий union вместо string
   priority: 'normal' | 'cito' | 'asap';
   created_at: string;
-  planned_at: string;
+  planned_at: string | null;  // может быть null если ещё не назначено
   diagnostician_id: number | null;
   study_type?: StudyType;
   diagnostician?: Doctor;
