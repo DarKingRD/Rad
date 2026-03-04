@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { doctorsApi } from '../../services/api';
 import { Plus, X, Search, ArrowUpDown } from 'lucide-react';
-import { Doctor } from '../../types';
+import { Doctor, DoctorWithLoad } from '../../types';
 
 interface DoctorFormData {
   fio_alias: string;
@@ -12,10 +12,10 @@ interface DoctorFormData {
 }
 
 type SortDirection = 'asc' | 'desc' | null;
-type SortColumn = keyof Doctor | 'modality_count' | null;
+type SortColumn = keyof DoctorWithLoad | 'modality_count' | null;
 
 export const DoctorsView: React.FC = () => {
-  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDoctor, setEditingDoctor] = useState<Doctor | null>(null);
@@ -62,6 +62,10 @@ export const DoctorsView: React.FC = () => {
           case 'max_up_per_day':
             valA = a.max_up_per_day || 0;
             valB = b.max_up_per_day || 0;
+            break;
+          case 'current_load':
+            valA = a.current_load || 0;
+            valB = b.current_load || 0;
             break;
           case 'is_active':
             valA = a.is_active ? 1 : 0;
@@ -121,7 +125,7 @@ export const DoctorsView: React.FC = () => {
   const loadDoctors = async () => {
     try {
       setLoading(true);
-      const res = await doctorsApi.getAll();
+      const res = await doctorsApi.getWithLoad();
       const doctorsData = res.data.results || res.data;
       setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
     } catch (err: any) {
@@ -268,13 +272,21 @@ export const DoctorsView: React.FC = () => {
                   Статус {getSortIcon('is_active')}
                 </div>
               </th>
+              <th
+                className="px-6 py-4 font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                onClick={() => handleSort('current_load')}
+              >
+                <div className="flex items-center gap-1">
+                  Нагрузка за месяц (УП) {getSortIcon('current_load')}
+                </div>
+              </th>
               <th className="px-6 py-4 font-semibold text-slate-700 text-right">Действия</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {sortedDoctors.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-6 py-16 text-center text-slate-500">
+                <td colSpan={7} className="px-6 py-16 text-center text-slate-500">
                   {searchQuery
                     ? 'По вашему запросу ничего не найдено'
                     : 'Врачи не найдены'}
@@ -318,6 +330,25 @@ export const DoctorsView: React.FC = () => {
                     >
                       {doc.is_active ? 'Активен' : 'В архиве'}
                     </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-2 min-w-[140px]">
+                      <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            doc.load_percentage > 95
+                              ? 'bg-red-500'
+                              : doc.load_percentage > 80
+                              ? 'bg-amber-400'
+                              : 'bg-green-500'
+                          }`}
+                          style={{ width: `${Math.min(doc.load_percentage, 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-slate-600 whitespace-nowrap">
+                        {doc.current_load.toFixed(1)} / {doc.max_load} УП
+                      </span>
+                    </div>
                   </td>
                   <td className="px-6 py-4 text-right">
                     <button

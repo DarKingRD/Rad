@@ -11,10 +11,10 @@ export interface Doctor {
 }
 
 export interface DoctorWithLoad extends Doctor {
-  current_load: number;
+  current_load: number;     // фактические УП за текущий месяц
   max_load: number;
   active_studies: number;
-  load_percentage: number;  // бэкенд возвращает в with_load
+  load_percentage: number;  // current_load / max_load * 100
 }
 
 export interface StudyType {

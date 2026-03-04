@@ -53,21 +53,23 @@ class DoctorViewSet(viewsets.ModelViewSet):
         else:
             month_end = now.replace(month=now.month + 1, day=1)
 
+        # Считаем рабочие дни в текущем месяце (пн–пт)
+        working_days_in_month = sum(
+            1 for i in range((month_end.date() - month_start.date()).days)
+            if (month_start.date() + timedelta(days=i)).weekday() < 5
+        )
+
         doctors = Doctor.objects.all()
 
         data = []
         for doctor in doctors:
-            # Считаем УП по формуле: ∑ (количество исследований * весовой коэффициент)
-            # Используем агрегацию для суммирования весовых коэффициентов
             up_data = Study.objects.filter(
                 diagnostician=doctor,
                 created_at__gte=month_start,
                 created_at__lt=month_end,
-                status__in=["confirmed", "pending", "signed"],  # Считаем все описанные
+                status__in=["confirmed", "pending", "signed"],
             ).aggregate(
-                total_up=Sum(
-                    F("study_type__up_value")
-                ),  # ← Поле с коэффициентом в StudyType
+                total_up=Sum(F("study_type__up_value")),
                 active_count=Sum(
                     Case(
                         When(status__in=["confirmed", "pending"], then=1),
@@ -80,18 +82,20 @@ class DoctorViewSet(viewsets.ModelViewSet):
             current_load = round(up_data["total_up"] or 0, 3)
             active_studies = up_data["active_count"] or 0
 
-            # Берём лимит из модели; fallback по должности только если не задан
-            if doctor.max_up_per_day:
-                norm_up = doctor.max_up_per_day
-            else:
-                norm_up = 40 if doctor.position_type == "head" else 50
+            # Дневной лимит из модели, fallback по должности
+            daily_limit = doctor.max_up_per_day or (
+                6 if doctor.position_type == "head" else 8
+            )
+
+            # Месячная норма = дневной лимит × рабочие дни месяца
+            monthly_norm = 50 
 
             data.append(
                 {
                     "id": doctor.id,
                     "fio_alias": doctor.fio_alias or f"Врач {doctor.id}",
                     "position_type": doctor.position_type,
-                    "max_up_per_day": doctor.max_up_per_day or norm_up,
+                    "max_up_per_day": daily_limit,
                     "is_active": (
                         doctor.is_active if doctor.is_active is not None else True
                     ),
@@ -100,11 +104,13 @@ class DoctorViewSet(viewsets.ModelViewSet):
                         if doctor.position_type == "radiologist"
                         else "КТ-диагност"
                     ),
+                    "modality": doctor.modality or [],
                     "current_load": current_load,
-                    "max_load": norm_up,
+                    "max_load": monthly_norm,
                     "active_studies": active_studies,
                     "load_percentage": (
-                        round((current_load / norm_up) * 100, 1) if norm_up > 0 else 0
+                        round((current_load / monthly_norm) * 100, 1)
+                        if monthly_norm > 0 else 0
                     ),
                 }
             )
