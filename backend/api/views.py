@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
-from django.db import models
+import uuid
 from django.utils import timezone
 from django.core.cache import cache
-import uuid
 from django.db.models import (
     Case,
     F,
     IntegerField,
+    Min,
+    Max,
     Sum,
     When,
 )
@@ -25,7 +26,6 @@ from .serializers import (
     StudyWithDetailsSerializer,
     StudyTypeSerializer,
 )
-from .services.distribution import distribute_studies
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -80,8 +80,11 @@ class DoctorViewSet(viewsets.ModelViewSet):
             current_load = round(up_data["total_up"] or 0, 3)
             active_studies = up_data["active_count"] or 0
 
-            # Норма УП в месяц согласно положению
-            norm_up = 40 if doctor.position_type == "head" else 50
+            # Берём лимит из модели; fallback по должности только если не задан
+            if doctor.max_up_per_day:
+                norm_up = doctor.max_up_per_day
+            else:
+                norm_up = 40 if doctor.position_type == "head" else 50
 
             data.append(
                 {
@@ -257,11 +260,9 @@ def dashboard_stats(request):
 
     total_studies = studies_qs.count()
 
-    # Signed не считаем в pending
     completed_studies = studies_qs.filter(status="signed").count()
-    pending_studies = studies_qs.filter(
-        status__in=["confirmed", "pending"], diagnostician_id__isnull=False
-    ).count()
+    # pending — исследования без назначенного врача (реальная очередь)
+    pending_studies = studies_qs.filter(diagnostician_id__isnull=True).count()
 
     # Врачи которые были активны в этом месяце
     active_doctors = (
@@ -271,9 +272,14 @@ def dashboard_stats(request):
     cito_studies = studies_qs.filter(priority="cito").count()
     asap_studies = studies_qs.filter(priority="asap").count()
 
-    avg_load = 0
+    # Средняя нагрузка: сумма УП по всем исследованиям / количество активных врачей
     if active_doctors > 0:
-        avg_load = int(pending_studies / active_doctors * 1.5)
+        total_up = studies_qs.filter(
+            diagnostician_id__isnull=False
+        ).aggregate(
+            total=Sum(F("study_type__up_value"))
+        )["total"] or 0
+        avg_load = int(total_up / active_doctors)
     else:
         avg_load = 0
 
@@ -410,13 +416,13 @@ def distribute_studies_view(request):
     else:  # GET - информация о доступных данных
         # Получаем диапазон доступных дат с исследованиями
         date_range = Study.objects.aggregate(
-            min_date=models.Min("created_at__date"),
-            max_date=models.Max("created_at__date"),
+            min_date=Min("created_at__date"),
+            max_date=Max("created_at__date"),
         )
 
         # Получаем диапазон дат с расписаниями врачей
         schedule_range = Schedule.objects.aggregate(
-            min_date=models.Min("work_date"), max_date=models.Max("work_date")
+            min_date=Min("work_date"), max_date=Max("work_date")
         )
 
         pending = Study.objects.filter(diagnostician__isnull=True).count()
@@ -492,9 +498,9 @@ def confirm_distribution(request):
         assignments = preview_data.get("assignments", [])
         assignment_dict = {a["study_id"]: a["doctor_id"] for a in assignments}
 
-        # Сохраняем в БД
+        # Сохраняем в БД (PK у Study — research_number, не id)
         for study_id, doc_id in assignment_dict.items():
-            Study.objects.filter(id=study_id).update(
+            Study.objects.filter(research_number=study_id).update(
                 diagnostician_id=doc_id, status="confirmed"
             )
 
