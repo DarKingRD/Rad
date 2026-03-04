@@ -702,6 +702,18 @@ export const CurrentDistributionView: React.FC = () => {
     return Object.fromEntries(distResult.doctor_stats.map((s) => [s.doctor_id, s]));
   }, [distResult]);
 
+  const DOCTORS_PER_PAGE = 15;
+  const [doctorPage, setDoctorPage] = useState(1);
+
+  const totalDoctorPages = Math.ceil(doctors.length / DOCTORS_PER_PAGE);
+  const doctorStartIndex = (doctorPage - 1) * DOCTORS_PER_PAGE;
+  const paginatedDoctors = doctors.slice(doctorStartIndex, doctorStartIndex + DOCTORS_PER_PAGE);
+
+  const handleDoctorPageChange = (page: number) => {
+    setDoctorPage(page);
+    setSelectedDoctor(null);
+  };
+
   // ─── Рендер ───────────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -711,6 +723,65 @@ export const CurrentDistributionView: React.FC = () => {
       </div>
     );
   }
+
+  // Вспомогательный компонент пагинации
+  const Pagination = ({
+    currentPage,
+    totalPages,
+    startIndex,
+    totalItems,
+    itemsPerPage,
+    onPageChange,
+  }: {
+    currentPage: number;
+    totalPages: number;
+    startIndex: number;
+    totalItems: number;
+    itemsPerPage: number;
+    onPageChange: (p: number) => void;
+  }) => (
+    <div className="px-3 py-2 border-t border-slate-200 flex items-center justify-between shrink-0 bg-white">
+      <div className="text-xs text-slate-500">
+        {startIndex + 1}–{Math.min(startIndex + itemsPerPage, totalItems)} из {totalItems}
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          className="p-1.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft size={14} />
+        </button>
+        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+          let p: number;
+          if (totalPages <= 5) p = i + 1;
+          else if (currentPage <= 3) p = i + 1;
+          else if (currentPage >= totalPages - 2) p = totalPages - 4 + i;
+          else p = currentPage - 2 + i;
+          return (
+            <button
+              key={p}
+              onClick={() => onPageChange(p)}
+              className={`px-2.5 py-1 rounded text-xs ${
+                currentPage === p
+                  ? 'bg-blue-600 text-white'
+                  : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {p}
+            </button>
+          );
+        })}
+        <button
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          className="p-1.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -825,7 +896,6 @@ export const CurrentDistributionView: React.FC = () => {
                 <span className="ml-2 font-semibold text-slate-700">{distResult.target_date}</span>
               </div>
             </div>
-
             <div className="flex items-center gap-2">
               <span className="px-3 py-1 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">
                 Режим предпросмотра
@@ -842,17 +912,19 @@ export const CurrentDistributionView: React.FC = () => {
         </div>
       )}
 
-      {/* ── Основной контент ─────────────────────────────────────────────────── */}
-      <div className="flex space-x-6 flex-1 min-h-0">
+      {/* ── Основной контент: фиксированная высота, обе колонки — flex column ── */}
+      <div className="flex gap-6" style={{ height: 'calc(100vh - 380px)', minHeight: '500px' }}>
+
         {/* Левая колонка: очередь исследований */}
-        <div className="w-1/2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col min-h-0">
+        <div className="w-1/2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-200 shrink-0">
             <h3 className="font-semibold text-slate-800">
               Очередь исследований ({sortedStudies.length})
             </h3>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-2 space-y-2">
+          {/* Скроллируемый список */}
+          <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
             {paginatedStudies.length === 0 ? (
               <div className="p-8 text-center text-slate-500">Нет исследований в очереди</div>
             ) : (
@@ -871,11 +943,7 @@ export const CurrentDistributionView: React.FC = () => {
                 >
                   <div className="flex justify-between items-start mb-1">
                     <span className="font-medium text-slate-900 text-sm">{study.research_number}</span>
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs font-medium ${getPriorityColor(
-                        study.priority
-                      )}`}
-                    >
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${getPriorityColor(study.priority)}`}>
                       {getPriorityLabel(study.priority)}
                     </span>
                   </div>
@@ -889,13 +957,9 @@ export const CurrentDistributionView: React.FC = () => {
                   </div>
                   <div className="flex justify-between text-xs text-slate-400">
                     <span>Создано: {formatDate(study.created_at)}</span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded ${getStatusColor(study.status)}`}
-                    >
-                      {study.status === 'pending'
-                        ? 'Ожидает'
-                        : study.status === 'confirmed'
-                        ? 'Назначено'
+                    <span className={`px-1.5 py-0.5 rounded ${getStatusColor(study.status)}`}>
+                      {study.status === 'pending' ? 'Ожидает'
+                        : study.status === 'confirmed' ? 'Назначено'
                         : study.status}
                     </span>
                   </div>
@@ -904,75 +968,45 @@ export const CurrentDistributionView: React.FC = () => {
             )}
           </div>
 
-          {/* Пагинация */}
+          {/* Пагинация — прибита к низу колонки */}
           {totalPages > 1 && (
-            <div className="p-3 border-t border-slate-200 flex items-center justify-between shrink-0">
-              <div className="text-xs text-slate-500">
-                {startIndex + 1}–{Math.min(startIndex + itemsPerPage, sortedStudies.length)} из{' '}
-                {sortedStudies.length}
-              </div>
-              <div className="flex items-center space-x-1">
-                <button
-                  onClick={() => handlePageChange(currentPage - 1)}
-                  disabled={currentPage === 1}
-                  className="p-1.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let p: number;
-                  if (totalPages <= 5) p = i + 1;
-                  else if (currentPage <= 3) p = i + 1;
-                  else if (currentPage >= totalPages - 2) p = totalPages - 4 + i;
-                  else p = currentPage - 2 + i;
-                  return (
-                    <button
-                      key={p}
-                      onClick={() => handlePageChange(p)}
-                      className={`px-2.5 py-1 rounded text-xs ${
-                        currentPage === p
-                          ? 'bg-blue-600 text-white'
-                          : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  );
-                })}
-                <button
-                  onClick={() => handlePageChange(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                  className="p-1.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <ChevronRight size={14} />
-                </button>
-              </div>
-            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              startIndex={startIndex}
+              totalItems={sortedStudies.length}
+              itemsPerPage={itemsPerPage}
+              onPageChange={handlePageChange}
+            />
           )}
         </div>
 
         {/* Правая колонка: врачи + панель назначения */}
-        <div className="w-1/2 flex flex-col gap-4 min-h-0">
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex-1 overflow-y-auto p-4 min-h-0">
-            <h3 className="font-semibold text-slate-800 mb-3 sticky top-0 bg-white pb-1 z-10">
-              Состояние врачей ({doctors.length})
-              {selectedStudy && (
-                <span className="ml-2 text-xs font-normal text-blue-600">
-                  — нажмите «Назначить» у нужного врача
-                </span>
-              )}
-              {distResult && (
-                <span className="ml-2 text-xs font-normal text-green-600">
-                  · данные из текущего распределения
-                </span>
-              )}
-            </h3>
+        <div className="w-1/2 flex flex-col gap-3 overflow-hidden">
 
-            <div className="space-y-3">
+          {/* Список врачей */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col flex-1 overflow-hidden min-h-0">
+            <div className="p-4 border-b border-slate-200 shrink-0">
+              <h3 className="font-semibold text-slate-800">
+                Врачи ({doctors.length})
+                {selectedStudy && (
+                  <span className="ml-2 text-xs font-normal text-blue-600">
+                    — нажмите «Назначить» у нужного врача
+                  </span>
+                )}
+                {distResult && (
+                  <span className="ml-2 text-xs font-normal text-green-600">
+                    · данные из текущего распределения
+                  </span>
+                )}
+              </h3>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
               {doctors.length === 0 ? (
                 <div className="p-8 text-center text-slate-500">Нет активных врачей</div>
               ) : (
-                doctors.map((doc) => (
+                paginatedDoctors.map((doc) => (
                   <DoctorCard
                     key={doc.id}
                     doc={doc}
@@ -987,6 +1021,18 @@ export const CurrentDistributionView: React.FC = () => {
                 ))
               )}
             </div>
+
+            {/* Пагинация врачей — прибита к низу */}
+            {totalDoctorPages > 1 && (
+              <Pagination
+                currentPage={doctorPage}
+                totalPages={totalDoctorPages}
+                startIndex={doctorStartIndex}
+                totalItems={doctors.length}
+                itemsPerPage={DOCTORS_PER_PAGE}
+                onPageChange={handleDoctorPageChange}
+              />
+            )}
           </div>
 
           {/* Панель назначения */}
@@ -994,9 +1040,7 @@ export const CurrentDistributionView: React.FC = () => {
             <div className="bg-blue-600 text-white p-4 rounded-xl shadow-lg shrink-0">
               <h4 className="font-medium mb-1 text-sm">{selectedStudy.research_number}</h4>
               <p className="text-blue-100 text-xs mb-3 flex items-center gap-2 flex-wrap">
-                <span
-                  className={`inline-block px-2 py-0.5 rounded text-xs font-medium bg-blue-500/50 text-white`}
-                >
+                <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-blue-500/50 text-white">
                   {getPriorityLabel(selectedStudy.priority)}
                 </span>
                 <span>{selectedStudy.study_type?.name}</span>
@@ -1006,13 +1050,11 @@ export const CurrentDistributionView: React.FC = () => {
                   </span>
                 )}
               </p>
-
               {selectedDoctor && (
                 <p className="text-blue-100 text-xs mb-3">
                   Врач: <strong>{doctors.find((d) => d.id === selectedDoctor)?.fio_alias}</strong>
                 </p>
               )}
-
               <div className="flex space-x-2">
                 {selectedDoctor ? (
                   <>
@@ -1035,10 +1077,7 @@ export const CurrentDistributionView: React.FC = () => {
                   </p>
                 )}
                 <button
-                  onClick={() => {
-                    setSelectedStudy(null);
-                    setSelectedDoctor(null);
-                  }}
+                  onClick={() => { setSelectedStudy(null); setSelectedDoctor(null); }}
                   className="px-3 py-2 bg-blue-700 text-white border border-blue-500 rounded-md text-sm hover:bg-blue-800 transition"
                 >
                   Отмена
