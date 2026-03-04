@@ -6,7 +6,6 @@
 записи в базе данных для всех основных сущностей системы.
 """
 from django.contrib import admin
-from django.utils.html import format_html
 from .models import Doctor, StudyType, Schedule, Study
 
 
