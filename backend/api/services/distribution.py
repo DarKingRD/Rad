@@ -134,19 +134,15 @@ class DistributionService:
         self,
         target_date: Optional[datetime] = None,
         preview_mode: bool = False,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
     ):
         self.now = timezone.now()
         self.target_date = target_date or self.now.date()
         self.preview_mode = preview_mode
-        self.date_from = date_from
-        self.date_to = date_to
         self._debug: List[str] = []
 
     def set_preview_mode(self, preview: bool = True):
-        "Включить режим предпросмотра (не сохранять назначения)"
-        self._preview_mode = preview
+        "Включить/выключить режим предпросмотра (не сохранять назначения)"
+        self.preview_mode = preview
     
     def _log(self, msg: str):
         logger.info(msg)
@@ -714,12 +710,3 @@ class DistributionService:
             "message": message,
             "_debug": self._debug,
         }
-
-
-# ==============================================================================
-# ТОЧКА ВХОДА
-# ==============================================================================
-
-def distribute_studies() -> Dict:
-    service = DistributionService()
-    return service.distribute(use_mip=True)
