@@ -16,14 +16,72 @@ type SortColumn = keyof Doctor | 'modality_count' | null;
 
 export const DoctorsView: React.FC = () => {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
-  const [filteredDoctors, setFilteredDoctors] = useState<Doctor[]>([]);
-  const [sortedDoctors, setSortedDoctors] = useState<Doctor[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDoctor, setEditingDoctor] = useState<Doctor | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+
+  // Фильтрация и сортировка через useMemo — без лишних стейтов
+  const sortedDoctors = useMemo(() => {
+    let result = [...doctors];
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      result = result.filter((doc) => {
+        const fio = (doc.fio_alias || '').toLowerCase();
+        const specialty = (doc.specialty || doc.position_type || '').toLowerCase();
+        const modalities = (doc.modality || []).join(' ').toLowerCase();
+        const status = doc.is_active ? 'активен' : 'в архиве';
+        return (
+          fio.includes(query) ||
+          specialty.includes(query) ||
+          modalities.includes(query) ||
+          status.includes(query) ||
+          String(doc.max_up_per_day || '').includes(query) ||
+          String(doc.id || '').includes(query)
+        );
+      });
+    }
+
+    if (sortColumn && sortDirection) {
+      result = result.sort((a, b) => {
+        let valA: any;
+        let valB: any;
+        switch (sortColumn) {
+          case 'fio_alias':
+            valA = (a.fio_alias || '').toLowerCase();
+            valB = (b.fio_alias || '').toLowerCase();
+            break;
+          case 'position_type':
+          case 'specialty':
+            valA = (a.specialty || a.position_type || '').toLowerCase();
+            valB = (b.specialty || b.position_type || '').toLowerCase();
+            break;
+          case 'max_up_per_day':
+            valA = a.max_up_per_day || 0;
+            valB = b.max_up_per_day || 0;
+            break;
+          case 'is_active':
+            valA = a.is_active ? 1 : 0;
+            valB = b.is_active ? 1 : 0;
+            break;
+          case 'modality_count':
+            valA = (a.modality || []).length;
+            valB = (b.modality || []).length;
+            break;
+          default:
+            return 0;
+        }
+        if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+        if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return result;
+  }, [doctors, searchQuery, sortColumn, sortDirection]);
 
   const [formData, setFormData] = useState<DoctorFormData>({
     fio_alias: '',
@@ -36,81 +94,6 @@ export const DoctorsView: React.FC = () => {
   useEffect(() => {
     loadDoctors();
   }, []);
-
-  // Фильтрация по поиску
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredDoctors(doctors);
-      return;
-    }
-
-    const query = searchQuery.toLowerCase().trim();
-
-    const filtered = doctors.filter((doc) => {
-      const fio = (doc.fio_alias || '').toLowerCase();
-      const specialty = (doc.specialty || doc.position_type || '').toLowerCase();
-      const modalities = (doc.modality || []).join(' ').toLowerCase();
-      const status = doc.is_active ? 'активен' : 'в архиве';
-
-      return (
-        fio.includes(query) ||
-        specialty.includes(query) ||
-        modalities.includes(query) ||
-        status.includes(query) ||
-        String(doc.max_up_per_day || '').includes(query) ||
-        String(doc.id || '').includes(query)
-      );
-    });
-
-    setFilteredDoctors(filtered);
-  }, [searchQuery, doctors]);
-
-  // Сортировка (зависит от filteredDoctors)
-  useMemo(() => {
-    let result = [...filteredDoctors];
-
-    if (!sortColumn || !sortDirection) {
-      setSortedDoctors(result);
-      return;
-    }
-
-    result = result.sort((a, b) => {
-      let valA: any;
-      let valB: any;
-
-      switch (sortColumn) {
-        case 'fio_alias':
-          valA = (a.fio_alias || '').toLowerCase();
-          valB = (b.fio_alias || '').toLowerCase();
-          break;
-        case 'position_type':
-        case 'specialty':
-          valA = (a.specialty || a.position_type || '').toLowerCase();
-          valB = (b.specialty || b.position_type || '').toLowerCase();
-          break;
-        case 'max_up_per_day':
-          valA = a.max_up_per_day || 0;
-          valB = b.max_up_per_day || 0;
-          break;
-        case 'is_active':
-          valA = a.is_active ? 1 : 0;
-          valB = b.is_active ? 1 : 0;
-          break;
-        case 'modality_count':
-          valA = (a.modality || []).length;
-          valB = (b.modality || []).length;
-          break;
-        default:
-          return 0;
-      }
-
-      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
-      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    setSortedDoctors(result);
-  }, [filteredDoctors, sortColumn, sortDirection]);
 
   const handleSort = (column: SortColumn) => {
     if (sortColumn === column) {
@@ -140,10 +123,7 @@ export const DoctorsView: React.FC = () => {
       setLoading(true);
       const res = await doctorsApi.getAll();
       const doctorsData = res.data.results || res.data;
-      const dataArray = Array.isArray(doctorsData) ? doctorsData : [];
-      setDoctors(dataArray);
-      setFilteredDoctors(dataArray);
-      setSortedDoctors(dataArray);
+      setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
     } catch (err: any) {
       console.error('Error loading doctors:', err);
     } finally {

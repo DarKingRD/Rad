@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity } from 'lucide-react';
+import { Activity, LayoutDashboard, CalendarDays, GitBranch, Users, BarChart2 } from 'lucide-react';
 
 interface SidebarItemProps {
   icon: React.ElementType;
@@ -29,11 +29,11 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
   const menuItems = [
-    { id: 'dashboard', label: 'Главная', icon: Activity },
-    { id: 'planning', label: 'Планирование смен', icon: Activity },
-    { id: 'distribution', label: 'Текущее распределение', icon: Activity },
-    { id: 'doctors', label: 'Врачи', icon: Activity },
-    { id: 'reports', label: 'Отчёты', icon: Activity },
+    { id: 'dashboard', label: 'Главная', icon: LayoutDashboard },
+    { id: 'planning', label: 'Планирование смен', icon: CalendarDays },
+    { id: 'distribution', label: 'Текущее распределение', icon: GitBranch },
+    { id: 'doctors', label: 'Врачи', icon: Users },
+    { id: 'reports', label: 'Отчёты', icon: BarChart2 },
   ];
 
   return (

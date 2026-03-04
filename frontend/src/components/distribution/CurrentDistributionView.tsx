@@ -529,7 +529,7 @@ export const CurrentDistributionView: React.FC = () => {
       [doctorId]: { loading: true, studies: [], error: null },
     }));
     try {
-      const res = await studiesApi.getList({ diagnostician_id: doctorId, status: 'confirmed' });
+      const res = await studiesApi.getAll({ diagnostician_id: doctorId, status: 'confirmed' });
       setDoctorStudies((prev) => ({
         ...prev,
         [doctorId]: { loading: false, studies: res.data || [], error: null },
@@ -664,7 +664,7 @@ export const CurrentDistributionView: React.FC = () => {
       return;
     }
     try {
-      await studiesApi.assign(selectedStudy.id, targetId);
+      await studiesApi.assign(selectedStudy.research_number, targetId);
       setDoctorStudies((prev) => {
         const next = { ...prev };
         delete next[targetId];
@@ -1063,6 +1063,3 @@ export const CurrentDistributionView: React.FC = () => {
     </div>
   );
 };
-
-
-

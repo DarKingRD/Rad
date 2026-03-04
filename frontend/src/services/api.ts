@@ -66,9 +66,7 @@ export const schedulesApi = {
 };
 
 export const studiesApi = {
-  getAll: (params?: { status?: string; priority?: string; date_from?: string; date_to?: string }) =>
-    retryRequest(() => api.get('/studies/', { params })),
-  getList: (params?: { status?: string; priority?: string; date_from?: string; date_to?: string }) =>
+  getAll: (params?: { status?: string; priority?: string; date_from?: string; date_to?: string; diagnostician_id?: number }) =>
     retryRequest(() => api.get('/studies/', { params })),
   getPending: () => retryRequest(() => api.get('/studies/pending/')),
   getCito: () => retryRequest(() => api.get('/studies/cito/')),
