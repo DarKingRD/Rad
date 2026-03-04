@@ -26,6 +26,7 @@ from .serializers import (
     StudyWithDetailsSerializer,
     StudyTypeSerializer,
 )
+from .services.distribution import DistributionService
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -84,11 +85,11 @@ class DoctorViewSet(viewsets.ModelViewSet):
 
             # Дневной лимит из модели, fallback по должности
             daily_limit = doctor.max_up_per_day or (
-                6 if doctor.position_type == "head" else 8
+                40 if doctor.position_type == "head" else 50
             )
 
             # Месячная норма = дневной лимит × рабочие дни месяца
-            monthly_norm = 50 
+            monthly_norm = daily_limit * working_days_in_month
 
             data.append(
                 {
@@ -187,14 +188,35 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"])
     def pending(self, request):
-        """Ожидающие исследования (без врача)"""
-        studies = (
+        """Ожидающие исследования (без врача) — с пагинацией"""
+        page_size = min(int(request.query_params.get("page_size", 100)), 500)
+        page = max(int(request.query_params.get("page", 1)), 1)
+        offset = (page - 1) * page_size
+
+        qs = (
             Study.objects.filter(diagnostician_id__isnull=True)
-            .select_related("study_type", "diagnostician")
-            .order_by("-created_at")
+            .select_related("study_type")
+            .order_by(
+                Case(
+                    When(priority="cito", then=0),
+                    When(priority="asap", then=1),
+                    When(priority="stat", then=2),
+                    default=3,
+                    output_field=IntegerField(),
+                ),
+                "created_at",
+            )
         )
+        total = qs.count()
+        studies = qs[offset : offset + page_size]
         serializer = StudyWithDetailsSerializer(studies, many=True)
-        return Response(serializer.data)
+        return Response({
+            "results": serializer.data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size,
+        })
 
     @action(detail=False, methods=["get"])
     def cito(self, request):
@@ -389,8 +411,6 @@ def distribute_studies_view(request):
                 return Response({"error": "Неверный формат date_to"}, status=400)
 
         try:
-            from .services.distribution import DistributionService
-
             service = DistributionService(target_date=target_date)
             service.set_preview_mode(preview)
 
@@ -488,7 +508,6 @@ def confirm_distribution(request):
         )
 
     try:
-        from .services.distribution import DistributionService
         from .models import Study
 
         # Повторно выполняем распределение, но уже с сохранением
@@ -568,3 +587,4 @@ def distribution_preview(request):
             else "Нет данных",
         }
     )
+    

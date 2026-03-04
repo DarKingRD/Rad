@@ -90,17 +90,17 @@ export const ReportsView: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       {/* Заголовок */}
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-slate-900">Отчёты и аналитика</h2>
-        <button className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-md text-sm font-medium hover:bg-slate-50 flex items-center">
-          <Download size={16} className="mr-2" /> Экспорт
+        <h2 className="text-xl md:text-2xl font-bold text-slate-900">Отчёты</h2>
+        <button className="px-3 md:px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-md text-xs md:text-sm font-medium hover:bg-slate-50 flex items-center gap-1.5">
+          <Download size={15} /> <span className="hidden sm:inline">Экспорт</span>
         </button>
       </div>
 
       {/* Вкладки */}
-      <div className="flex space-x-1 border-b border-slate-200">
+      <div className="flex border-b border-slate-200 overflow-x-auto">
         {[
           { id: 'doctors', label: 'По врачам' },
           { id: 'studies', label: 'По исследованиям' },
@@ -109,7 +109,7 @@ export const ReportsView: React.FC = () => {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-3 md:px-4 py-2 text-xs md:text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
               activeTab === tab.id
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-600 hover:text-slate-900'
@@ -120,84 +120,77 @@ export const ReportsView: React.FC = () => {
         ))}
       </div>
 
-      {/* Фильтры */}
+      {/* Фильтры — стек на мобиле, строка на десктопе */}
       <div className="bg-white rounded-lg border border-slate-200 p-4">
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-slate-700 font-medium">Период:</span>
-            <div className="flex items-center space-x-2">
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="px-3 py-1.5 border border-slate-300 rounded-md text-sm"
-              />
-              <span className="text-slate-500">—</span>
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="px-3 py-1.5 border border-slate-300 rounded-md text-sm"
-              />
-            </div>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-slate-700 font-medium shrink-0">Период:</span>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm flex-1 min-w-0"
+            />
+            <span className="text-slate-500">—</span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm flex-1 min-w-0"
+            />
           </div>
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-slate-700 font-medium">Отделение:</span>
+          <div className="flex items-center gap-2 flex-wrap">
             <select
               value={selectedDepartment}
               onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm"
+              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm flex-1 sm:flex-none"
             >
               <option value="all">Все отделения</option>
               <option value="xray">Рентген</option>
               <option value="ct">КТ</option>
               <option value="mri">МРТ</option>
             </select>
-          </div>
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-slate-700 font-medium">Врач:</span>
             <select
               value={selectedDoctor}
               onChange={(e) => setSelectedDoctor(e.target.value)}
-              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm"
+              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm flex-1 sm:flex-none"
             >
               <option value="all">Все врачи</option>
             </select>
+            <button
+              onClick={handleApplyFilters}
+              className="px-4 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <Filter size={15} />Применить
+            </button>
           </div>
-          <button
-            onClick={handleApplyFilters}
-            className="px-4 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 flex items-center"
-          >
-            <Filter size={16} className="mr-2" />
-            Применить
-          </button>
         </div>
       </div>
 
-      {/* KPI карточки */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
+      {/* KPI карточки: 2 колонки на мобиле, 4 на десктопе */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-slate-600">Всего УП</div>
-            <TrendingUp size={16} className="text-blue-600" />
+            <div className="text-xs md:text-sm text-slate-600">Всего УП</div>
+            <TrendingUp size={15} className="text-blue-600" />
           </div>
-          <div className="text-2xl font-bold text-slate-900 mb-1">{kpiData.totalUp.toLocaleString()}</div>
-          <div className="text-xs text-green-600">+{kpiData.totalUpChange}% к прошлому месяцу</div>
+          <div className="text-xl md:text-2xl font-bold text-slate-900 mb-1">{kpiData.totalUp.toLocaleString()}</div>
+          <div className="text-xs text-green-600">+{kpiData.totalUpChange}%</div>
         </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-slate-600">Выполнено исследований</div>
-            <CheckCircle2 size={16} className="text-green-600" />
+            <div className="text-xs md:text-sm text-slate-600">Исследований</div>
+            <CheckCircle2 size={15} className="text-green-600" />
           </div>
-          <div className="text-2xl font-bold text-slate-900 mb-1">{kpiData.completedStudies.toLocaleString()}</div>
-          <div className="text-xs text-green-600">+{kpiData.completedStudiesChange}% к прошлому месяцу</div>
+          <div className="text-xl md:text-2xl font-bold text-slate-900 mb-1">{kpiData.completedStudies.toLocaleString()}</div>
+          <div className="text-xs text-green-600">+{kpiData.completedStudiesChange}%</div>
         </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-slate-600">% выполнения плана</div>
-            <Target size={16} className="text-blue-600" />
+            <div className="text-xs md:text-sm text-slate-600">% плана</div>
+            <Target size={15} className="text-blue-600" />
           </div>
-          <div className="text-2xl font-bold text-slate-900 mb-1">{kpiData.planFulfillment}%</div>
+          <div className="text-xl md:text-2xl font-bold text-slate-900 mb-1">{kpiData.planFulfillment}%</div>
           <div className="text-xs text-red-600">{kpiData.planFulfillmentChange}% к прошлому месяцу</div>
         </div>
         <div className="bg-white rounded-lg border border-slate-200 p-4">
@@ -205,53 +198,46 @@ export const ReportsView: React.FC = () => {
             <div className="text-sm text-slate-600">Среднее время ожидания</div>
             <Clock size={16} className="text-slate-600" />
           </div>
-          <div className="text-2xl font-bold text-slate-900 mb-1">{kpiData.avgWaitTime} мин</div>
-          <div className="text-xs text-green-600">{kpiData.avgWaitTimeChange} мин к прошлому месяцу</div>
+          <div className="text-xl md:text-2xl font-bold text-slate-900 mb-1">{kpiData.avgWaitTime} мин</div>
+          <div className="text-xs text-green-600">{kpiData.avgWaitTimeChange} мин к прошлому</div>
         </div>
       </div>
 
-      {/* Виджеты */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* Виджеты: 1 колонка на мобиле, 3 на десктопе */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
         <div className="bg-white rounded-lg border border-slate-200 p-4 cursor-pointer hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <BarChart3 size={20} className="text-blue-600" />
-          </div>
-          <div className="font-semibold text-slate-900 mb-1">Загрузка по дням</div>
+          <BarChart3 size={18} className="text-blue-600 mb-2" />
+          <div className="font-semibold text-slate-900 text-sm mb-1">Загрузка по дням</div>
           <div className="text-xs text-slate-500">Детальная статистика по дням</div>
         </div>
         <div className="bg-white rounded-lg border border-slate-200 p-4 cursor-pointer hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <Users size={20} className="text-green-600" />
-          </div>
-          <div className="font-semibold text-slate-900 mb-1">Эффективность врачей</div>
+          <Users size={18} className="text-green-600 mb-2" />
+          <div className="font-semibold text-slate-900 text-sm mb-1">Эффективность врачей</div>
           <div className="text-xs text-slate-500">Выполнение плана по каждому врачу</div>
         </div>
         <div className="bg-white rounded-lg border border-slate-200 p-4 cursor-pointer hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <PieChart size={20} className="text-purple-600" />
-          </div>
-          <div className="font-semibold text-slate-900 mb-1">По типам исследований</div>
+          <PieChart size={18} className="text-purple-600 mb-2" />
+          <div className="font-semibold text-slate-900 text-sm mb-1">По типам исследований</div>
           <div className="text-xs text-slate-500">Распределение по модальностям</div>
         </div>
       </div>
 
-      {/* Графики */}
-      <div className="grid grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      {/* Графики: стек на мобиле, 2 колонки на десктопе */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+        <div className="bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-slate-800">Выполнение плана по дням</h3>
-            <div className="flex space-x-2">
+            <h3 className="font-semibold text-slate-800 text-sm md:text-base">Выполнение плана по дням</h3>
+            <div className="flex gap-1">
               <button className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">План/Факт</button>
-              <button className="px-2 py-1 text-xs bg-slate-100 text-slate-600 rounded">Тренд</button>
             </div>
           </div>
-          <div className="h-64">
+          <div className="h-48 md:h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                <YAxis axisLine={false} tickLine={false} />
-                <Tooltip cursor={{fill: '#f1f5f9'}} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
+                <Tooltip cursor={{ fill: '#f1f5f9' }} />
                 <Legend />
                 <Bar dataKey="plan" fill="#94a3b8" radius={[4, 4, 0, 0]} name="План" />
                 <Bar dataKey="actual" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Факт" />
@@ -260,14 +246,14 @@ export const ReportsView: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-slate-800">Распределение по типам исследований</h3>
+            <h3 className="font-semibold text-slate-800 text-sm md:text-base">По типам исследований</h3>
             <button className="p-1 hover:bg-slate-100 rounded">
               <Download size={16} className="text-slate-600" />
             </button>
           </div>
-          <div className="h-64">
+          <div className="h-48 md:h-64">
             <ResponsiveContainer width="100%" height="100%">
               <RechartsPieChart>
                 <Pie

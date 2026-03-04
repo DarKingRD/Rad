@@ -467,6 +467,8 @@ export const CurrentDistributionView: React.FC = () => {
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
   const [selectedDoctor, setSelectedDoctor] = useState<number | null>(null);
   const [allStudies, setAllStudies] = useState<Study[]>([]);
+  const [totalStudies, setTotalStudies] = useState(0);
+  const [totalStudyPages, setTotalStudyPages] = useState(1);
   const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -482,12 +484,18 @@ export const CurrentDistributionView: React.FC = () => {
   const [itemsPerPage] = useState(20);
   const [expandedDoctor, setExpandedDoctor] = useState<number | null>(null);
   const [doctorStudies, setDoctorStudies] = useState<Record<number, DoctorStudiesState>>({});
+  const [mobileTab, setMobileTab] = useState<'studies' | 'doctors'>('studies');
 
   // ─── Эффекты ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     loadDistributionInfo();
-    loadData();
+    loadData(1);
   }, []);
+
+  // При смене страницы — грузим новую порцию с сервера
+  useEffect(() => {
+    loadStudiesPage(currentPage);
+  }, [currentPage]);
 
   // ─── Загрузка данных ──────────────────────────────────────────────────────────
   const loadDistributionInfo = async () => {
@@ -506,14 +514,42 @@ export const CurrentDistributionView: React.FC = () => {
     }
   };
 
-  const loadData = async () => {
+  const loadStudiesPage = async (page: number) => {
+    try {
+      const studiesRes = await studiesApi.getPending(page, itemsPerPage);
+      const data = studiesRes.data;
+      // Поддержка как нового формата {results, total, ...} так и старого массива
+      if (Array.isArray(data)) {
+        setAllStudies(data);
+        setTotalStudies(data.length);
+        setTotalStudyPages(1);
+      } else {
+        setAllStudies(data.results || []);
+        setTotalStudies(data.total || 0);
+        setTotalStudyPages(data.total_pages || 1);
+      }
+    } catch (error) {
+      console.error('Error loading studies page:', error);
+    }
+  };
+
+  const loadData = async (page = currentPage) => {
     setLoading(true);
     try {
       const [studiesRes, doctorsRes] = await Promise.all([
-        studiesApi.getPending(),
+        studiesApi.getPending(page, itemsPerPage),
         doctorsApi.getWithLoad(),
       ]);
-      setAllStudies(studiesRes.data || []);
+      const sData = studiesRes.data;
+      if (Array.isArray(sData)) {
+        setAllStudies(sData);
+        setTotalStudies(sData.length);
+        setTotalStudyPages(1);
+      } else {
+        setAllStudies(sData.results || []);
+        setTotalStudies(sData.total || 0);
+        setTotalStudyPages(sData.total_pages || 1);
+      }
       setDoctors(doctorsRes.data || []);
     } catch (error) {
       console.error('Error loading data:', error);
@@ -679,22 +715,17 @@ export const CurrentDistributionView: React.FC = () => {
   };
 
   // ─── Вычисления ───────────────────────────────────────────────────────────────
-  const sortedStudies = useMemo(() => {
-    return [...allStudies].sort((a, b) => {
-      const diff = (PRIORITY_ORDER[a.priority] || 3) - (PRIORITY_ORDER[b.priority] || 3);
-      if (diff !== 0) return diff;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
-  }, [allStudies]);
-
-  const totalPages = Math.ceil(sortedStudies.length / itemsPerPage);
+  // Данные уже отсортированы сервером (cito→asap→stat→routine + created_at)
+  // и приходят постранично — никакого клиентского slice не нужно
+  const paginatedStudies = allStudies;
+  const totalPages = totalStudyPages;
   const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedStudies = sortedStudies.slice(startIndex, startIndex + itemsPerPage);
 
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
     setSelectedStudy(null);
     setSelectedDoctor(null);
+    // Загрузка следующей страницы через useEffect [currentPage]
   };
 
   const distStatMap = useMemo<Record<number, DoctorDistStat>>(() => {
@@ -912,14 +943,33 @@ export const CurrentDistributionView: React.FC = () => {
         </div>
       )}
 
-      {/* ── Основной контент: фиксированная высота, обе колонки — flex column ── */}
-      <div className="flex gap-6" style={{ height: 'calc(100vh - 380px)', minHeight: '500px' }}>
+      {/* ── Основной контент ─────────────────────────────────────────────────── */}
+
+      {/* Мобильные табы */}
+      <div className="md:hidden flex rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+        <button
+          onClick={() => setMobileTab('studies')}
+          className={`flex-1 py-3 text-sm font-medium transition-colors ${mobileTab === 'studies' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+        >
+          Исследования ({totalStudies})
+        </button>
+        <button
+          onClick={() => setMobileTab('doctors')}
+          className={`flex-1 py-3 text-sm font-medium transition-colors ${mobileTab === 'doctors' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+        >
+          Врачи ({doctors.length})
+        </button>
+      </div>
+
+      {/* Desktop: обе колонки рядом с фиксированной высотой */}
+      {/* Mobile: одна колонка по табу */}
+      <div className="hidden md:flex gap-6" style={{ height: 'calc(100vh - 380px)', minHeight: '500px' }}>
 
         {/* Левая колонка: очередь исследований */}
         <div className="w-1/2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-200 shrink-0">
             <h3 className="font-semibold text-slate-800">
-              Очередь исследований ({sortedStudies.length})
+              Очередь исследований ({totalStudies})
             </h3>
           </div>
 
@@ -974,7 +1024,7 @@ export const CurrentDistributionView: React.FC = () => {
               currentPage={currentPage}
               totalPages={totalPages}
               startIndex={startIndex}
-              totalItems={sortedStudies.length}
+              totalItems={totalStudies}
               itemsPerPage={itemsPerPage}
               onPageChange={handlePageChange}
             />
@@ -1086,6 +1136,121 @@ export const CurrentDistributionView: React.FC = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Mobile: контент по активному табу */}
+      <div className="md:hidden">
+        {mobileTab === 'studies' && (
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 370px)', minHeight: '400px' }}>
+            <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
+              {paginatedStudies.length === 0 ? (
+                <div className="p-8 text-center text-slate-500">Нет исследований в очереди</div>
+              ) : (
+                paginatedStudies.map((study) => (
+                  <div
+                    key={study.research_number}
+                    onClick={() => { setSelectedStudy(study); setSelectedDoctor(null); setMobileTab('doctors'); }}
+                    className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                      selectedStudy?.research_number === study.research_number
+                        ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                        : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="font-medium text-slate-900 text-sm">{study.research_number}</span>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${getPriorityColor(study.priority)}`}>
+                        {getPriorityLabel(study.priority)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-600 mb-1 flex items-center gap-2 flex-wrap">
+                      <span>{study.study_type?.name || `ID: ${study.study_type_id}`}</span>
+                      {study.study_type?.modality && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">
+                          {study.study_type.modality}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-400">
+                      <span>Создано: {formatDate(study.created_at)}</span>
+                      <span className={`px-1.5 py-0.5 rounded ${getStatusColor(study.status)}`}>
+                        {study.status === 'pending' ? 'Ожидает' : study.status === 'confirmed' ? 'Назначено' : study.status}
+                      </span>
+                    </div>
+                    {selectedStudy?.research_number === study.research_number && (
+                      <div className="mt-2 text-xs text-blue-600 font-medium">→ Выберите врача на вкладке «Врачи»</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            {totalPages > 1 && (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                startIndex={startIndex}
+                totalItems={totalStudies}
+                itemsPerPage={itemsPerPage}
+                onPageChange={handlePageChange}
+              />
+            )}
+          </div>
+        )}
+
+        {mobileTab === 'doctors' && (
+          <div className="flex flex-col gap-3">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 410px)', minHeight: '360px' }}>
+              <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
+                {selectedStudy && (
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 flex items-center justify-between">
+                    <span>Выбрано: <strong>{selectedStudy.research_number}</strong> — нажмите «Назначить»</span>
+                    <button onClick={() => setSelectedStudy(null)} className="text-blue-400 hover:text-blue-600 ml-2">✕</button>
+                  </div>
+                )}
+                {paginatedDoctors.map((doc) => (
+                  <DoctorCard
+                    key={doc.id}
+                    doc={doc}
+                    distStat={distStatMap[doc.id]}
+                    isSelectedForAssign={selectedDoctor === doc.id}
+                    isExpanded={expandedDoctor === doc.id}
+                    studiesState={doctorStudies[doc.id] ?? { loading: false, studies: [], error: null }}
+                    hasSelectedStudy={!!selectedStudy}
+                    onToggleExpand={handleToggleExpand}
+                    onSelectForAssign={handleSelectForAssign}
+                  />
+                ))}
+              </div>
+              {totalDoctorPages > 1 && (
+                <Pagination
+                  currentPage={doctorPage}
+                  totalPages={totalDoctorPages}
+                  startIndex={doctorStartIndex}
+                  totalItems={doctors.length}
+                  itemsPerPage={DOCTORS_PER_PAGE}
+                  onPageChange={handleDoctorPageChange}
+                />
+              )}
+            </div>
+
+            {/* Панель назначения на мобиле */}
+            {selectedStudy && selectedDoctor && (
+              <div className="bg-blue-600 text-white p-4 rounded-xl shadow-lg">
+                <div className="text-sm font-medium mb-1">{selectedStudy.research_number}</div>
+                <div className="text-xs text-blue-200 mb-3">
+                  Врач: <strong>{doctors.find((d) => d.id === selectedDoctor)?.fio_alias}</strong>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={handleAssign} className="flex-1 bg-white text-blue-600 py-2.5 rounded-lg font-medium text-sm hover:bg-blue-50 transition">
+                    Подтвердить назначение
+                  </button>
+                  <button onClick={() => { setSelectedStudy(null); setSelectedDoctor(null); }} className="px-3 py-2 bg-blue-700 rounded-lg text-sm hover:bg-blue-800 transition">
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Модальное окно подтверждения ─────────────────────────────────────── */}
