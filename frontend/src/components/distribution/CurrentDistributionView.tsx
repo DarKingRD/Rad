@@ -3,7 +3,7 @@ import { studiesApi, doctorsApi } from '../../services/api';
 import { 
   UserCheck, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, 
   Loader2, RefreshCw, Zap, Calendar, CheckCircle, XCircle, Edit2,
-  Save, X, AlertTriangle
+  Save, X, AlertTriangle, Clock
 } from 'lucide-react';
 import { Study, DoctorWithLoad } from '../../types';
 
@@ -137,6 +137,19 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
         <div className="flex-1 min-w-0">
           <div className="font-medium text-slate-900 truncate">{doc.fio_alias || `Врач ${doc.id}`}</div>
           <div className="text-xs text-slate-500">{doc.specialty || doc.position_type}</div>
+          {/* Расписание на сегодня */}
+          {doc.today_shift_start && (
+            <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1 flex-wrap">
+              <Clock size={10} className="shrink-0" />
+              <span>{doc.today_shift_start}–{doc.today_shift_end}</span>
+              {doc.today_break_start && (
+                <span className="text-amber-600">
+                  · ☕ {doc.today_break_start}–{doc.today_break_end}
+                  {doc.today_break_minutes > 0 && ` (${doc.today_break_minutes}м)`}
+                </span>
+              )}
+            </div>
+          )}
           {distStat && (
             <div className="text-[10px] text-blue-500 mt-0.5 font-medium flex items-center gap-1">
               <Calendar size={10} />

@@ -246,7 +246,7 @@ class Command(BaseCommand):
             work_end      = str(row.get("work_end") or "").strip()
             is_chief      = str(row.get("is_chief", "false")).strip().lower() in ("true", "1", "да")
             is_active     = work_end in ("9999-12-31", "")
-            max_up        = 40 if is_chief else 50
+            max_up        = 6 if is_chief else 8
             modalities    = sorted(diag_modalities.get(fio_alias, set())) if fio_alias else []
 
             _, created_flag = Doctor.objects.update_or_create(
@@ -288,11 +288,13 @@ class Command(BaseCommand):
         Импорт расписания из Grafiki_obrabotannye.csv.
 
         Маппинг CSV -> модель Schedule:
-          col[0]  id      -> Schedule.id
-          doctor_id       -> Schedule.doctor (FK -> Doctor)
-          date            -> Schedule.work_date
-          start_time      -> Schedule.time_start
-          end_time        -> Schedule.time_end
+          col[0]  id            -> Schedule.id
+          doctor_id             -> Schedule.doctor (FK -> Doctor)
+          date                  -> Schedule.work_date
+          start_time            -> Schedule.time_start
+          end_time              -> Schedule.time_end
+          lunch_start_time      -> Schedule.break_start
+          lunch_end_time        -> Schedule.break_end
           day_status = 0  -> Schedule.is_day_off = 0 (рабочий день)
           day_status != 0 -> Schedule.is_day_off = 1 (выходной/отпуск/прочее)
 
@@ -332,11 +334,13 @@ class Command(BaseCommand):
             _, created_flag = Schedule.objects.update_or_create(
                 id=sched_id,
                 defaults={
-                    "doctor_id":  doctor_id,
-                    "work_date":  work_date,
-                    "time_start": parse_time(row.get("start_time")),
-                    "time_end":   parse_time(row.get("end_time")),
-                    "is_day_off": 0 if day_status == 0 else 1,
+                    "doctor_id":   doctor_id,
+                    "work_date":   work_date,
+                    "time_start":  parse_time(row.get("start_time")),
+                    "time_end":    parse_time(row.get("end_time")),
+                    "break_start": parse_time(row.get("lunch_start_time")),
+                    "break_end":   parse_time(row.get("lunch_end_time")),
+                    "is_day_off":  0 if day_status == 0 else 1,
                 },
             )
             if created_flag:

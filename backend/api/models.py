@@ -117,13 +117,15 @@ class Schedule(models.Model):
     - work_date: Дата работы
     - time_start: Время начала работы
     - time_end: Время окончания работы
+    - break_start: Время начала перерыва (обед)
+    - break_end: Время окончания перерыва (обед)
     - is_day_off: Статус выходного дня (0 - рабочий день, 1 - выходной)
     - planned_up: Планируемое количество УП на день
 
     Модель привязана к таблице 'schedules' в базе данных.
     Расписания упорядочены по дате и времени начала работы.
     """
-    id = models.IntegerField(primary_key=True, verbose_name="Идентификатор расписания")
+    id = models.AutoField(primary_key=True, verbose_name="Идентификатор расписания")
     doctor = models.ForeignKey(
         Doctor,
         on_delete=models.CASCADE,
@@ -135,6 +137,8 @@ class Schedule(models.Model):
     work_date = models.DateField(blank=True, null=True, verbose_name="Дата")
     time_start = models.TimeField(blank=True, null=True, verbose_name="Начало работы")
     time_end = models.TimeField(blank=True, null=True, verbose_name="Конец работы")
+    break_start = models.TimeField(blank=True, null=True, verbose_name="Начало перерыва")
+    break_end = models.TimeField(blank=True, null=True, verbose_name="Конец перерыва")
     is_day_off = models.IntegerField(
         default=0, blank=True, null=True, verbose_name="Статус выходного"
     )

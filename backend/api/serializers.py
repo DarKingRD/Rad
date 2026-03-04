@@ -38,7 +38,7 @@ class DoctorSerializer(serializers.ModelSerializer):
 
 class DoctorWithLoadSerializer(DoctorSerializer):
     current_load = serializers.IntegerField(default=0)
-    max_load = serializers.IntegerField(default=120)
+    max_load = serializers.IntegerField(default=50)
     active_studies = serializers.IntegerField(default=0)
 
     class Meta(DoctorSerializer.Meta):
@@ -57,6 +57,7 @@ class StudyTypeSerializer(serializers.ModelSerializer):
 
 class ScheduleSerializer(serializers.ModelSerializer):
     doctor_name = serializers.CharField(source="doctor.fio_alias", read_only=True)
+    break_duration_minutes = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Schedule
@@ -67,10 +68,23 @@ class ScheduleSerializer(serializers.ModelSerializer):
             "work_date",
             "time_start",
             "time_end",
+            "break_start",
+            "break_end",
+            "break_duration_minutes",
             "is_day_off",
             "planned_up",
         ]
-        read_only_fields = ["id", "doctor_name"]
+        read_only_fields = ["id", "doctor_name", "break_duration_minutes"]
+
+    def get_break_duration_minutes(self, obj) -> int:
+        """Длительность перерыва в минутах — для удобства фронтенда."""
+        if obj.break_start and obj.break_end:
+            from datetime import datetime, date as d
+            bs = datetime.combine(d.today(), obj.break_start)
+            be = datetime.combine(d.today(), obj.break_end)
+            delta = (be - bs).total_seconds()
+            return int(delta // 60) if delta > 0 else 0
+        return 0
 
     def validate_planned_up(self, value):
         if value < 0:
@@ -78,18 +92,33 @@ class ScheduleSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        # Проверка, что время окончания не раньше времени начала
-        time_start = attrs.get('time_start')
-        time_end = attrs.get('time_end')
-        
-        if time_start and time_end and time_start > time_end:
-            raise serializers.ValidationError("Время окончания работы не может быть раньше времени начала")
-        
+        time_start  = attrs.get('time_start')
+        time_end    = attrs.get('time_end')
+        break_start = attrs.get('break_start')
+        break_end   = attrs.get('break_end')
+
+        if time_start and time_end and time_start >= time_end:
+            raise serializers.ValidationError(
+                "Время окончания работы не может быть раньше или равно времени начала"
+            )
+        if break_start and break_end and break_start >= break_end:
+            raise serializers.ValidationError(
+                "Время окончания перерыва не может быть раньше или равно времени начала"
+            )
+        if break_start and time_start and break_start < time_start:
+            raise serializers.ValidationError(
+                "Перерыв не может начинаться раньше начала смены"
+            )
+        if break_end and time_end and break_end > time_end:
+            raise serializers.ValidationError(
+                "Перерыв не может заканчиваться позже окончания смены"
+            )
         return attrs
 
 
 class ScheduleWithDoctorSerializer(serializers.ModelSerializer):
     doctor = DoctorSerializer(read_only=True)
+    break_duration_minutes = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Schedule
@@ -99,9 +128,21 @@ class ScheduleWithDoctorSerializer(serializers.ModelSerializer):
             "work_date",
             "time_start",
             "time_end",
+            "break_start",
+            "break_end",
+            "break_duration_minutes",
             "is_day_off",
             "planned_up",
         ]
+
+    def get_break_duration_minutes(self, obj) -> int:
+        if obj.break_start and obj.break_end:
+            from datetime import datetime, date as d
+            bs = datetime.combine(d.today(), obj.break_start)
+            be = datetime.combine(d.today(), obj.break_end)
+            delta = (be - bs).total_seconds()
+            return int(delta // 60) if delta > 0 else 0
+        return 0
 
 
 class StudySerializer(serializers.ModelSerializer):

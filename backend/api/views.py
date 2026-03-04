@@ -44,9 +44,10 @@ class DoctorViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def with_load(self, request):
-        """Врачи с текущей загрузкой ЗА ТЕКУЩИЙ МЕСЯЦ"""
+        """Врачи с текущей загрузкой ЗА ТЕКУЩИЙ МЕСЯЦ + расписание на сегодня"""
 
         now = timezone.now()
+        today = now.date()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
         if now.month == 12:
@@ -54,13 +55,14 @@ class DoctorViewSet(viewsets.ModelViewSet):
         else:
             month_end = now.replace(month=now.month + 1, day=1)
 
-        # Считаем рабочие дни в текущем месяце (пн–пт)
-        working_days_in_month = sum(
-            1 for i in range((month_end.date() - month_start.date()).days)
-            if (month_start.date() + timedelta(days=i)).weekday() < 5
-        )
 
         doctors = Doctor.objects.all()
+
+        # Расписание на сегодня — одним запросом для всех врачей
+        today_schedules = {
+            s.doctor_id: s
+            for s in Schedule.objects.filter(work_date=today, is_day_off=0)
+        }
 
         data = []
         for doctor in doctors:
@@ -85,11 +87,26 @@ class DoctorViewSet(viewsets.ModelViewSet):
 
             # Дневной лимит из модели, fallback по должности
             daily_limit = doctor.max_up_per_day or (
-                40 if doctor.position_type == "head" else 50
+                6 if doctor.position_type == "head" else 8
             )
 
             # Месячная норма = дневной лимит × рабочие дни месяца
-            monthly_norm = daily_limit * working_days_in_month
+            monthly_norm = 50
+
+            # Расписание на сегодня
+            sch = today_schedules.get(doctor.id)
+
+            def fmt_time(t):
+                return t.strftime("%H:%M") if t else None
+
+            def break_duration(s):
+                if s and s.break_start and s.break_end:
+                    from datetime import datetime, date as dclass
+                    bs = datetime.combine(dclass.today(), s.break_start)
+                    be = datetime.combine(dclass.today(), s.break_end)
+                    delta = (be - bs).total_seconds()
+                    return int(delta // 60) if delta > 0 else 0
+                return 0
 
             data.append(
                 {
@@ -113,6 +130,12 @@ class DoctorViewSet(viewsets.ModelViewSet):
                         round((current_load / monthly_norm) * 100, 1)
                         if monthly_norm > 0 else 0
                     ),
+                    # Расписание на сегодня
+                    "today_shift_start": fmt_time(sch.time_start) if sch else None,
+                    "today_shift_end":   fmt_time(sch.time_end)   if sch else None,
+                    "today_break_start": fmt_time(sch.break_start) if sch else None,
+                    "today_break_end":   fmt_time(sch.break_end)   if sch else None,
+                    "today_break_minutes": break_duration(sch),
                 }
             )
 
@@ -587,4 +610,3 @@ def distribution_preview(request):
             else "Нет данных",
         }
     )
-    

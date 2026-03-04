@@ -60,7 +60,8 @@ class ScheduleAdmin(admin.ModelAdmin):
     Настройка админки для расписания.
     Важно: используем date_hierarchy для удобной навигации по датам.
     """
-    list_display = ('id', 'doctor', 'work_date', 'time_start', 'time_end', 'is_day_off_status', 'planned_up')
+    list_display = ('id', 'doctor', 'work_date', 'time_start',
+                    'time_end', 'is_day_off_status', 'planned_up')
     list_display_links = ('id', 'doctor')
     list_filter = ('is_day_off', 'doctor', 'work_date')
     search_fields = ('doctor__fio_alias', 'id')
@@ -81,9 +82,11 @@ class StudyAdmin(admin.ModelAdmin):
     Настройка админки для исследований.
     Самая нагруженная модель, поэтому важно настроить фильтры и поиск.
     """
-    list_display = ('research_number', 'study_type', 'diagnostician', 'created_at', 'planned_at', 'status')
+    list_display = ('research_number', 'study_type', 'diagnostician', 
+                    'created_at', 'planned_at', 'status', 'study_type__modality')
     list_display_links = ('research_number', 'study_type')
     search_fields = ('research_number', 'doctor__fio_alias')
+    list_filter = ('study_type__modality', 'status', 'priority',)
     date_hierarchy = 'created_at'
     readonly_fields = ('research_number', 'created_at')
     list_select_related = ('study_type', 'diagnostician')

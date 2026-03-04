@@ -111,13 +111,24 @@ class DoctorData:
     max_up: float
     shift_start: datetime
     shift_end: datetime
+    break_start: Optional[datetime] = None
+    break_end: Optional[datetime] = None
     assigned_ids: List[int] = field(default_factory=list)
     used_up: float = 0.0
     used_minutes: float = 0.0
 
     @property
+    def break_minutes(self) -> float:
+        """Длительность перерыва в минутах (0 если не задан или уже прошёл)."""
+        if self.break_start and self.break_end and self.break_end > self.break_start:
+            return (self.break_end - self.break_start).total_seconds() / 60.0
+        return 0.0
+
+    @property
     def shift_hours(self) -> float:
-        return (self.shift_end - self.shift_start).total_seconds() / 3600.0
+        """Рабочее время смены за вычетом перерыва (в часах)."""
+        gross = (self.shift_end - self.shift_start).total_seconds() / 3600.0
+        return max(0.0, gross - self.break_minutes / 60.0)
 
     @property
     def free_up(self) -> float:
@@ -253,12 +264,21 @@ class DistributionService:
                 s_start = self.now.replace(hour=9,  minute=0, second=0, microsecond=0)
                 s_end   = self.now.replace(hour=17, minute=0, second=0, microsecond=0)
 
+            # Перерыв (обед)
+            b_start = timezone.make_aware(datetime.combine(target, sch.break_start)) \
+                if sch.break_start else None
+            b_end   = timezone.make_aware(datetime.combine(target, sch.break_end)) \
+                if sch.break_end else None
+
+            break_h = (b_end - b_start).total_seconds() / 3600.0 \
+                if b_start and b_end else 0.0
             shift_h = (s_end - s_start).total_seconds() / 3600.0
             mods    = parse_modalities(doc.modality)
 
             self._log(
                 f"  Врач {doc.fio_alias} (id={doc.id}): "
-                f"max_up={max_up}, смена={shift_h:.1f}ч, мод={list(mods)}"
+                f"max_up={max_up}, смена={shift_h:.1f}ч, "
+                f"перерыв={break_h*60:.0f}мин, эфф.время={shift_h-break_h:.1f}ч, мод={list(mods)}"
             )
 
             result.append(DoctorData(
@@ -268,6 +288,8 @@ class DistributionService:
                 max_up=max_up,
                 shift_start=s_start,
                 shift_end=s_end,
+                break_start=b_start,
+                break_end=b_end,
             ))
 
         self._log(f"Врачей загружено: {len(result)}")
@@ -307,7 +329,15 @@ class DistributionService:
                 if doc_up[d.id] + s.up_value > d.max_up + 1e-9:
                     continue
                 effective_start = max(d.shift_start, self.now)
-                remaining_minutes = max(0, (d.shift_end - effective_start).total_seconds() / 60 - doc_min[d.id])
+                gross_min = max(0.0, (d.shift_end - effective_start).total_seconds() / 60)
+                # Перерыв, пересекающийся с остатком смены
+                break_overlap_min = 0.0
+                if d.break_start and d.break_end:
+                    ov_start = max(effective_start, d.break_start)
+                    ov_end   = min(d.shift_end, d.break_end)
+                    if ov_end > ov_start:
+                        break_overlap_min = (ov_end - ov_start).total_seconds() / 60
+                remaining_minutes = max(0.0, gross_min - break_overlap_min - doc_min[d.id])
                 if s.duration_minutes > remaining_minutes + 1e-9:
                     continue
                 score = doc_min[d.id] / (d.shift_hours * 60) if d.shift_hours > 0 else 1.0
@@ -481,14 +511,22 @@ class DistributionService:
         for j, d in enumerate(doctors):
             prebooked_h = (doc_prebooked_minutes or {}).get(d.id, 0.0) / 60.0
             effective_start = max(d.shift_start, self.now)
-            remaining_h = max(0.0, (d.shift_end - effective_start).total_seconds() / 3600.0 - prebooked_h)
+            gross_h = max(0.0, (d.shift_end - effective_start).total_seconds() / 3600.0)
+            # Перерыв, пересекающийся с остатком смены
+            break_h = 0.0
+            if d.break_start and d.break_end:
+                ov_start = max(effective_start, d.break_start)
+                ov_end   = min(d.shift_end, d.break_end)
+                if ov_end > ov_start:
+                    break_h = (ov_end - ov_start).total_seconds() / 3600.0
+            remaining_h = max(0.0, gross_h - break_h - prebooked_h)
             col = [studies[i].duration_hours * x[(i, j)]
                    for (ii, jj) in pairs if jj == j for i in [ii]]
             if col:
                 prob += pulp.lpSum(col) <= remaining_h, f"TM{j}"
                 self._log(
                     f"  Врач {d.name}: оставшееся время={remaining_h:.2f}ч "
-                    f"(prebooked={prebooked_h:.2f}ч, effective_start={effective_start})"
+                    f"(перерыв={break_h*60:.0f}мин, prebooked={prebooked_h:.2f}ч)"
                 )
 
         for (i, j) in pairs:

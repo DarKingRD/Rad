@@ -8,6 +8,8 @@ interface ScheduleFormData {
   work_date: string;
   time_start: string;
   time_end: string;
+  break_start: string;
+  break_end: string;
   is_day_off: number;
   planned_up: number;
 }
@@ -27,6 +29,8 @@ export const ShiftPlanningView: React.FC = () => {
     work_date: '',
     time_start: '09:00',
     time_end: '18:00',
+    break_start: '12:00',
+    break_end: '13:00',
     is_day_off: 0,
     planned_up: 0,
   });
@@ -147,6 +151,8 @@ export const ShiftPlanningView: React.FC = () => {
         work_date: schedule.work_date?.split('T')[0] || date,
         time_start: schedule.time_start?.substring(0, 5) || '09:00',
         time_end: schedule.time_end?.substring(0, 5) || '18:00',
+        break_start: schedule.break_start?.substring(0, 5) || '12:00',
+        break_end: schedule.break_end?.substring(0, 5) || '13:00',
         is_day_off: schedule.is_day_off || 0,
         planned_up: schedule.planned_up || 0,
       });
@@ -157,6 +163,8 @@ export const ShiftPlanningView: React.FC = () => {
         work_date: date,
         time_start: '09:00',
         time_end: '18:00',
+        break_start: '12:00',
+        break_end: '13:00',
         is_day_off: 0,
         planned_up: 0,
       });
@@ -177,6 +185,8 @@ export const ShiftPlanningView: React.FC = () => {
         work_date: formData.work_date,
         time_start: formData.time_start,
         time_end: formData.time_end,
+        break_start: formData.break_start || null,
+        break_end: formData.break_end || null,
         is_day_off: formData.is_day_off,
         planned_up: formData.planned_up,
       };
@@ -451,6 +461,11 @@ export const ShiftPlanningView: React.FC = () => {
                               <div className="font-semibold">
                                 {schedule.time_start?.substring(0, 5) || '—'}–{schedule.time_end?.substring(0, 5) || '—'}
                               </div>
+                              {schedule.break_start && schedule.break_end && (
+                                <div className="mt-0.5 text-[10px] opacity-75">
+                                  ☕ {schedule.break_start.substring(0, 5)}–{schedule.break_end.substring(0, 5)}
+                                </div>
+                              )}
                               {schedule.planned_up > 0 && (
                                 <div className="mt-1 font-bold">
                                   {schedule.planned_up} УП
@@ -558,6 +573,42 @@ export const ShiftPlanningView: React.FC = () => {
                     required
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  ☕ Перерыв (обед)
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Начало</label>
+                    <input
+                      type="time"
+                      value={formData.break_start}
+                      onChange={(e) => setFormData({ ...formData, break_start: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Конец</label>
+                    <input
+                      type="time"
+                      value={formData.break_end}
+                      onChange={(e) => setFormData({ ...formData, break_end: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                </div>
+                {formData.break_start && formData.break_end && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    Длительность: {(() => {
+                      const [bsh, bsm] = formData.break_start.split(':').map(Number);
+                      const [beh, bem] = formData.break_end.split(':').map(Number);
+                      const mins = (beh * 60 + bem) - (bsh * 60 + bsm);
+                      return mins > 0 ? `${mins} мин` : '—';
+                    })()}
+                  </p>
+                )}
               </div>
 
               <div>

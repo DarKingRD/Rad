@@ -12,9 +12,15 @@ export interface Doctor {
 
 export interface DoctorWithLoad extends Doctor {
   current_load: number;     // фактические УП за текущий месяц
-  max_load: number;
+  max_load: number;         // месячная норма = max_up_per_day × рабочие дни месяца
   active_studies: number;
   load_percentage: number;  // current_load / max_load * 100
+  // Расписание на сегодня
+  today_shift_start: string | null;
+  today_shift_end: string | null;
+  today_break_start: string | null;
+  today_break_end: string | null;
+  today_break_minutes: number;
 }
 
 export interface StudyType {
@@ -30,6 +36,9 @@ export interface Schedule {
   work_date: string;
   time_start: string;
   time_end: string;
+  break_start: string | null;
+  break_end: string | null;
+  break_duration_minutes: number;
   is_day_off: number;
   planned_up: number;
   doctor_name?: string;
