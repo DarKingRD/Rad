@@ -544,7 +544,11 @@ def confirm_distribution(request):
 
         # Получаем assignments из превью и сохраняем
         assignments = preview_data.get("assignments", [])
-        assignment_dict = {a["study_id"]: a["doctor_id"] for a in assignments}
+        assignment_dict = {
+            a.get("study_number"): a["doctor_id"]
+            for a in assignments
+            if a.get("study_number")
+        }
 
         # Сохраняем в БД (PK у Study — research_number, не id)
         for study_id, doc_id in assignment_dict.items():
