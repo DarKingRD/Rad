@@ -11,11 +11,10 @@ export interface Doctor {
 }
 
 export interface DoctorWithLoad extends Doctor {
-  current_load: number;     // фактические УП за текущий месяц
-  max_load: number;         // месячная норма = max_up_per_day × рабочие дни месяца
+  current_load: number;
+  max_load: number;
   active_studies: number;
-  load_percentage: number;  // current_load / max_load * 100
-  // Расписание на сегодня
+  load_percentage: number;
   today_shift_start: string | null;
   today_shift_end: string | null;
   today_break_start: string | null;
@@ -46,12 +45,12 @@ export interface Schedule {
 }
 
 export interface Study {
-  research_number: string;  // PK — строка, не число
+  research_number: string;
   study_type_id: number | null;
-  status: 'pending' | 'confirmed' | 'signed';  // строгий union вместо string
+  status: 'pending' | 'confirmed' | 'signed';
   priority: 'normal' | 'cito' | 'asap';
   created_at: string;
-  planned_at: string | null;  // может быть null если ещё не назначено
+  planned_at: string | null;
   diagnostician_id: number | null;
   study_type?: StudyType;
   diagnostician?: Doctor;
@@ -69,8 +68,8 @@ export interface DashboardStats {
 
 export interface ChartData {
   name: string;
-  plan: number;
-  actual: number;
+  plan: string | number;
+  actual: string | number;
 }
 
 export interface KPICardProps {
@@ -78,4 +77,68 @@ export interface KPICardProps {
   value: string | number;
   subtext: string;
   trend?: number;
+}
+
+// === РАСПРЕДЕЛЕНИЕ ===
+
+export interface DoctorDistStat {
+  doctor_id: number;
+  doctor_name: string;
+  assigned_studies: number;
+  total_up: number;
+  max_up: number;
+  load_percent: number;
+  remaining_up: number;
+}
+
+export interface Assignment {
+  study_number: string;
+  study_modality?: string[];
+  doctor_id: number;
+  doctor_name: string;
+  doctor_modality?: string[];
+  priority: 'normal' | 'cito' | 'asap' | string;
+  deadline: string;
+  completion_time: string;
+  tardiness_hours: number;
+  up_value: number;
+  is_overdue: boolean;
+}
+
+export interface DistResult {
+  doctor_stats: DoctorDistStat[];
+  assigned: number;
+  unassigned: number;
+  cito_assigned?: number;
+  cito_total?: number;
+  total_tardiness: number;
+  total_weighted_tardiness: number;
+  avg_tardiness: number;
+  assignments: Assignment[];
+  distribution_id?: string;
+  preview_mode?: boolean;
+  target_date?: string;
+  message?: string;
+  _debug?: string[];
+  _savedAt?: string;
+  _savedDate?: string;
+}
+
+export interface DateRange {
+  min: string | null;
+  max: string | null;
+}
+
+export interface DistributionInfo {
+  pending_studies: number;
+  available_doctors: number;
+  study_date_range: DateRange;
+  schedule_date_range: DateRange;
+  message: string;
+}
+
+export interface DistributionDraft extends DistResult {
+  distribution_id: string;
+  _savedAt: string;
+  _savedDate: string;
 }

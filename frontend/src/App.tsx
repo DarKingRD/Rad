@@ -3,7 +3,7 @@ import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { ShiftPlanningView } from './components/planning/ShiftPlanningView';
-import { CurrentDistributionView } from './components/distribution/CurrentDistributionView';
+import CurrentDistributionView  from './components/distribution/CurrentDistributionView';
 import { DoctorsView } from './components/doctors/DoctorsView';
 import { ReportsView } from './components/reports/ReportsView';
 
