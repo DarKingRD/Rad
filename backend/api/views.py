@@ -294,45 +294,56 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
 @api_view(["GET"])
 def dashboard_stats(request):
-    """Статистика для дашборда ЗА ТЕКУЩИЙ МЕСЯЦ"""
-    now = timezone.now()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    """
+    Статистика для дашборда за период date_from/date_to.
+    Если даты не переданы — берём текущий месяц.
+    """
+    date_from = request.query_params.get("date_from")
+    date_to = request.query_params.get("date_to")
 
-    # Фильтр по месяцу (если не передана конкретная дата)
-    date = request.query_params.get("date")
-    if date:
-        try:
-            date_obj = datetime.strptime(date, "%Y-%m-%d").date()
-            studies_qs = Study.objects.filter(created_at__date=date_obj)
-        except ValueError:
-            studies_qs = Study.objects.filter(created_at__gte=month_start)
+    if not date_from or not date_to:
+        now = timezone.now()
+        date_from_obj = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        date_to_obj = now
     else:
-        studies_qs = Study.objects.filter(created_at__gte=month_start)
+        try:
+            date_from_obj = datetime.strptime(date_from, "%Y-%m-%d")
+            date_to_obj = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        except ValueError:
+            return Response(
+                {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+                status=400,
+            )
+
+    studies_qs = Study.objects.filter(
+        created_at__gte=date_from_obj,
+        created_at__lt=date_to_obj,
+    )
 
     total_studies = studies_qs.count()
-
     completed_studies = studies_qs.filter(status="signed").count()
-    # pending — исследования без назначенного врача (реальная очередь)
     pending_studies = studies_qs.filter(diagnostician_id__isnull=True).count()
 
-    # Врачи которые были активны в этом месяце
     active_doctors = (
-        Doctor.objects.filter(studies__created_at__gte=month_start).distinct().count()
+        Doctor.objects.filter(
+            studies__created_at__gte=date_from_obj,
+            studies__created_at__lt=date_to_obj,
+        )
+        .distinct()
+        .count()
     )
 
     cito_studies = studies_qs.filter(priority="cito").count()
     asap_studies = studies_qs.filter(priority="asap").count()
 
-    # Средняя нагрузка: сумма УП по всем исследованиям / количество активных врачей
-    if active_doctors > 0:
-        total_up = studies_qs.filter(
-            diagnostician_id__isnull=False
-        ).aggregate(
-            total=Sum(F("study_type__up_value"))
-        )["total"] or 0
-        avg_load = int(total_up / active_doctors)
-    else:
-        avg_load = 0
+    total_up = (
+        studies_qs.filter(diagnostician_id__isnull=False)
+        .aggregate(total=Sum(F("study_type__up_value")))
+        .get("total")
+        or 0
+    )
+
+    avg_load = int(total_up / active_doctors) if active_doctors > 0 else 0
 
     data = {
         "total_studies": total_studies,
@@ -350,33 +361,40 @@ def dashboard_stats(request):
 
 @api_view(["GET"])
 def chart_data(request):
-    """Данные для графиков ЗА ТЕКУЩИЙ МЕСЯЦ"""
+    """
+    Данные для графиков за период date_from/date_to.
+    Если даты не переданы — берём текущий месяц.
+    """
     date_from = request.query_params.get("date_from")
     date_to = request.query_params.get("date_to")
 
-    # Если даты не переданы — берём текущий месяц
     if not date_from or not date_to:
         now = timezone.now()
-        date_from_obj = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        date_to_obj = now
+        start_date = now.replace(day=1).date()
+        end_date = now.date()
     else:
         try:
-            date_from_obj = datetime.strptime(date_from, "%Y-%m-%d").date()
-            date_to_obj = datetime.strptime(date_to, "%Y-%m-%d").date()
+            start_date = datetime.strptime(date_from, "%Y-%m-%d").date()
+            end_date = datetime.strptime(date_to, "%Y-%m-%d").date()
         except ValueError:
-            now = timezone.now()
-            date_from_obj = now.replace(day=1)
-            date_to_obj = now
+            return Response(
+                {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+                status=400,
+            )
+
+    if start_date > end_date:
+        return Response(
+            {"error": "date_from не может быть позже date_to"},
+            status=400,
+        )
 
     data = []
-    current_date = date_from_obj
-    while current_date <= date_to_obj:
+    current_date = start_date
+
+    while current_date <= end_date:
         studies = Study.objects.filter(created_at__date=current_date)
 
-        # План — все исследования за день
         plan = studies.count()
-
-        # Факт — только подписанные
         actual = studies.filter(status="signed").count()
 
         data.append(
@@ -386,6 +404,7 @@ def chart_data(request):
                 "actual": actual,
             }
         )
+
         current_date += timedelta(days=1)
 
     serializer = ChartDataSerializer(data, many=True)

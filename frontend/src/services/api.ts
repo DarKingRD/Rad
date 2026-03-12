@@ -92,16 +92,26 @@ export const studiesApi = {
 };
 
 export const dashboardApi = {
-  getStats: (date?: string) =>
-    retryRequest(() => api.get('/dashboard/stats/', { params: { date } })),
-
-  getChartData: (date_from: string, date_to: string) =>
+  getStats: (dateFrom?: string, dateTo?: string) =>
     retryRequest(() =>
-      api.get('/dashboard/chart/', {
-        params: { date_from, date_to },
+      api.get("/dashboard/stats/", {
+        params: {
+          ...(dateFrom ? { date_from: dateFrom } : {}),
+          ...(dateTo ? { date_to: dateTo } : {}),
+        },
       })
     ),
-};
+
+  getChartData: (dateFrom?: string, dateTo?: string) =>
+    retryRequest(() =>
+      api.get("/dashboard/chart/", {
+        params: {
+          ...(dateFrom ? { date_from: dateFrom } : {}),
+          ...(dateTo ? { date_to: dateTo } : {}),
+        },
+      })
+    ),
+}
 
 export const distributionApi = {
   getInfo: () => retryRequest(() => api.get('/distribute/')),

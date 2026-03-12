@@ -1,332 +1,262 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { dashboardApi, studiesApi, doctorsApi, studyTypesApi } from '../../services/api';
-import { Download, Calendar, Filter, TrendingUp, CheckCircle2, Target, Clock, BarChart3, Users, PieChart } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
+import React, { useState, useEffect } from "react"
+import { dashboardApi } from "../../services/api"
+import { Filter, TrendingUp, CheckCircle2, Target, Clock } from "lucide-react"
+
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from "recharts"
+
+interface KPIData {
+  total_studies: number
+  completed_studies: number
+  pending_studies: number
+  active_doctors: number
+  avg_load_per_doctor: number
+  cito_studies: number
+  asap_studies: number
+}
 
 interface DepartmentSummary {
-  department: string;
-  planUp: number;
-  actualUp: number;
-  fulfillment: number;
-  studies: number;
-  avgTime: string;
+  department: string
+  planUp: number
+  actualUp: number
+  fulfillment: number
+  studies: number
 }
 
 export const ReportsView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'doctors' | 'studies' | 'efficiency'>('doctors');
-  const [dateFrom, setDateFrom] = useState<string>(() => {
-    const date = new Date();
-    date.setDate(1);
-    return date.toISOString().split('T')[0];
-  });
-  const [dateTo, setDateTo] = useState<string>(() => {
-    const date = new Date();
-    return date.toISOString().split('T')[0];
-  });
-  const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
-  const [selectedDoctor, setSelectedDoctor] = useState<string>('all');
-  const [loading, setLoading] = useState(true);
-  const [chartData, setChartData] = useState<any[]>([]);
-  const [pieData, setPieData] = useState<any[]>([]);
-  const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummary[]>([]);
+  const today = new Date()
+  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1)
 
-  // KPI данные (пока моковые, потом заменим на реальные)
-  const kpiData = useMemo(() => ({
-    totalUp: 3847,
-    totalUpChange: 12.5,
-    completedStudies: 1284,
-    completedStudiesChange: 8.3,
-    planFulfillment: 94.2,
-    planFulfillmentChange: -2.1,
-    avgWaitTime: 18,
-    avgWaitTimeChange: -5,
-  }), []);
+  const formatInputDate = (d: Date) => d.toISOString().split("T")[0]
 
-  const COLORS = ['#f97316', '#a855f7', '#3b82f6', '#22c55e'];
+  const initialDateFrom = formatInputDate(firstDay)
+  const initialDateTo = formatInputDate(today)
+
+  const [loading, setLoading] = useState(true)
+
+  const [dateFrom, setDateFrom] = useState<string>(initialDateFrom)
+  const [dateTo, setDateTo] = useState<string>(initialDateTo)
+
+  const [appliedDateFrom, setAppliedDateFrom] = useState<string>(initialDateFrom)
+  const [appliedDateTo, setAppliedDateTo] = useState<string>(initialDateTo)
+
+  const [kpiData, setKpiData] = useState<KPIData | null>(null)
+  const [chartData, setChartData] = useState<any[]>([])
+  const [pieData, setPieData] = useState<any[]>([])
+  const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummary[]>([])
+
+  const COLORS = ["#3b82f6", "#22c55e", "#f97316"]
 
   useEffect(() => {
-    loadReportsData();
-  }, [dateFrom, dateTo]);
+    if (appliedDateFrom && appliedDateTo) {
+      loadReportsData()
+    }
+  }, [appliedDateFrom, appliedDateTo])
+
+  const handleApplyFilters = () => {
+    setAppliedDateFrom(dateFrom)
+    setAppliedDateTo(dateTo)
+  }
 
   const loadReportsData = async () => {
     try {
-      setLoading(true);
-      const [chartRes] = await Promise.all([
-        dashboardApi.getChartData(dateFrom, dateTo),
-      ]);
-      
-      setChartData(chartRes.data || []);
-      
-      // Моковые данные для pie chart и таблицы
-      setPieData([
-        { name: 'Рентген', value: 45 },
-        { name: 'КТ', value: 30 },
-        { name: 'МРТ', value: 15 },
-        { name: 'Флюорография', value: 10 },
-      ]);
-      
-      setDepartmentSummary([
-        { department: 'Рентген', planUp: 2100, actualUp: 2015, fulfillment: 96, studies: 724, avgTime: '12 мин' },
-        { department: 'КТ', planUp: 1200, actualUp: 1098, fulfillment: 91, studies: 312, avgTime: '25 мин' },
-        { department: 'МРТ', planUp: 800, actualUp: 734, fulfillment: 92, studies: 248, avgTime: '35 мин' },
-      ]);
-    } catch (error) {
-      console.error('Error loading reports:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      setLoading(true)
 
-  const handleApplyFilters = () => {
-    loadReportsData();
-  };
+      const [statsRes, chartRes] = await Promise.all([
+        dashboardApi.getStats(appliedDateFrom, appliedDateTo),
+        dashboardApi.getChartData(appliedDateFrom, appliedDateTo),
+      ])
+
+      const stats = statsRes.data
+      setKpiData(stats)
+      setChartData(chartRes.data || [])
+
+      const normalStudies = Math.max(
+        0,
+        stats.total_studies - stats.cito_studies - stats.asap_studies
+      )
+
+      setPieData([
+        { name: "CITO", value: stats.cito_studies },
+        { name: "ASAP", value: stats.asap_studies },
+        { name: "Обычные", value: normalStudies },
+      ])
+
+      setDepartmentSummary([
+        {
+          department: "Все исследования",
+          planUp: stats.total_studies,
+          actualUp: stats.completed_studies,
+          fulfillment:
+            stats.total_studies > 0
+              ? Math.round((stats.completed_studies / stats.total_studies) * 100)
+              : 0,
+          studies: stats.total_studies,
+        },
+      ])
+    } catch (err) {
+      console.error("Error loading reports:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-slate-500">Загрузка отчётов...</div>
+      <div className="flex items-center justify-center h-64 text-slate-500">
+        Загрузка отчётов...
       </div>
-    );
+    )
   }
 
   return (
-    <div className="space-y-4 md:space-y-6">
-      {/* Заголовок */}
+    <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl md:text-2xl font-bold text-slate-900">Отчёты</h2>
-        <button className="px-3 md:px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-md text-xs md:text-sm font-medium hover:bg-slate-50 flex items-center gap-1.5">
-          <Download size={15} /> <span className="hidden sm:inline">Экспорт</span>
+        <h2 className="text-2xl font-bold">Отчёты</h2>
+      </div>
+
+      <div className="bg-white border rounded-lg p-4 flex gap-3 flex-wrap">
+        <input
+          type="date"
+          value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+          className="border px-3 py-1 rounded"
+        />
+
+        <input
+          type="date"
+          value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
+          className="border px-3 py-1 rounded"
+        />
+
+        <button
+          onClick={handleApplyFilters}
+          className="bg-blue-600 text-white px-4 py-1 rounded flex items-center gap-1"
+        >
+          <Filter size={15} />
+          Применить
         </button>
       </div>
 
-      {/* Вкладки */}
-      <div className="flex border-b border-slate-200 overflow-x-auto">
-        {[
-          { id: 'doctors', label: 'По врачам' },
-          { id: 'studies', label: 'По исследованиям' },
-          { id: 'efficiency', label: 'Эффективность' },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
-            className={`px-3 md:px-4 py-2 text-xs md:text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-              activeTab === tab.id
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+      {kpiData && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KPI
+            title="Всего исследований"
+            value={kpiData.total_studies}
+            icon={<TrendingUp size={16} />}
+          />
+
+          <KPI
+            title="Выполнено"
+            value={kpiData.completed_studies}
+            icon={<CheckCircle2 size={16} />}
+          />
+
+          <KPI
+            title="В очереди"
+            value={kpiData.pending_studies}
+            icon={<Target size={16} />}
+          />
+
+          <KPI
+            title="Средняя загрузка врача"
+            value={kpiData.avg_load_per_doctor}
+            icon={<Clock size={16} />}
+          />
+        </div>
+      )}
+
+      <div className="bg-white p-4 rounded-xl border">
+        <h3 className="font-semibold mb-4">План / Факт по дням</h3>
+
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="name" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="plan" fill="#94a3b8" name="План" />
+            <Bar dataKey="actual" fill="#3b82f6" name="Факт" />
+          </BarChart>
+        </ResponsiveContainer>
       </div>
 
-      {/* Фильтры — стек на мобиле, строка на десктопе */}
-      <div className="bg-white rounded-lg border border-slate-200 p-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-slate-700 font-medium shrink-0">Период:</span>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm flex-1 min-w-0"
-            />
-            <span className="text-slate-500">—</span>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm flex-1 min-w-0"
-            />
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={selectedDepartment}
-              onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm flex-1 sm:flex-none"
+      <div className="bg-white p-4 rounded-xl border">
+        <h3 className="font-semibold mb-4">Типы исследований</h3>
+
+        <ResponsiveContainer width="100%" height={300}>
+          <PieChart>
+            <Pie
+              data={pieData}
+              dataKey="value"
+              nameKey="name"
+              outerRadius={110}
+              label
             >
-              <option value="all">Все отделения</option>
-              <option value="xray">Рентген</option>
-              <option value="ct">КТ</option>
-              <option value="mri">МРТ</option>
-            </select>
-            <select
-              value={selectedDoctor}
-              onChange={(e) => setSelectedDoctor(e.target.value)}
-              className="px-3 py-1.5 border border-slate-300 rounded-md text-sm flex-1 sm:flex-none"
-            >
-              <option value="all">Все врачи</option>
-            </select>
-            <button
-              onClick={handleApplyFilters}
-              className="px-4 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 flex items-center gap-1.5 whitespace-nowrap"
-            >
-              <Filter size={15} />Применить
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* KPI карточки: 2 колонки на мобиле, 4 на десктопе */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs md:text-sm text-slate-600">Всего УП</div>
-            <TrendingUp size={15} className="text-blue-600" />
-          </div>
-          <div className="text-xl md:text-2xl font-bold text-slate-900 mb-1">{kpiData.totalUp.toLocaleString()}</div>
-          <div className="text-xs text-green-600">+{kpiData.totalUpChange}%</div>
-        </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs md:text-sm text-slate-600">Исследований</div>
-            <CheckCircle2 size={15} className="text-green-600" />
-          </div>
-          <div className="text-xl md:text-2xl font-bold text-slate-900 mb-1">{kpiData.completedStudies.toLocaleString()}</div>
-          <div className="text-xs text-green-600">+{kpiData.completedStudiesChange}%</div>
-        </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs md:text-sm text-slate-600">% плана</div>
-            <Target size={15} className="text-blue-600" />
-          </div>
-          <div className="text-xl md:text-2xl font-bold text-slate-900 mb-1">{kpiData.planFulfillment}%</div>
-          <div className="text-xs text-red-600">{kpiData.planFulfillmentChange}% к прошлому месяцу</div>
-        </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-slate-600">Среднее время ожидания</div>
-            <Clock size={16} className="text-slate-600" />
-          </div>
-          <div className="text-xl md:text-2xl font-bold text-slate-900 mb-1">{kpiData.avgWaitTime} мин</div>
-          <div className="text-xs text-green-600">{kpiData.avgWaitTimeChange} мин к прошлому</div>
-        </div>
-      </div>
-
-      {/* Виджеты: 1 колонка на мобиле, 3 на десктопе */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
-        <div className="bg-white rounded-lg border border-slate-200 p-4 cursor-pointer hover:shadow-md transition-shadow">
-          <BarChart3 size={18} className="text-blue-600 mb-2" />
-          <div className="font-semibold text-slate-900 text-sm mb-1">Загрузка по дням</div>
-          <div className="text-xs text-slate-500">Детальная статистика по дням</div>
-        </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-4 cursor-pointer hover:shadow-md transition-shadow">
-          <Users size={18} className="text-green-600 mb-2" />
-          <div className="font-semibold text-slate-900 text-sm mb-1">Эффективность врачей</div>
-          <div className="text-xs text-slate-500">Выполнение плана по каждому врачу</div>
-        </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-4 cursor-pointer hover:shadow-md transition-shadow">
-          <PieChart size={18} className="text-purple-600 mb-2" />
-          <div className="font-semibold text-slate-900 text-sm mb-1">По типам исследований</div>
-          <div className="text-xs text-slate-500">Распределение по модальностям</div>
-        </div>
-      </div>
-
-      {/* Графики: стек на мобиле, 2 колонки на десктопе */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-        <div className="bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-slate-800 text-sm md:text-base">Выполнение плана по дням</h3>
-            <div className="flex gap-1">
-              <button className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">План/Факт</button>
-            </div>
-          </div>
-          <div className="h-48 md:h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
-                <Tooltip cursor={{ fill: '#f1f5f9' }} />
-                <Legend />
-                <Bar dataKey="plan" fill="#94a3b8" radius={[4, 4, 0, 0]} name="План" />
-                <Bar dataKey="actual" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Факт" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-slate-800 text-sm md:text-base">По типам исследований</h3>
-            <button className="p-1 hover:bg-slate-100 rounded">
-              <Download size={16} className="text-slate-600" />
-            </button>
-          </div>
-          <div className="h-48 md:h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <RechartsPieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={100}
-                  paddingAngle={2}
-                  dataKey="value"
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend 
-                  verticalAlign="middle" 
-                  align="right"
-                  layout="vertical"
-                  iconType="circle"
-                />
-              </RechartsPieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      {/* Таблица сводки по отделению */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between p-4 border-b border-slate-200">
-          <h3 className="font-semibold text-slate-800">Сводка по отделению</h3>
-          <button className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded-md text-sm hover:bg-slate-50 flex items-center">
-            <Download size={14} className="mr-2" /> Экспорт
-          </button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-3 text-left font-semibold text-slate-700">ОТДЕЛЕНИЕ</th>
-                <th className="px-6 py-3 text-right font-semibold text-slate-700">ПЛАН УП</th>
-                <th className="px-6 py-3 text-right font-semibold text-slate-700">ФАКТ УП</th>
-                <th className="px-6 py-3 text-center font-semibold text-slate-700">ВЫПОЛНЕНИЕ</th>
-                <th className="px-6 py-3 text-right font-semibold text-slate-700">ИССЛЕДОВАНИЙ</th>
-                <th className="px-6 py-3 text-right font-semibold text-slate-700">СРЕДНЕЕ ВРЕМЯ</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {departmentSummary.map((dept, index) => (
-                <tr key={index} className="hover:bg-slate-50">
-                  <td className="px-6 py-4 font-medium text-slate-900">{dept.department}</td>
-                  <td className="px-6 py-4 text-right text-slate-600">{dept.planUp.toLocaleString()}</td>
-                  <td className="px-6 py-4 text-right text-slate-600">{dept.actualUp.toLocaleString()}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center space-x-2">
-                      <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full ${dept.fulfillment >= 95 ? 'bg-green-500' : dept.fulfillment >= 80 ? 'bg-amber-500' : 'bg-red-500'}`}
-                          style={{ width: `${dept.fulfillment}%` }}
-                        ></div>
-                      </div>
-                      <span className="text-sm font-medium text-slate-700 w-12 text-right">{dept.fulfillment}%</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-right text-slate-600">{dept.studies.toLocaleString()}</td>
-                  <td className="px-6 py-4 text-right text-slate-600">{dept.avgTime}</td>
-                </tr>
+              {pieData.map((_, index) => (
+                <Cell key={index} fill={COLORS[index % COLORS.length]} />
               ))}
-            </tbody>
-          </table>
+            </Pie>
+            <Tooltip />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="p-4 border-b font-semibold">
+          Сводка по данным
         </div>
+
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="px-4 py-2 text-left">Раздел</th>
+              <th className="px-4 py-2 text-right">План</th>
+              <th className="px-4 py-2 text-right">Факт</th>
+              <th className="px-4 py-2 text-right">Выполнение</th>
+              <th className="px-4 py-2 text-right">Исследований</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {departmentSummary.map((d, i) => (
+              <tr key={i} className="border-t">
+                <td className="px-4 py-2">{d.department}</td>
+                <td className="px-4 py-2 text-right">{d.planUp}</td>
+                <td className="px-4 py-2 text-right">{d.actualUp}</td>
+                <td className="px-4 py-2 text-right">{d.fulfillment}%</td>
+                <td className="px-4 py-2 text-right">{d.studies}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
-  );
-};
+  )
+}
+
+const KPI = ({ title, value, icon }: any) => (
+  <div className="bg-white border rounded-lg p-4">
+    <div className="flex justify-between text-sm text-slate-600 mb-1">
+      {title}
+      {icon}
+    </div>
+
+    <div className="text-2xl font-bold">
+      {value?.toLocaleString()}
+    </div>
+  </div>
+)
