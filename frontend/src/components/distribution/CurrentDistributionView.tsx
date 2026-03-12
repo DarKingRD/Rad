@@ -438,7 +438,7 @@ const ConfirmModal: React.FC<{
       <span>
         Страница {page} из {totalPages}
       </span>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1"> 
         <button
           onClick={() => setPage(Math.max(1, page - 1))}
           disabled={page === 1}
@@ -871,9 +871,11 @@ const ConfirmModal: React.FC<{
 };
 
 const CurrentDistributionView: React.FC = () => {
+  const [studiesTotal, setStudiesTotal] = useState(0)
   const [studies, setStudies] = useState<Study[]>([]);
   const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
   const [loading, setLoading] = useState(true);
+  const [studiesLoading, setStudiesLoading] = useState(false);
   const [distributing, setDistributing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -899,10 +901,8 @@ const CurrentDistributionView: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [doctorPage, setDoctorPage] = useState(1);
 
-  const totalStudies = studies.length;
-  const totalPages = Math.max(1, Math.ceil(totalStudies / ITEMS_PER_PAGE));
-  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-  const paginatedStudies = studies.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(studiesTotal / ITEMS_PER_PAGE))
+  const paginatedStudies = studies;
 
   const totalDoctorPages = Math.max(1, Math.ceil(doctors.length / DOCTORS_PER_PAGE));
   const doctorStartIndex = (doctorPage - 1) * DOCTORS_PER_PAGE;
@@ -958,39 +958,67 @@ const CurrentDistributionView: React.FC = () => {
     setShowConfirmModal(true);
   };
 
+  const loadStudies = async () => {
+  setStudiesLoading(true);
+  setError(null);
+
+  try {
+    const pendingRes = await studiesApi.getPending(currentPage, ITEMS_PER_PAGE);
+
+    const pendingResults = pendingRes.data?.results || [];
+
+    const sortedStudies = [...pendingResults].sort((a: Study, b: Study) => {
+      const priorityDiff =
+        (PRIORITY_ORDER[a.priority] || 999) -
+        (PRIORITY_ORDER[b.priority] || 999);
+
+      if (priorityDiff !== 0) return priorityDiff;
+
+      return (
+        new Date(a.created_at).getTime() -
+        new Date(b.created_at).getTime()
+      );
+    });
+
+    setStudies(sortedStudies);
+    setStudiesTotal(pendingRes.data?.total || pendingResults.length);
+
+  } catch (err: any) {
+    setError(err?.response?.data?.error || "Ошибка загрузки исследований");
+  } finally {
+    setStudiesLoading(false);
+  }
+};
+
   const loadData = async () => {
-    setLoading(true);
-    setError(null);
+  setLoading(true);
+  setError(null);
 
-    try {
-      const [pendingRes, doctorsRes, infoRes] = await Promise.all([
-        studiesApi.getPending(1, 500),
-        doctorsApi.getWithLoad(),
-        distributionApi.getInfo(),
-      ]);
+  try {
+    const [doctorsRes, infoRes] = await Promise.all([
+      doctorsApi.getWithLoad(),
+      distributionApi.getInfo(),
+    ]);
 
-      const pendingResults = pendingRes.data?.results || [];
-      const sortedStudies = [...pendingResults].sort((a: Study, b: Study) => {
-        const priorityDiff =
-          (PRIORITY_ORDER[a.priority] || 999) - (PRIORITY_ORDER[b.priority] || 999);
-        if (priorityDiff !== 0) return priorityDiff;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      });
+    setDoctors(doctorsRes.data || []);
+    setDistInfo(infoRes.data || null);
 
-      setStudies(sortedStudies);
-      setDoctors(doctorsRes.data || []);
-      setDistInfo(infoRes.data || null);
-      loadDrafts();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Ошибка загрузки данных');
-    } finally {
-      setLoading(false);
-    }
-  };
+    loadDrafts();
+
+  } catch (err: any) {
+    setError(err?.response?.data?.error || "Ошибка загрузки данных");
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => {
-    loadData();
-  }, []);
+  loadData();
+}, []);
+
+  useEffect(() => {
+  loadStudies();
+}, [currentPage]);
 
   const handleToggleExpand = async (doctorId: number) => {
     setExpandedDoctor((prev) => (prev === doctorId ? null : doctorId));
@@ -1182,7 +1210,7 @@ const CurrentDistributionView: React.FC = () => {
         <div className="grid grid-cols-1 xl:grid-cols-4 gap-4 mt-5">
           <div className="rounded-xl border border-slate-200 p-4 bg-slate-50">
             <div className="text-xs text-slate-500 mb-1">Очередь</div>
-            <div className="text-2xl font-semibold text-slate-900">{distInfo?.pending_studies ?? totalStudies}</div>
+            <div className="text-2xl font-semibold text-slate-900">{distInfo?.pending_studies ?? studiesTotal}</div>
           </div>
 
           <div className="rounded-xl border border-slate-200 p-4 bg-slate-50">
@@ -1344,7 +1372,7 @@ const CurrentDistributionView: React.FC = () => {
               : 'text-slate-600 hover:bg-slate-50'
           }`}
         >
-          Исследования ({totalStudies})
+          Исследования ({studiesTotal})
         </button>
         <button
           onClick={() => setMobileTab('doctors')}
@@ -1364,14 +1392,26 @@ const CurrentDistributionView: React.FC = () => {
       >
         <div className="w-1/2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-200 shrink-0 flex items-center justify-between">
-            <h3 className="font-semibold text-slate-800">Очередь исследований ({totalStudies})</h3>
+            <h3 className="font-semibold text-slate-800">Очередь исследований ({studiesTotal})</h3>
             <span className="text-xs text-slate-500">Приоритет уже отсортирован сервером</span>
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
-            {paginatedStudies.length === 0 ? (
-              <div className="p-8 text-center text-slate-500">Нет исследований в очереди</div>
+
+            {studiesLoading ? (
+              <div className="flex items-center justify-center py-10 text-slate-400">
+                <Loader2 size={16} className="animate-spin mr-2" />
+                Загрузка исследований...
+              </div>
+
+            ) : paginatedStudies.length === 0 ? (
+
+              <div className="p-8 text-center text-slate-500">
+                Нет исследований в очереди
+              </div>
+
             ) : (
+
               paginatedStudies.map((study) => (
                 <div
                   key={study.research_number}
@@ -1385,10 +1425,12 @@ const CurrentDistributionView: React.FC = () => {
                       : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
                   }`}
                 >
+
                   <div className="flex justify-between items-start mb-1">
                     <span className="font-medium text-slate-900 text-sm">
                       {study.research_number}
                     </span>
+
                     <span
                       className={`px-2 py-0.5 rounded text-xs font-medium border ${getPriorityColor(
                         study.priority
@@ -1399,7 +1441,10 @@ const CurrentDistributionView: React.FC = () => {
                   </div>
 
                   <div className="text-xs text-slate-600 mb-1 flex items-center gap-2 flex-wrap">
-                    <span>{study.study_type?.name || `ID: ${study.study_type_id}`}</span>
+                    <span>
+                      {study.study_type?.name || `ID: ${study.study_type_id}`}
+                    </span>
+
                     {study.study_type?.modality && (
                       <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">
                         {study.study_type.modality}
@@ -1409,6 +1454,7 @@ const CurrentDistributionView: React.FC = () => {
 
                   <div className="flex justify-between text-xs text-slate-400">
                     <span>Создано: {formatDate(study.created_at)}</span>
+
                     <span className={`px-1.5 py-0.5 rounded ${getStatusColor(study.status)}`}>
                       {study.status === 'pending'
                         ? 'Ожидает'
@@ -1417,16 +1463,19 @@ const CurrentDistributionView: React.FC = () => {
                         : study.status}
                     </span>
                   </div>
+
                 </div>
               ))
+
             )}
+
           </div>
 
           <Pagination
             currentPage={currentPage}
             totalPages={totalPages}
-            startIndex={startIndex}
-            totalItems={totalStudies}
+            startIndex={(currentPage - 1) * ITEMS_PER_PAGE}
+            totalItems={studiesTotal}
             itemsPerPage={ITEMS_PER_PAGE}
             onPageChange={setCurrentPage}
           />
@@ -1538,47 +1587,78 @@ const CurrentDistributionView: React.FC = () => {
             style={{ height: 'calc(100vh - 390px)', minHeight: '400px' }}
           >
             <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
-              {paginatedStudies.map((study) => (
-                <div
-                  key={study.research_number}
-                  onClick={() => {
-                    setSelectedStudy(study);
-                    setSelectedDoctor(null);
-                    setMobileTab('doctors');
-                  }}
-                  className={`p-3 rounded-lg border cursor-pointer transition-all ${
-                    selectedStudy?.research_number === study.research_number
-                      ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
-                      : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="font-medium text-slate-900 text-sm">
-                      {study.research_number}
-                    </span>
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs font-medium border ${getPriorityColor(
-                        study.priority
-                      )}`}
-                    >
-                      {getPriorityLabel(study.priority)}
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-600 mb-1">
-                    {study.study_type?.name || `ID: ${study.study_type_id}`}
-                  </div>
-                  <div className="text-xs text-blue-600">
-                    Нажмите, чтобы перейти к выбору врача
-                  </div>
+
+              {studiesLoading ? (
+                <div className="flex items-center justify-center py-10 text-slate-400">
+                  <Loader2 size={16} className="animate-spin mr-2" />
+                  Загрузка исследований...
                 </div>
-              ))}
+              ) : paginatedStudies.length === 0 ? (
+                <div className="p-8 text-center text-slate-500">
+                  Нет исследований в очереди
+                </div>
+              ) : (
+                paginatedStudies.map((study) => (
+                  <div
+                    key={study.research_number}
+                    onClick={() => {
+                      setSelectedStudy(study);
+                      setSelectedDoctor(null);
+                    }}
+                    className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                      selectedStudy?.research_number === study.research_number
+                        ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                        : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="font-medium text-slate-900 text-sm">
+                        {study.research_number}
+                      </span>
+
+                      <span
+                        className={`px-2 py-0.5 rounded text-xs font-medium border ${getPriorityColor(
+                          study.priority
+                        )}`}
+                      >
+                        {getPriorityLabel(study.priority)}
+                      </span>
+                    </div>
+
+                    <div className="text-xs text-slate-600 mb-1 flex items-center gap-2 flex-wrap">
+                      <span>
+                        {study.study_type?.name || `ID: ${study.study_type_id}`}
+                      </span>
+
+                      {study.study_type?.modality && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">
+                          {study.study_type.modality}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex justify-between text-xs text-slate-400">
+                      <span>Создано: {formatDate(study.created_at)}</span>
+
+                      <span className={`px-1.5 py-0.5 rounded ${getStatusColor(study.status)}`}>
+                        {study.status === 'pending'
+                          ? 'Ожидает'
+                          : study.status === 'confirmed'
+                          ? 'Назначено'
+                          : study.status}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+
             </div>
 
             <Pagination
               currentPage={currentPage}
               totalPages={totalPages}
-              startIndex={startIndex}
-              totalItems={totalStudies}
+              startIndex={(currentPage - 1) * ITEMS_PER_PAGE}
+              totalItems={studiesTotal}
               itemsPerPage={ITEMS_PER_PAGE}
               onPageChange={setCurrentPage}
             />
@@ -1730,7 +1810,7 @@ const CurrentDistributionView: React.FC = () => {
           </div>
         </div>
       )}
-
+ 
       <ConfirmModal
         isOpen={showConfirmModal}
         distResult={distResult}
