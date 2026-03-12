@@ -20,6 +20,9 @@ if TYPE_CHECKING:
     from django.db.models.manager import Manager
 
 
+MANAGED = True
+
+
 class Doctor(models.Model):
     """
     Модель врача.
@@ -59,7 +62,7 @@ class Doctor(models.Model):
 
     class Meta:
         db_table = "doctors"
-        managed = False
+        managed = MANAGED
         verbose_name = "Врач"
         verbose_name_plural = "Врачи"
 
@@ -99,7 +102,7 @@ class StudyType(models.Model):
 
     class Meta:
         db_table = "study_types"
-        managed = False
+        managed = MANAGED
         verbose_name = "Тип исследования"
         verbose_name_plural = "Типы исследований"
 
@@ -149,7 +152,7 @@ class Schedule(models.Model):
 
     class Meta:
         db_table = "schedules"
-        managed = False
+        managed = MANAGED
         ordering = ["work_date", "time_start"]
         verbose_name = "Расписание"
         verbose_name_plural = "Расписания"
@@ -225,7 +228,7 @@ class Study(models.Model):
         objects: Manager["Study"]
     class Meta:
         db_table = "studies"
-        managed = False
+        managed = MANAGED
         ordering = ["-created_at"]
         verbose_name = "Исследование"
         verbose_name_plural = "Исследования"
