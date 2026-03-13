@@ -54,9 +54,8 @@ export const ShiftPlanningView: React.FC = () => {
   useEffect(() => {
     const loadDoctors = async () => {
       try {
-        const res = await doctorsApi.getAll();
-        const doctorsData = res.data.results || res.data;
-        setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
+        const doctorsData = await doctorsApi.getAll();
+        setDoctors(doctorsData);
       } catch (err) {
         console.error('Error loading doctors:', err);
       }
@@ -69,7 +68,7 @@ export const ShiftPlanningView: React.FC = () => {
     const loadData = async () => {
       try {
         setLoading(true);
-        const [schedulesRes, studiesRes] = await Promise.all([
+        const [schedulesData, studiesData] = await Promise.all([
           schedulesApi.getAll({
             date_from: dates[0],
             date_to: dates[6],
@@ -80,12 +79,8 @@ export const ShiftPlanningView: React.FC = () => {
             date_to: dates[6],
           })
         ]);
-        
-        const schedulesData = schedulesRes.data.results || schedulesRes.data;
-        const studiesData = studiesRes.data.results || studiesRes.data;
-        
-        setSchedules(Array.isArray(schedulesData) ? schedulesData : []);
-        setStudies(Array.isArray(studiesData) ? studiesData : []);
+        setSchedules(schedulesData);
+        setStudies(studiesData);
       } catch (err) {
         console.error('Error loading data:', err);
       } finally {
@@ -97,7 +92,7 @@ export const ShiftPlanningView: React.FC = () => {
   }, [dates, selectedDoctor]);
 
   const loadSchedulesData = async () => {
-    const [schedulesRes, studiesRes] = await Promise.all([
+    const [schedulesData, studiesData] = await Promise.all([
       schedulesApi.getAll({
         date_from: dates[0],
         date_to: dates[6],
@@ -108,12 +103,8 @@ export const ShiftPlanningView: React.FC = () => {
         date_to: dates[6],
       })
     ]);
-    
-    const schedulesData = schedulesRes.data.results || schedulesRes.data;
-    const studiesData = studiesRes.data.results || studiesRes.data;
-    
-    setSchedules(Array.isArray(schedulesData) ? schedulesData : []);
-    setStudies(Array.isArray(studiesData) ? studiesData : []);
+      setSchedules(schedulesData);
+      setStudies(studiesData);
   };
 
   const handlePrevWeek = () => {
@@ -181,7 +172,7 @@ export const ShiftPlanningView: React.FC = () => {
     e.preventDefault();
     try {
       const submitData = {
-        doctor: formData.doctor_id,
+        doctor_id: formData.doctor_id,
         work_date: formData.work_date,
         time_start: formData.time_start,
         time_end: formData.time_end,

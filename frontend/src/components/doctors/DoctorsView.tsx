@@ -123,17 +123,16 @@ export const DoctorsView: React.FC = () => {
   };
 
   const loadDoctors = async () => {
-    try {
-      setLoading(true);
-      const res = await doctorsApi.getWithLoad();
-      const doctorsData = res.data.results || res.data;
-      setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
-    } catch (err: any) {
-      console.error('Error loading doctors:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    setLoading(true);
+    const doctorsData = await doctorsApi.getWithLoad();
+    setDoctors(doctorsData);
+  } catch (err) {
+    console.error('Error loading doctors:', err);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const getDefaultFormData = (): DoctorFormData => ({
     fio_alias: '',
@@ -167,20 +166,21 @@ export const DoctorsView: React.FC = () => {
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      if (editingDoctor) {
-        await doctorsApi.update(editingDoctor.id, formData);
-      } else {
-        await doctorsApi.create(formData);
-      }
-      await loadDoctors();
-      handleCloseModal();
-    } catch (error: any) {
-      console.error('Error saving doctor:', error);
-      alert('Ошибка при сохранении врача: ' + (error.response?.data?.detail || error.message));
+  e.preventDefault();
+  try {
+    if (editingDoctor) {
+      await doctorsApi.update(editingDoctor.id, formData);
+    } else {
+      await doctorsApi.create(formData);
     }
-  };
+    await loadDoctors();
+    handleCloseModal();
+  } catch (error) {
+    console.error('Error saving doctor:', error);
+    const message = error instanceof Error ? error.message : 'Ошибка при сохранении врача';
+    alert(message);
+  }
+};
 
   if (loading) {
     return (

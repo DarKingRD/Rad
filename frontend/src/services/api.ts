@@ -1,9 +1,90 @@
-import axios from 'axios';
-import type { DistResult } from '../types';
+import axios, { AxiosError, AxiosInstance, AxiosResponse } from 'axios';
+import type {
+  DistResult,
+  Doctor,
+  DoctorWithLoad,
+  Schedule,
+  Study,
+  StudyType,
+  DashboardStats,
+  ChartPoint,
+} from '../types';
 
-const API_BASE_URL = 'http://localhost:8000/api';
+type ApiListResponse<T> = T[] | { results: T[] };
 
-export const api = axios.create({
+type SchedulePayload = {
+  doctor_id: number;
+  work_date: string;
+  time_start: string | null;
+  time_end: string | null;
+  break_start?: string | null;
+  break_end?: string | null;
+  is_day_off: number;
+  planned_up: number;
+};
+
+type DoctorPayload = {
+  fio_alias: string;
+  position_type: string;
+  max_up_per_day: number;
+  is_active: boolean;
+  modality: string[];
+};
+
+type StudyAssignResponse = Study;
+type StudyStatusResponse = Study;
+
+type DistributionInfo = {
+  pending_studies: number;
+  available_doctors: number;
+  study_date_range: {
+    min: string | null;
+    max: string | null;
+  };
+  schedule_date_range: {
+    min: string | null;
+    max: string | null;
+  };
+  message: string;
+};
+
+type DistributionPreviewInfo = {
+  pending_studies: number;
+  available_doctors: number;
+  target_date: string;
+  message: string;
+};
+
+type DistributionPreviewPayload = {
+  date: string;
+  preview?: boolean;
+  date_from?: string;
+  date_to?: string;
+  use_mip?: boolean;
+};
+
+type DistributionConfirmResponse = {
+  status: string;
+  assigned: number;
+  distribution_id: string;
+  message: string;
+};
+
+const API_BASE_URL = 'http://localhost:8000/api'; // Здесь потом нужно этот хардкод убрать
+
+export class ApiClientError extends Error {
+  status?: number;
+  details?: unknown;
+
+  constructor(message: string, status?: number, details?: unknown) {
+    super(message);
+    this.name = 'ApiClientError';
+    this.status = status;
+    this.details = details;
+  }
+}
+
+const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
@@ -13,7 +94,7 @@ export const api = axios.create({
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  (error: AxiosError) => {
     if (error.response) {
       console.error('API Error Response:', error.response.data);
     } else if (error.request) {
@@ -21,48 +102,121 @@ api.interceptors.response.use(
     } else {
       console.error('API Error Message:', error.message);
     }
-    return Promise.reject(error);
+    return Promise.reject(normalizeAxiosError(error));
   }
 );
 
-const retryRequest = async <T>(
+function normalizeAxiosError(error: unknown): ApiClientError {
+  if (error instanceof ApiClientError) {
+    return error;
+  }
+
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    const details = error.response?.data;
+
+    const detailMessage =
+      typeof details === 'object' && details !== null
+        ? (details as Record<string, unknown>).detail ||
+          (details as Record<string, unknown>).error ||
+          error.message
+        : error.message;
+
+    return new ApiClientError(String(detailMessage || 'Ошибка API'), status, details);
+  }
+
+  if (error instanceof Error) {
+    return new ApiClientError(error.message);
+  }
+
+  return new ApiClientError('Неизвестная ошибка');
+}
+
+function shouldRetry(error: unknown): boolean {
+  if (!(error instanceof ApiClientError)) {
+    return false;
+  }
+
+  if (!error.status) {
+    return true;
+  }
+
+  return error.status >= 500 || error.status === 429;
+}
+
+async function retryGetRequest<T>(
   requestFn: () => Promise<T>,
-  retries = 3,
-  delay = 1000
-): Promise<T> => {
+  retries = 2,
+  delay = 700
+): Promise<T> {
   try {
     return await requestFn();
   } catch (error) {
-    if (retries > 0) {
+    if (retries > 0 && shouldRetry(error)) {
       await new Promise((resolve) => setTimeout(resolve, delay));
-      return retryRequest(requestFn, retries - 1, delay * 2);
+      return retryGetRequest(requestFn, retries - 1, delay * 2);
     }
     throw error;
   }
-};
+}
+
+function extractList<T>(response: AxiosResponse<ApiListResponse<T>>): T[] {
+  const data = response.data;
+  return Array.isArray(data) ? data : data.results;
+}
+
+async function getList<T>(url: string, params?: Record<string, unknown>): Promise<T[]> {
+  const response = await retryGetRequest(() => api.get<ApiListResponse<T>>(url, { params }));
+  return extractList(response);
+}
+
+async function getOne<T>(url: string, params?: Record<string, unknown>): Promise<T> {
+  const response = await retryGetRequest(() => api.get<T>(url, { params }));
+  return response.data;
+}
+
+async function postOne<TResponse, TPayload>(url: string, payload: TPayload): Promise<TResponse> {
+  const response = await api.post<TResponse>(url, payload);
+  return response.data;
+}
+
+async function putOne<TResponse, TPayload>(url: string, payload: TPayload): Promise<TResponse> {
+  const response = await api.put<TResponse>(url, payload);
+  return response.data;
+}
+
+async function patchOne<TResponse, TPayload>(url: string, payload: TPayload): Promise<TResponse> {
+  const response = await api.patch<TResponse>(url, payload);
+  return response.data;
+}
+
+async function deleteOne(url: string): Promise<void> {
+  await api.delete(url);
+}
 
 export const doctorsApi = {
-  getAll: () => retryRequest(() => api.get('/doctors/')),
-  getWithLoad: () => retryRequest(() => api.get('/doctors/with_load/')),
-  getById: (id: number) => retryRequest(() => api.get(`/doctors/${id}/`)),
-  create: (data: any) => retryRequest(() => api.post('/doctors/', data)),
-  update: (id: number, data: any) => retryRequest(() => api.put(`/doctors/${id}/`, data)),
-  delete: (id: number) => retryRequest(() => api.delete(`/doctors/${id}/`)),
+  getAll: () => getList<Doctor>('/doctors/'),
+  getWithLoad: () => getList<DoctorWithLoad>('/doctors/with_load/'),
+  getById: (id: number) => getOne<Doctor>(`/doctors/${id}/`),
+  create: (data: DoctorPayload) => postOne<Doctor, DoctorPayload>('/doctors/', data),
+  update: (id: number, data: DoctorPayload) =>
+    putOne<Doctor, DoctorPayload>(`/doctors/${id}/`, data),
+  delete: (id: number) => deleteOne(`/doctors/${id}/`),
 };
 
 export const studyTypesApi = {
-  getAll: () => retryRequest(() => api.get('/study-types/')),
+  getAll: () => getList<StudyType>('/study-types/'),
 };
 
 export const schedulesApi = {
   getAll: (params?: { date_from?: string; date_to?: string; doctor_id?: number }) =>
-    retryRequest(() => api.get('/schedules/', { params })),
-  getByDate: (date: string) =>
-    retryRequest(() => api.get('/schedules/by_date/', { params: { date } })),
-  getById: (id: number) => retryRequest(() => api.get(`/schedules/${id}/`)),
-  create: (data: any) => retryRequest(() => api.post('/schedules/', data)),
-  update: (id: number, data: any) => retryRequest(() => api.put(`/schedules/${id}/`, data)),
-  delete: (id: number) => retryRequest(() => api.delete(`/schedules/${id}/`)),
+    getList<Schedule>('/schedules/', params),
+  getByDate: (date: string) => getList<Schedule>('/schedules/by_date/', { date }),
+  getById: (id: number) => getOne<Schedule>(`/schedules/${id}/`),
+  create: (data: SchedulePayload) => postOne<Schedule, SchedulePayload>('/schedules/', data),
+  update: (id: number, data: SchedulePayload) =>
+    putOne<Schedule, SchedulePayload>(`/schedules/${id}/`, data),
+  delete: (id: number) => deleteOne(`/schedules/${id}/`),
 };
 
 export const studiesApi = {
@@ -72,60 +226,67 @@ export const studiesApi = {
     date_from?: string;
     date_to?: string;
     diagnostician_id?: number;
-  }) => retryRequest(() => api.get('/studies/', { params })),
+  }) => getList<Study>('/studies/', params),
 
-  getPending: (page = 1, pageSize = 100) =>
-    retryRequest(() =>
-      api.get('/studies/pending/', {
+  getPending: async (page = 1, pageSize = 100) => {
+    const response = await retryGetRequest(() =>
+      api.get<{
+        results: Study[];
+        total: number;
+        page: number;
+        page_size: number;
+        total_pages: number;
+      }>('/studies/pending/', {
         params: { page, page_size: pageSize },
       })
-    ),
+    );
+    return response.data;
+  },
 
-  getCito: () => retryRequest(() => api.get('/studies/cito/')),
-  getAsap: () => retryRequest(() => api.get('/studies/asap/')),
+  getCito: (limit = 100) => getList<Study>('/studies/cito/', { limit }),
+  getAsap: (limit = 100) => getList<Study>('/studies/asap/', { limit }),
 
   assign: (id: string, doctor_id: number) =>
-    retryRequest(() => api.post(`/studies/${id}/assign/`, { doctor_id })),
+    postOne<StudyAssignResponse, { doctor_id: number }>(
+      `/studies/${id}/assign/`,
+      { doctor_id }
+    ),
 
   updateStatus: (id: string, status: string) =>
-    retryRequest(() => api.put(`/studies/${id}/update_status/`, { status })),
+    putOne<StudyStatusResponse, { status: string }>(
+      `/studies/${id}/update_status/`,
+      { status }
+    ),
 };
 
 export const dashboardApi = {
   getStats: (dateFrom?: string, dateTo?: string) =>
-    retryRequest(() =>
-      api.get("/dashboard/stats/", {
-        params: {
-          ...(dateFrom ? { date_from: dateFrom } : {}),
-          ...(dateTo ? { date_to: dateTo } : {}),
-        },
-      })
-    ),
+    getOne<DashboardStats>('/dashboard/stats/', {
+      ...(dateFrom ? { date_from: dateFrom } : {}),
+      ...(dateTo ? { date_to: dateTo } : {}),
+    }),
 
   getChartData: (dateFrom?: string, dateTo?: string) =>
-    retryRequest(() =>
-      api.get("/dashboard/chart/", {
-        params: {
-          ...(dateFrom ? { date_from: dateFrom } : {}),
-          ...(dateTo ? { date_to: dateTo } : {}),
-        },
-      })
-    ),
-}
+    getOne<ChartPoint[]>('/dashboard/chart/', {
+      ...(dateFrom ? { date_from: dateFrom } : {}),
+      ...(dateTo ? { date_to: dateTo } : {}),
+    }),
+};
 
 export const distributionApi = {
-  getInfo: () => retryRequest(() => api.get('/distribute/')),
+  getInfo: () => getOne<DistributionInfo>('/distribute/'),
 
-  preview: (payload: {
-    date: string;
-    preview?: boolean;
-    date_from?: string;
-    date_to?: string;
-    use_mip?: boolean;
-  }) => retryRequest(() => api.post<DistResult>('/distribute/', payload)),
+  preview: (payload: DistributionPreviewPayload) =>
+    postOne<DistResult, DistributionPreviewPayload>('/distribute/', payload),
 
   confirm: (distribution_id: string) =>
-    retryRequest(() =>
-      api.post('/distribute/confirm/', { distribution_id })
+    postOne<DistributionConfirmResponse, { distribution_id: string }>(
+      '/distribute/confirm/',
+      { distribution_id }
     ),
+
+  quickPreview: (date?: string) =>
+    getOne<DistributionPreviewInfo>('/distribute/preview/', date ? { date } : undefined),
 };
+
+export { api };

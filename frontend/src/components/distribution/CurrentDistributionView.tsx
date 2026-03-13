@@ -963,9 +963,9 @@ const CurrentDistributionView: React.FC = () => {
   setError(null);
 
   try {
-    const pendingRes = await studiesApi.getPending(currentPage, ITEMS_PER_PAGE);
+    const pendingData = await studiesApi.getPending(currentPage, ITEMS_PER_PAGE);
 
-    const pendingResults = pendingRes.data?.results || [];
+    const pendingResults = pendingData.results || [];
 
     const sortedStudies = [...pendingResults].sort((a: Study, b: Study) => {
       const priorityDiff =
@@ -974,17 +974,14 @@ const CurrentDistributionView: React.FC = () => {
 
       if (priorityDiff !== 0) return priorityDiff;
 
-      return (
-        new Date(a.created_at).getTime() -
-        new Date(b.created_at).getTime()
-      );
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
     });
 
     setStudies(sortedStudies);
-    setStudiesTotal(pendingRes.data?.total || pendingResults.length);
-
-  } catch (err: any) {
-    setError(err?.response?.data?.error || "Ошибка загрузки исследований");
+    setStudiesTotal(pendingData.total || pendingResults.length);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Ошибка загрузки исследований';
+    setError(message);
   } finally {
     setStudiesLoading(false);
   }
@@ -995,18 +992,19 @@ const CurrentDistributionView: React.FC = () => {
   setError(null);
 
   try {
-    const [doctorsRes, infoRes] = await Promise.all([
+    const [doctorsData, infoData] = await Promise.all([
       doctorsApi.getWithLoad(),
       distributionApi.getInfo(),
     ]);
 
-    setDoctors(doctorsRes.data || []);
-    setDistInfo(infoRes.data || null);
+    setDoctors(doctorsData || []);
+    setDistInfo(infoData || null);
 
     loadDrafts();
 
-  } catch (err: any) {
-    setError(err?.response?.data?.error || "Ошибка загрузки данных");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Ошибка загрузки данных';
+    setError(message);
   } finally {
     setLoading(false);
   }
@@ -1031,10 +1029,14 @@ const CurrentDistributionView: React.FC = () => {
     }));
 
     try {
-      const response = await studiesApi.getAll({ diagnostician_id: doctorId, status: 'confirmed' });
+      const studiesData = await studiesApi.getAll({
+        diagnostician_id: doctorId,
+        status: 'confirmed',
+      });
+
       setDoctorStudies((prev) => ({
         ...prev,
-        [doctorId]: { loading: false, studies: response.data || [], error: null },
+        [doctorId]: { loading: false, studies: studiesData || [], error: null },
       }));
     } catch {
       setDoctorStudies((prev) => ({
@@ -1072,45 +1074,48 @@ const CurrentDistributionView: React.FC = () => {
   };
 
   const handleRunDistribution = async () => {
-    setDistributing(true);
-    setError(null);
+  setDistributing(true);
+  setError(null);
 
-    try {
-      const payload = {
-        date: distributionDate,
-        preview: true,
-        date_from: distributionDateFrom || undefined,
-        date_to: distributionDateTo || undefined,
-        use_mip: useMip,
-      };
+  try {
+    const payload = {
+      date: distributionDate,
+      preview: true,
+      date_from: distributionDateFrom || undefined,
+      date_to: distributionDateTo || undefined,
+      use_mip: useMip,
+    };
 
-      const response = await distributionApi.preview(payload);
-      setDistResult(response.data);
-      persistDraft(response.data);
-      setShowConfirmModal(true);
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Ошибка запуска распределения');
-    } finally {
-      setDistributing(false);
-    }
-  };
+    const result = await distributionApi.preview(payload);
+    setDistResult(result);
+    persistDraft(result);
+    setShowConfirmModal(true);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Ошибка запуска распределения';
+    setError(message);
+  } finally {
+    setDistributing(false);
+  }
+};
 
-  const handleConfirmDistribution = async () => {
-    if (!distResult?.distribution_id) return;
+const handleConfirmDistribution = async () => {
+  if (!distResult?.distribution_id) return;
 
-    setConfirming(true);
-    try {
-      await distributionApi.confirm(distResult.distribution_id);
-      removeDraft(distResult.distribution_id);
-      setShowConfirmModal(false);
-      setDistResult(null);
-      await loadData();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Ошибка подтверждения распределения');
-    } finally {
-      setConfirming(false);
-    }
-  };
+  setConfirming(true);
+  try {
+    await distributionApi.confirm(distResult.distribution_id);
+    removeDraft(distResult.distribution_id);
+    setShowConfirmModal(false);
+    setDistResult(null);
+    await loadData();
+    await loadStudies();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Ошибка подтверждения распределения';
+    setError(message);
+  } finally {
+    setConfirming(false);
+  }
+};
 
   const handleReassign = (assignment: Assignment, newDoctorId: number) => {
     if (!distResult) return;
