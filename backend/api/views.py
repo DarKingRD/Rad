@@ -12,6 +12,10 @@ from .models import Doctor, Schedule, Study, StudyType
 from .serializers import (
     ChartDataSerializer,
     DashboardStatsSerializer,
+    DistributionConfirmSerializer,
+    DistributionInfoSerializer,
+    DistributionPreviewInfoSerializer,
+    DistributionRunSerializer,
     DoctorSerializer,
     DoctorWithLoadSerializer,
     ScheduleSerializer,
@@ -33,7 +37,15 @@ from .services.dashboard_queries import (
     get_dashboard_stats_data,
     parse_dashboard_range,
 )
-
+from .services.distribution_api import (
+    confirm_distribution_result,
+    get_distribution_info,
+    get_distribution_preview_info,
+    parse_distribution_date,
+    parse_distribution_datetime_end,
+    parse_distribution_datetime_start,
+    run_distribution,
+)
 
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.all()
@@ -275,203 +287,95 @@ def chart_data(request):
 @api_view(["GET", "POST"])
 def distribute_studies_view(request):
     """
-    Распределение исследований с поддержкой:
-    - Выбора даты
-    - Режима предпросмотра
-    - Фильтрации по периоду создания исследований
+    GET  -> служебная информация для экрана распределения
+    POST -> запуск распределения / preview
     """
-    if request.method == "POST":
-        target_date_str = request.data.get("date")
-        preview = request.data.get("preview", True)
-        date_from_str = request.data.get("date_from")
-        date_to_str = request.data.get("date_to")
-        use_mip = request.data.get("use_mip", True)
+    if request.method == "GET":
+        data = get_distribution_info()
+        serializer = DistributionInfoSerializer(data)
+        return Response(serializer.data)
 
-        target_date = None
-        if target_date_str:
-            try:
-                target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
-            except ValueError:
-                return Response(
-                    {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
-                    status=400,
-                )
+    input_serializer = DistributionRunSerializer(data=request.data)
+    input_serializer.is_valid(raise_exception=True)
 
-        date_from = None
-        date_to = None
-        if date_from_str:
-            try:
-                date_from = datetime.strptime(date_from_str, "%Y-%m-%d")
-            except ValueError:
-                return Response({"error": "Неверный формат date_from"}, status=400)
-        if date_to_str:
-            try:
-                date_to = datetime.strptime(date_to_str, "%Y-%m-%d")
-            except ValueError:
-                return Response({"error": "Неверный формат date_to"}, status=400)
+    validated = input_serializer.validated_data
 
-        try:
-            service = DistributionService(target_date=target_date)
-            service.set_preview_mode(preview)
+    target_date = validated.get("date")
+    preview = validated.get("preview", True)
+    date_from = validated.get("date_from")
+    date_to = validated.get("date_to")
+    use_mip = validated.get("use_mip", True)
 
-            result = service.distribute(
-                use_mip=use_mip, date_from=date_from, date_to=date_to
-            )
-
-            if preview:
-                distribution_id = str(uuid.uuid4())
-                cache.set(
-                    f"distribution_preview_{distribution_id}",
-                    result,
-                    timeout=3600,
-                )
-                result["distribution_id"] = distribution_id
-                result["message"] = (
-                    "Предварительное распределение выполнено. "
-                    "Отправьте POST на /api/distribute/confirm/ для сохранения."
-                )
-
-            return Response(result, status=200)
-
-        except Exception as e:
-            return Response(
-                {"error": str(e), "message": "Ошибка при распределении исследований"},
-                status=500,
-            )
-
-    date_range = Study.objects.aggregate(
-        min_date=Min("created_at__date"),
-        max_date=Max("created_at__date"),
+    date_from_dt = parse_distribution_datetime_start(
+        date_from.isoformat() if date_from else None
+    )
+    date_to_dt = parse_distribution_datetime_end(
+        date_to.isoformat() if date_to else None
     )
 
-    schedule_range = Schedule.objects.aggregate(
-        min_date=Min("work_date"), max_date=Max("work_date")
-    )
-
-    pending = Study.objects.filter(diagnostician__isnull=True).count()
-    today = timezone.now().date()
-
-    doctors = (
-        Doctor.objects.filter(
-            is_active=True, schedule__work_date=today, schedule__is_day_off=0
+    try:
+        result = run_distribution(
+            target_date=target_date,
+            preview=preview,
+            date_from=date_from_dt,
+            date_to=date_to_dt,
+            use_mip=use_mip,
         )
-        .distinct()
-        .count()
-    )
-
-    return Response(
-        {
-            "pending_studies": pending,
-            "available_doctors": doctors,
-            "study_date_range": {
-                "min": date_range["min_date"].isoformat()
-                if date_range["min_date"]
-                else None,
-                "max": date_range["max_date"].isoformat()
-                if date_range["max_date"]
-                else None,
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {
+                "error": str(e),
+                "message": "Ошибка при распределении исследований",
             },
-            "schedule_date_range": {
-                "min": schedule_range["min_date"].isoformat()
-                if schedule_range["min_date"]
-                else None,
-                "max": schedule_range["max_date"].isoformat()
-                if schedule_range["max_date"]
-                else None,
-            },
-            "message": "Отправьте POST-запрос с параметром date для распределения",
-        }
-    )
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @api_view(["POST"])
 def confirm_distribution(request):
-    distribution_id = request.data.get("distribution_id")
+    """
+    Подтверждение preview-распределения и сохранение в БД.
+    """
+    input_serializer = DistributionConfirmSerializer(data=request.data)
+    input_serializer.is_valid(raise_exception=True)
 
-    if not distribution_id:
-        return Response({"error": "distribution_id обязателен"}, status=400)
-
-    preview_data = cache.get(f"distribution_preview_{distribution_id}")
-
-    if not preview_data:
-        return Response(
-            {"error": "Распределение не найдено или истекло время (1 час)"},
-            status=404,
-        )
+    distribution_id = input_serializer.validated_data["distribution_id"]
 
     try:
-        from .models import Study
-
-        target_date_str = preview_data.get("target_date")
-        target_date = None
-        if target_date_str:
-            target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
-
-        service = DistributionService(target_date=target_date)
-        service.set_preview_mode(False)
-
-        assignments = preview_data.get("assignments", [])
-        assignment_dict = {
-            a.get("study_number"): a["doctor_id"]
-            for a in assignments
-            if a.get("study_number")
-        }
-
-        for study_id, doc_id in assignment_dict.items():
-            Study.objects.filter(research_number=study_id).update(
-                diagnostician_id=doc_id, status="confirmed"
+        result = confirm_distribution_result(distribution_id)
+        if result is None:
+            return Response(
+                {"error": "Распределение не найдено или истекло время (1 час)"},
+                status=status.HTTP_404_NOT_FOUND,
             )
-
-        cache.delete(f"distribution_preview_{distribution_id}")
-
-        return Response(
-            {
-                "status": "confirmed",
-                "assigned": len(assignment_dict),
-                "distribution_id": distribution_id,
-                "message": f"Успешно сохранено {len(assignment_dict)} назначений",
-            }
-        )
-
+        return Response(result, status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
-            {"error": str(e), "message": "Ошибка при сохранении распределения"},
-            status=500,
+            {
+                "error": str(e),
+                "message": "Ошибка при сохранении распределения",
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
 @api_view(["GET"])
 def distribution_preview(request):
+    """
+    Быстрый preview без запуска алгоритма.
+    """
     date_str = request.query_params.get("date")
 
-    target_date = None
-    if date_str:
-        try:
-            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        except ValueError:
-            return Response({"error": "Неверный формат даты"}, status=400)
-    else:
-        target_date = timezone.now().date()
-
-    pending = Study.objects.filter(
-        diagnostician__isnull=True, created_at__date__lte=target_date
-    ).count()
-
-    doctors = (
-        Doctor.objects.filter(
-            is_active=True, schedule__work_date=target_date, schedule__is_day_off=0
+    try:
+        target_date = parse_distribution_date(date_str) if date_str else timezone.now().date()
+    except ValueError:
+        return Response(
+            {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
-        .distinct()
-        .count()
-    )
 
-    return Response(
-        {
-            "pending_studies": pending,
-            "available_doctors": doctors,
-            "target_date": target_date.isoformat(),
-            "message": "Готов к распределению"
-            if pending > 0 and doctors > 0
-            else "Нет данных",
-        }
-    )
+    data = get_distribution_preview_info(target_date)
+    serializer = DistributionPreviewInfoSerializer(data)
+    return Response(serializer.data)
+

@@ -251,3 +251,50 @@ class ChartDataSerializer(serializers.Serializer):
     name = serializers.CharField()
     plan = serializers.IntegerField()
     actual = serializers.IntegerField()
+
+
+class DistributionRangeSerializer(serializers.Serializer):
+    min = serializers.CharField(allow_null=True)
+    max = serializers.CharField(allow_null=True)
+
+
+class DistributionInfoSerializer(serializers.Serializer):
+    pending_studies = serializers.IntegerField()
+    available_doctors = serializers.IntegerField()
+    study_date_range = DistributionRangeSerializer()
+    schedule_date_range = DistributionRangeSerializer()
+    message = serializers.CharField()
+
+
+class DistributionPreviewInfoSerializer(serializers.Serializer):
+    pending_studies = serializers.IntegerField()
+    available_doctors = serializers.IntegerField()
+    target_date = serializers.CharField()
+    message = serializers.CharField()
+
+
+class DistributionRunSerializer(serializers.Serializer):
+    date = serializers.DateField(required=False, allow_null=True)
+    preview = serializers.BooleanField(required=False, default=True)
+    date_from = serializers.DateField(required=False, allow_null=True)
+    date_to = serializers.DateField(required=False, allow_null=True)
+    use_mip = serializers.BooleanField(required=False, default=True)
+
+    def validate(self, attrs):
+        date_from = attrs.get("date_from")
+        date_to = attrs.get("date_to")
+
+        if date_from and date_to and date_from > date_to:
+            raise serializers.ValidationError(
+                {"date_to": "date_to не может быть раньше date_from"}
+            )
+        return attrs
+
+
+class DistributionConfirmSerializer(serializers.Serializer):
+    distribution_id = serializers.CharField(required=True)
+
+    def validate_distribution_id(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("distribution_id обязателен")
+        return value.strip()
