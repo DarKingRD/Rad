@@ -15,6 +15,7 @@
 from typing import TYPE_CHECKING
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
+from django.contrib.postgres.indexes import GinIndex
 
 if TYPE_CHECKING:
     from django.db.models.manager import Manager
@@ -65,6 +66,12 @@ class Doctor(models.Model):
         managed = MANAGED
         verbose_name = "Врач"
         verbose_name_plural = "Врачи"
+        indexes = [
+            models.Index(fields=["fio_alias"], name="doctor_fio_idx"),
+            models.Index(fields=["position_type"], name="doctor_position_idx"),
+            models.Index(fields=["is_active"], name="doctor_active_idx"),
+            GinIndex(fields=["modality"], name="doctor_modality_gin_idx"),
+        ]
 
     def __str__(self):
         return str(self.fio_alias) if self.fio_alias else f"Doctor {self.id}"
@@ -105,6 +112,10 @@ class StudyType(models.Model):
         managed = MANAGED
         verbose_name = "Тип исследования"
         verbose_name_plural = "Типы исследований"
+        indexes = [
+            models.Index(fields=["modality"], name="studytype_modality_idx"),
+            models.Index(fields=["name"], name="studytype_name_idx"),
+        ]
 
     def __str__(self):
         return str(f"{self.id} - {self.name}" if self.name else f"StudyType {self.id}")
@@ -156,6 +167,11 @@ class Schedule(models.Model):
         ordering = ["work_date", "time_start"]
         verbose_name = "Расписание"
         verbose_name_plural = "Расписания"
+        indexes = [
+            models.Index(fields=["doctor", "work_date"], name="schedule_doctor_date_idx"),
+            models.Index(fields=["work_date", "time_start"], name="schedule_date_time_idx"),
+            models.Index(fields=["doctor", "work_date", "is_day_off"], name="schedule_doc_date_dayoff_idx"),
+        ]
 
     def __str__(self):
         return f"Schedule {self.id} - {self.work_date}"
@@ -232,6 +248,14 @@ class Study(models.Model):
         ordering = ["-created_at"]
         verbose_name = "Исследование"
         verbose_name_plural = "Исследования"
+        indexes = [
+            models.Index(fields=["status"], name="study_status_idx"),
+            models.Index(fields=["priority"], name="study_priority_idx"),
+            models.Index(fields=["created_at"], name="study_created_idx"),
+            models.Index(fields=["planned_at"], name="study_planned_idx"),
+            models.Index(fields=["diagnostician", "status"], name="study_diag_status_idx"),
+            models.Index(fields=["status", "planned_at"], name="study_status_planned_idx"),
+        ]
 
     def __str__(self):
         return self.research_number
