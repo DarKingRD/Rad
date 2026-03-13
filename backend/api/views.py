@@ -36,7 +36,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         # Для списка показываем всех врачей, можно фильтровать по is_active
-        queryset = Doctor.objects.all()
+        queryset = super().get_queryset()
         is_active = self.request.query_params.get("is_active")
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active.lower() == "true")
@@ -154,7 +154,7 @@ class ScheduleViewSet(viewsets.ModelViewSet):
     filterset_fields = ["doctor_id", "work_date", "is_day_off"]
 
     def get_queryset(self):
-        queryset = Schedule.objects.all().select_related("doctor")
+        queryset = super().get_queryset()
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
         doctor_id = self.request.query_params.get("doctor_id")
@@ -192,7 +192,7 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ["status", "priority", "diagnostician_id"]
 
     def get_queryset(self):
-        queryset = Study.objects.all().select_related("study_type", "diagnostician")
+        queryset = super().get_queryset()
         status = self.request.query_params.get("status")
         priority = self.request.query_params.get("priority")
         date_from = self.request.query_params.get("date_from")
