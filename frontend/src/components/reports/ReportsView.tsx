@@ -73,14 +73,13 @@ export const ReportsView: React.FC = () => {
     try {
       setLoading(true)
 
-      const [statsRes, chartRes] = await Promise.all([
+      const [stats, chart] = await Promise.all([
         dashboardApi.getStats(appliedDateFrom, appliedDateTo),
         dashboardApi.getChartData(appliedDateFrom, appliedDateTo),
       ])
 
-      const stats = statsRes.data
       setKpiData(stats)
-      setChartData(chartRes.data || [])
+      setChartData(chart || [])
 
       const normalStudies = Math.max(
         0,
