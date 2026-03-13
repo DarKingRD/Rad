@@ -222,6 +222,20 @@ class StudyWithDetailsSerializer(serializers.ModelSerializer):
         model = Study
         fields = "__all__"
 
+class StudyAssignSerializer(serializers.Serializer):
+    doctor_id = serializers.IntegerField(required=True, min_value=1)
+
+    def validate_doctor_id(self, value):
+        if not Doctor.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Врач с таким id не найден")
+        return value
+
+
+class StudyStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=["pending", "confirmed", "signed"],
+        required=True,
+    )
 
 class DashboardStatsSerializer(serializers.Serializer):
     total_studies = serializers.IntegerField()

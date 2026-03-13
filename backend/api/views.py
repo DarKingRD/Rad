@@ -16,12 +16,18 @@ from .serializers import (
     DoctorWithLoadSerializer,
     ScheduleSerializer,
     ScheduleWithDoctorSerializer,
+    StudyAssignSerializer,
     StudySerializer,
+    StudyStatusUpdateSerializer,
     StudyWithDetailsSerializer,
     StudyTypeSerializer,
 )
 from .services.distribution import DistributionService
 from .services.doctor_queries import get_doctors_with_load_context
+from .services.study_queries import (
+    get_pending_studies_queryset,
+    get_priority_studies_queryset,
+)
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -99,13 +105,13 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        status = self.request.query_params.get("status")
+        status_param = self.request.query_params.get("status")
         priority = self.request.query_params.get("priority")
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
 
-        if status:
-            queryset = queryset.filter(status=status)
+        if status_param:
+            queryset = queryset.filter(status=status_param)
         if priority:
             queryset = queryset.filter(priority=priority)
         if date_from:
@@ -117,28 +123,17 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"])
     def pending(self, request):
-        """Ожидающие исследования (без врача) — с пагинацией."""
+        """Ожидающие исследования (без назначенного врача) с пагинацией."""
         page_size = min(int(request.query_params.get("page_size", 100)), 500)
         page = max(int(request.query_params.get("page", 1)), 1)
         offset = (page - 1) * page_size
 
-        qs = (
-            Study.objects.filter(diagnostician_id__isnull=True)
-            .select_related("study_type")
-            .order_by(
-                Case(
-                    When(priority="cito", then=0),
-                    When(priority="asap", then=1),
-                    When(priority="stat", then=2),
-                    default=3,
-                    output_field=IntegerField(),
-                ),
-                "created_at",
-            )
-        )
+        qs = get_pending_studies_queryset()
+
         total = qs.count()
         studies = qs[offset : offset + page_size]
         serializer = StudyWithDetailsSerializer(studies, many=True)
+
         return Response(
             {
                 "results": serializer.data,
@@ -151,44 +146,62 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"])
     def cito(self, request):
-        studies = Study.objects.filter(priority="cito").select_related(
-            "study_type", "diagnostician"
-        )[:100]
+        """CITO исследования."""
+        limit = min(int(request.query_params.get("limit", 100)), 500)
+        studies = get_priority_studies_queryset("cito")[:limit]
         serializer = StudyWithDetailsSerializer(studies, many=True)
         return Response(serializer.data)
 
     @action(detail=False, methods=["get"])
     def asap(self, request):
-        studies = Study.objects.filter(priority="asap").select_related(
-            "study_type", "diagnostician"
-        )[:100]
+        """ASAP исследования."""
+        limit = min(int(request.query_params.get("limit", 100)), 500)
+        studies = get_priority_studies_queryset("asap")[:limit]
         serializer = StudyWithDetailsSerializer(studies, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
     def assign(self, request, pk=None):
+        """Назначить исследование врачу."""
         study = self.get_object()
-        doctor_id = request.data.get("doctor_id")
 
-        if not doctor_id:
-            return Response({"error": "doctor_id required"}, status=400)
+        input_serializer = StudyAssignSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        doctor_id = input_serializer.validated_data["doctor_id"]
 
         study.diagnostician_id = doctor_id
         study.status = "confirmed"
-        study.save()
+        study.save(update_fields=["diagnostician_id", "status"])
 
-        return Response({"status": "assigned", "doctor_id": doctor_id})
+        output_serializer = StudyWithDetailsSerializer(
+            study,
+            context=self.get_serializer_context(),
+        )
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["put"])
+    @action(detail=True, methods=["put", "patch"])
     def update_status(self, request, pk=None):
+        """Обновить статус исследования."""
         study = self.get_object()
-        new_status = request.data.get("status")
 
-        if new_status:
-            study.status = new_status
-            study.save()
+        input_serializer = StudyStatusUpdateSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
 
-        return Response({"status": study.status})
+        new_status = input_serializer.validated_data["status"]
+        study.status = new_status
+
+        if new_status == "pending":
+            study.diagnostician_id = None
+            study.save(update_fields=["status", "diagnostician_id"])
+        else:
+            study.save(update_fields=["status"])
+
+        output_serializer = StudyWithDetailsSerializer(
+            study,
+            context=self.get_serializer_context(),
+        )
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
 
     def get_serializer_class(self):
         if self.action in ["list", "retrieve", "pending", "cito", "asap"]:
