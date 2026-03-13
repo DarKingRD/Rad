@@ -1,25 +1,19 @@
 from datetime import datetime, timedelta
 import uuid
-from django.utils import timezone
+
 from django.core.cache import cache
-from django.db.models import (
-    Case,
-    F,
-    IntegerField,
-    Min,
-    Max,
-    Sum,
-    When,
-)
+from django.db.models import Case, F, IntegerField, Max, Min, Sum, When
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
-from .models import Doctor, Study, StudyType, Schedule
+from .models import Doctor, Schedule, Study, StudyType
 from .serializers import (
     ChartDataSerializer,
     DashboardStatsSerializer,
     DoctorSerializer,
+    DoctorWithLoadSerializer,
     ScheduleSerializer,
     ScheduleWithDoctorSerializer,
     StudySerializer,
@@ -27,6 +21,7 @@ from .serializers import (
     StudyTypeSerializer,
 )
 from .services.distribution import DistributionService
+from .services.doctor_queries import get_doctors_with_load_context
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -35,7 +30,6 @@ class DoctorViewSet(viewsets.ModelViewSet):
     pagination_class = None
 
     def get_queryset(self):
-        # Для списка показываем всех врачей, можно фильтровать по is_active
         queryset = super().get_queryset()
         is_active = self.request.query_params.get("is_active")
         if is_active is not None:
@@ -44,102 +38,15 @@ class DoctorViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def with_load(self, request):
-        """Врачи с текущей загрузкой ЗА ТЕКУЩИЙ МЕСЯЦ + расписание на сегодня"""
+        """Врачи с текущей загрузкой за текущий месяц + расписание на сегодня."""
+        doctors_qs, today_schedules = get_doctors_with_load_context()
 
-        now = timezone.now()
-        today = now.date()
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-        if now.month == 12:
-            month_end = now.replace(year=now.year + 1, month=1, day=1)
-        else:
-            month_end = now.replace(month=now.month + 1, day=1)
-
-
-        doctors = Doctor.objects.all()
-
-        # Расписание на сегодня — одним запросом для всех врачей
-        today_schedules = {
-            s.doctor_id: s
-            for s in Schedule.objects.filter(work_date=today, is_day_off=0)
-        }
-
-        data = []
-        for doctor in doctors:
-            up_data = Study.objects.filter(
-                diagnostician=doctor,
-                created_at__gte=month_start,
-                created_at__lt=month_end,
-                status__in=["confirmed", "pending", "signed"],
-            ).aggregate(
-                total_up=Sum(F("study_type__up_value")),
-                active_count=Sum(
-                    Case(
-                        When(status__in=["confirmed", "pending"], then=1),
-                        default=0,
-                        output_field=IntegerField(),
-                    )
-                ),
-            )
-
-            current_load = round(up_data["total_up"] or 0, 3)
-            active_studies = up_data["active_count"] or 0
-
-            # Дневной лимит из модели, fallback по должности
-            daily_limit = doctor.max_up_per_day or (
-                6 if doctor.position_type == "head" else 8
-            )
-
-            # Месячная норма = дневной лимит × рабочие дни месяца
-            monthly_norm = 50
-
-            # Расписание на сегодня
-            sch = today_schedules.get(doctor.id)
-
-            def fmt_time(t):
-                return t.strftime("%H:%M") if t else None
-
-            def break_duration(s):
-                if s and s.break_start and s.break_end:
-                    from datetime import datetime, date as dclass
-                    bs = datetime.combine(dclass.today(), s.break_start)
-                    be = datetime.combine(dclass.today(), s.break_end)
-                    delta = (be - bs).total_seconds()
-                    return int(delta // 60) if delta > 0 else 0
-                return 0
-
-            data.append(
-                {
-                    "id": doctor.id,
-                    "fio_alias": doctor.fio_alias or f"Врач {doctor.id}",
-                    "position_type": doctor.position_type,
-                    "max_up_per_day": daily_limit,
-                    "is_active": (
-                        doctor.is_active if doctor.is_active is not None else True
-                    ),
-                    "specialty": (
-                        "Рентгенолог"
-                        if doctor.position_type == "radiologist"
-                        else "КТ-диагност"
-                    ),
-                    "modality": doctor.modality or [],
-                    "current_load": current_load,
-                    "max_load": monthly_norm,
-                    "active_studies": active_studies,
-                    "load_percentage": (
-                        round((current_load / monthly_norm) * 100, 1)
-                        if monthly_norm > 0 else 0
-                    ),
-                    # Расписание на сегодня
-                    "today_shift_start": fmt_time(sch.time_start) if sch else None,
-                    "today_shift_end":   fmt_time(sch.time_end)   if sch else None,
-                    "today_break_start": fmt_time(sch.break_start) if sch else None,
-                    "today_break_end":   fmt_time(sch.break_end)   if sch else None,
-                    "today_break_minutes": break_duration(sch),
-                }
-            )
-
-        return Response(data)
+        serializer = DoctorWithLoadSerializer(
+            doctors_qs,
+            many=True,
+            context={"today_schedules": today_schedules},
+        )
+        return Response(serializer.data)
 
 
 class StudyTypeViewSet(viewsets.ReadOnlyModelViewSet):
@@ -173,7 +80,6 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def by_date(self, request):
-        """Расписание на конкретную дату"""
         date = request.query_params.get("date")
         if not date:
             return Response({"error": "Date parameter required"}, status=400)
@@ -211,7 +117,7 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"])
     def pending(self, request):
-        """Ожидающие исследования (без врача) — с пагинацией"""
+        """Ожидающие исследования (без врача) — с пагинацией."""
         page_size = min(int(request.query_params.get("page_size", 100)), 500)
         page = max(int(request.query_params.get("page", 1)), 1)
         offset = (page - 1) * page_size
@@ -233,17 +139,18 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
         total = qs.count()
         studies = qs[offset : offset + page_size]
         serializer = StudyWithDetailsSerializer(studies, many=True)
-        return Response({
-            "results": serializer.data,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size,
-        })
+        return Response(
+            {
+                "results": serializer.data,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size,
+            }
+        )
 
     @action(detail=False, methods=["get"])
     def cito(self, request):
-        """CITO исследования"""
         studies = Study.objects.filter(priority="cito").select_related(
             "study_type", "diagnostician"
         )[:100]
@@ -252,7 +159,6 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"])
     def asap(self, request):
-        """ASAP исследования"""
         studies = Study.objects.filter(priority="asap").select_related(
             "study_type", "diagnostician"
         )[:100]
@@ -261,7 +167,6 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"])
     def assign(self, request, pk=None):
-        """Назначить исследование врачу"""
         study = self.get_object()
         doctor_id = request.data.get("doctor_id")
 
@@ -276,7 +181,6 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["put"])
     def update_status(self, request, pk=None):
-        """Обновить статус исследования"""
         study = self.get_object()
         new_status = request.data.get("status")
 
@@ -420,14 +324,12 @@ def distribute_studies_view(request):
     - Фильтрации по периоду создания исследований
     """
     if request.method == "POST":
-        # Получаем параметры
         target_date_str = request.data.get("date")
-        preview = request.data.get("preview", True)  # По умолчанию превью
+        preview = request.data.get("preview", True)
         date_from_str = request.data.get("date_from")
         date_to_str = request.data.get("date_to")
         use_mip = request.data.get("use_mip", True)
 
-        # Парсим дату распределения
         target_date = None
         if target_date_str:
             try:
@@ -438,7 +340,6 @@ def distribute_studies_view(request):
                     status=400,
                 )
 
-        # Парсим период исследований
         date_from = None
         date_to = None
         if date_from_str:
@@ -460,17 +361,17 @@ def distribute_studies_view(request):
                 use_mip=use_mip, date_from=date_from, date_to=date_to
             )
 
-            # Если это превью - сохраняем результат во временное хранилище
             if preview:
                 distribution_id = str(uuid.uuid4())
                 cache.set(
                     f"distribution_preview_{distribution_id}",
                     result,
-                    timeout=3600,  # 1 час
+                    timeout=3600,
                 )
                 result["distribution_id"] = distribution_id
                 result["message"] = (
-                    "Предварительное распределение выполнено. Отправьте POST на /api/distribute/confirm/ для сохранения."
+                    "Предварительное распределение выполнено. "
+                    "Отправьте POST на /api/distribute/confirm/ для сохранения."
                 )
 
             return Response(result, status=200)
@@ -481,87 +382,77 @@ def distribute_studies_view(request):
                 status=500,
             )
 
-    else:  # GET - информация о доступных данных
-        # Получаем диапазон доступных дат с исследованиями
-        date_range = Study.objects.aggregate(
-            min_date=Min("created_at__date"),
-            max_date=Max("created_at__date"),
-        )
+    date_range = Study.objects.aggregate(
+        min_date=Min("created_at__date"),
+        max_date=Max("created_at__date"),
+    )
 
-        # Получаем диапазон дат с расписаниями врачей
-        schedule_range = Schedule.objects.aggregate(
-            min_date=Min("work_date"), max_date=Max("work_date")
-        )
+    schedule_range = Schedule.objects.aggregate(
+        min_date=Min("work_date"), max_date=Max("work_date")
+    )
 
-        pending = Study.objects.filter(diagnostician__isnull=True).count()
-        today = timezone.now().date()
+    pending = Study.objects.filter(diagnostician__isnull=True).count()
+    today = timezone.now().date()
 
-        doctors = (
-            Doctor.objects.filter(
-                is_active=True, schedule__work_date=today, schedule__is_day_off=0
-            )
-            .distinct()
-            .count()
+    doctors = (
+        Doctor.objects.filter(
+            is_active=True, schedule__work_date=today, schedule__is_day_off=0
         )
+        .distinct()
+        .count()
+    )
 
-        return Response(
-            {
-                "pending_studies": pending,
-                "available_doctors": doctors,
-                "study_date_range": {
-                    "min": date_range["min_date"].isoformat()
-                    if date_range["min_date"]
-                    else None,
-                    "max": date_range["max_date"].isoformat()
-                    if date_range["max_date"]
-                    else None,
-                },
-                "schedule_date_range": {
-                    "min": schedule_range["min_date"].isoformat()
-                    if schedule_range["min_date"]
-                    else None,
-                    "max": schedule_range["max_date"].isoformat()
-                    if schedule_range["max_date"]
-                    else None,
-                },
-                "message": "Отправьте POST-запрос с параметром date для распределения",
-            }
-        )
+    return Response(
+        {
+            "pending_studies": pending,
+            "available_doctors": doctors,
+            "study_date_range": {
+                "min": date_range["min_date"].isoformat()
+                if date_range["min_date"]
+                else None,
+                "max": date_range["max_date"].isoformat()
+                if date_range["max_date"]
+                else None,
+            },
+            "schedule_date_range": {
+                "min": schedule_range["min_date"].isoformat()
+                if schedule_range["min_date"]
+                else None,
+                "max": schedule_range["max_date"].isoformat()
+                if schedule_range["max_date"]
+                else None,
+            },
+            "message": "Отправьте POST-запрос с параметром date для распределения",
+        }
+    )
 
 
 @api_view(["POST"])
 def confirm_distribution(request):
-    """
-    Подтверждение и сохранение распределения в БД.
-    Request: POST /api/distribute/confirm/
-    Body: {"distribution_id": "uuid-из-превью"}
-    """
     distribution_id = request.data.get("distribution_id")
 
     if not distribution_id:
         return Response({"error": "distribution_id обязателен"}, status=400)
 
-    # Получаем сохранённое превью
     preview_data = cache.get(f"distribution_preview_{distribution_id}")
 
     if not preview_data:
         return Response(
-            {"error": "Распределение не найдено или истекло время (1 час)"}, status=404
+            {"error": "Распределение не найдено или истекло время (1 час)"},
+            status=404,
         )
 
     try:
         from .models import Study
 
-        # Повторно выполняем распределение, но уже с сохранением
         target_date_str = preview_data.get("target_date")
         target_date = None
         if target_date_str:
             target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
 
         service = DistributionService(target_date=target_date)
-        service.set_preview_mode(False)  # Теперь сохраняем
+        service.set_preview_mode(False)
 
-        # Получаем assignments из превью и сохраняем
         assignments = preview_data.get("assignments", [])
         assignment_dict = {
             a.get("study_number"): a["doctor_id"]
@@ -569,13 +460,11 @@ def confirm_distribution(request):
             if a.get("study_number")
         }
 
-        # Сохраняем в БД (PK у Study — research_number, не id)
         for study_id, doc_id in assignment_dict.items():
             Study.objects.filter(research_number=study_id).update(
                 diagnostician_id=doc_id, status="confirmed"
             )
 
-        # Очищаем кэш
         cache.delete(f"distribution_preview_{distribution_id}")
 
         return Response(
@@ -596,10 +485,6 @@ def confirm_distribution(request):
 
 @api_view(["GET"])
 def distribution_preview(request):
-    """
-    Быстрый превью без выполнения распределения.
-    Показывает сколько исследований и врачей доступно на дату.
-    """
     date_str = request.query_params.get("date")
 
     target_date = None

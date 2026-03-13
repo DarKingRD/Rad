@@ -1,5 +1,15 @@
+from datetime import datetime, date as d
+
 from rest_framework import serializers
+
 from .models import Doctor, StudyType, Schedule, Study
+from .services.doctor_queries import (
+    MONTHLY_NORM,
+    format_time_hhmm,
+    get_break_duration_minutes,
+    get_daily_limit,
+    get_doctor_specialty,
+)
 
 
 class DoctorSerializer(serializers.ModelSerializer):
@@ -19,34 +29,93 @@ class DoctorSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "specialty"]
 
     def validate_max_up_per_day(self, value):
-        if value < 0:
-            raise serializers.ValidationError("Максимальное количество УП не может быть отрицательным")
+        if value is not None and value < 0:
+            raise serializers.ValidationError(
+                "Максимальное количество УП не может быть отрицательным"
+            )
         return value
 
     def validate_fio_alias(self, value):
         if value and len(value.strip()) < 2:
-            raise serializers.ValidationError("ФИО должно содержать минимум 2 символа")
+            raise serializers.ValidationError(
+                "ФИО должно содержать минимум 2 символа"
+            )
         return value.strip() if value else None
-    
+
     def get_specialty(self, obj):
-        if obj.position_type == "radiologist":
-            return "Рентгенолог"
-        elif obj.position_type == "diagnostician":
-            return "КТ-диагност"
-        return obj.position_type or ""
+        return get_doctor_specialty(obj)
 
 
 class DoctorWithLoadSerializer(DoctorSerializer):
-    current_load = serializers.IntegerField(default=0)
-    max_load = serializers.IntegerField(default=50)
-    active_studies = serializers.IntegerField(default=0)
+    current_load = serializers.SerializerMethodField()
+    max_load = serializers.SerializerMethodField()
+    active_studies = serializers.IntegerField(read_only=True, default=0)
+    load_percentage = serializers.SerializerMethodField()
+
+    today_shift_start = serializers.SerializerMethodField()
+    today_shift_end = serializers.SerializerMethodField()
+    today_break_start = serializers.SerializerMethodField()
+    today_break_end = serializers.SerializerMethodField()
+    today_break_minutes = serializers.SerializerMethodField()
 
     class Meta(DoctorSerializer.Meta):
         fields = DoctorSerializer.Meta.fields + [
             "current_load",
             "max_load",
             "active_studies",
+            "load_percentage",
+            "today_shift_start",
+            "today_shift_end",
+            "today_break_start",
+            "today_break_end",
+            "today_break_minutes",
         ]
+
+    def _get_schedule(self, obj):
+        today_schedules = self.context.get("today_schedules", {})
+        return today_schedules.get(obj.id)
+
+    def get_current_load(self, obj):
+        value = getattr(obj, "current_load", 0) or 0
+        return round(float(value), 3)
+
+    def get_max_load(self, obj):
+        return MONTHLY_NORM
+
+    def get_load_percentage(self, obj):
+        current_load = self.get_current_load(obj)
+        max_load = self.get_max_load(obj)
+        return round((current_load / max_load) * 100, 1) if max_load > 0 else 0
+
+    def get_today_shift_start(self, obj):
+        schedule = self._get_schedule(obj)
+        return format_time_hhmm(schedule.time_start) if schedule else None
+
+    def get_today_shift_end(self, obj):
+        schedule = self._get_schedule(obj)
+        return format_time_hhmm(schedule.time_end) if schedule else None
+
+    def get_today_break_start(self, obj):
+        schedule = self._get_schedule(obj)
+        return format_time_hhmm(schedule.break_start) if schedule else None
+
+    def get_today_break_end(self, obj):
+        schedule = self._get_schedule(obj)
+        return format_time_hhmm(schedule.break_end) if schedule else None
+
+    def get_today_break_minutes(self, obj):
+        schedule = self._get_schedule(obj)
+        return get_break_duration_minutes(schedule)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["fio_alias"] = instance.fio_alias or f"Врач {instance.id}"
+        data["max_up_per_day"] = get_daily_limit(instance)
+        data["is_active"] = (
+            instance.is_active if instance.is_active is not None else True
+        )
+        data["modality"] = instance.modality or []
+        return data
 
 
 class StudyTypeSerializer(serializers.ModelSerializer):
@@ -77,25 +146,20 @@ class ScheduleSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "doctor_name", "break_duration_minutes"]
 
     def get_break_duration_minutes(self, obj) -> int:
-        """Длительность перерыва в минутах — для удобства фронтенда."""
-        if obj.break_start and obj.break_end:
-            from datetime import datetime, date as d
-            bs = datetime.combine(d.today(), obj.break_start)
-            be = datetime.combine(d.today(), obj.break_end)
-            delta = (be - bs).total_seconds()
-            return int(delta // 60) if delta > 0 else 0
-        return 0
+        return get_break_duration_minutes(obj)
 
     def validate_planned_up(self, value):
-        if value < 0:
-            raise serializers.ValidationError("Планируемое количество УП не может быть отрицательным")
+        if value is not None and value < 0:
+            raise serializers.ValidationError(
+                "Планируемое количество УП не может быть отрицательным"
+            )
         return value
 
     def validate(self, attrs):
-        time_start  = attrs.get('time_start')
-        time_end    = attrs.get('time_end')
-        break_start = attrs.get('break_start')
-        break_end   = attrs.get('break_end')
+        time_start = attrs.get("time_start")
+        time_end = attrs.get("time_end")
+        break_start = attrs.get("break_start")
+        break_end = attrs.get("break_end")
 
         if time_start and time_end and time_start >= time_end:
             raise serializers.ValidationError(
@@ -136,13 +200,7 @@ class ScheduleWithDoctorSerializer(serializers.ModelSerializer):
         ]
 
     def get_break_duration_minutes(self, obj) -> int:
-        if obj.break_start and obj.break_end:
-            from datetime import datetime, date as d
-            bs = datetime.combine(d.today(), obj.break_start)
-            be = datetime.combine(d.today(), obj.break_end)
-            delta = (be - bs).total_seconds()
-            return int(delta // 60) if delta > 0 else 0
-        return 0
+        return get_break_duration_minutes(obj)
 
 
 class StudySerializer(serializers.ModelSerializer):
@@ -151,7 +209,7 @@ class StudySerializer(serializers.ModelSerializer):
         fields = "__all__"
 
     def validate_priority(self, value):
-        if value not in ['normal', 'cito', 'asap']:
+        if value not in ["normal", "cito", "asap"]:
             raise serializers.ValidationError("Недопустимое значение приоритета")
         return value
 
