@@ -28,6 +28,11 @@ from .services.study_queries import (
     get_pending_studies_queryset,
     get_priority_studies_queryset,
 )
+from .services.dashboard_queries import (
+    get_chart_data,
+    get_dashboard_stats_data,
+    parse_dashboard_range,
+)
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -218,60 +223,15 @@ def dashboard_stats(request):
     date_from = request.query_params.get("date_from")
     date_to = request.query_params.get("date_to")
 
-    if not date_from or not date_to:
-        now = timezone.now()
-        date_from_obj = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        date_to_obj = now
-    else:
-        try:
-            date_from_obj = datetime.strptime(date_from, "%Y-%m-%d")
-            date_to_obj = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
-        except ValueError:
-            return Response(
-                {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
-                status=400,
-            )
-
-    studies_qs = Study.objects.filter(
-        created_at__gte=date_from_obj,
-        created_at__lt=date_to_obj,
-    )
-
-    total_studies = studies_qs.count()
-    completed_studies = studies_qs.filter(status="signed").count()
-    pending_studies = studies_qs.filter(diagnostician_id__isnull=True).count()
-
-    active_doctors = (
-        Doctor.objects.filter(
-            studies__created_at__gte=date_from_obj,
-            studies__created_at__lt=date_to_obj,
+    try:
+        start_dt, end_dt = parse_dashboard_range(date_from, date_to)
+    except ValueError:
+        return Response(
+            {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+            status=400,
         )
-        .distinct()
-        .count()
-    )
 
-    cito_studies = studies_qs.filter(priority="cito").count()
-    asap_studies = studies_qs.filter(priority="asap").count()
-
-    total_up = (
-        studies_qs.filter(diagnostician_id__isnull=False)
-        .aggregate(total=Sum(F("study_type__up_value")))
-        .get("total")
-        or 0
-    )
-
-    avg_load = int(total_up / active_doctors) if active_doctors > 0 else 0
-
-    data = {
-        "total_studies": total_studies,
-        "completed_studies": completed_studies,
-        "pending_studies": pending_studies,
-        "active_doctors": active_doctors,
-        "avg_load_per_doctor": avg_load,
-        "cito_studies": cito_studies,
-        "asap_studies": asap_studies,
-    }
-
+    data = get_dashboard_stats_data(start_dt, end_dt)
     serializer = DashboardStatsSerializer(data)
     return Response(serializer.data)
 
@@ -285,19 +245,21 @@ def chart_data(request):
     date_from = request.query_params.get("date_from")
     date_to = request.query_params.get("date_to")
 
-    if not date_from or not date_to:
-        now = timezone.now()
-        start_date = now.replace(day=1).date()
-        end_date = now.date()
-    else:
-        try:
-            start_date = datetime.strptime(date_from, "%Y-%m-%d").date()
-            end_date = datetime.strptime(date_to, "%Y-%m-%d").date()
-        except ValueError:
-            return Response(
-                {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
-                status=400,
-            )
+    try:
+        start_dt, end_dt = parse_dashboard_range(date_from, date_to)
+    except ValueError:
+        return Response(
+            {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+            status=400,
+        )
+
+    start_date = start_dt.date()
+    end_date = end_dt.date() if end_dt.time() != datetime.min.time() else end_dt.date()
+
+    # Так как parse_dashboard_range для переданного date_to возвращает exclusive end_dt (+1 day),
+    # для графика нужно вернуть последний реальный день периода.
+    if date_from and date_to:
+        end_date = (end_dt - timedelta(days=1)).date()
 
     if start_date > end_date:
         return Response(
@@ -305,25 +267,7 @@ def chart_data(request):
             status=400,
         )
 
-    data = []
-    current_date = start_date
-
-    while current_date <= end_date:
-        studies = Study.objects.filter(created_at__date=current_date)
-
-        plan = studies.count()
-        actual = studies.filter(status="signed").count()
-
-        data.append(
-            {
-                "name": current_date.strftime("%d.%m"),
-                "plan": plan,
-                "actual": actual,
-            }
-        )
-
-        current_date += timedelta(days=1)
-
+    data = get_chart_data(start_date, end_date)
     serializer = ChartDataSerializer(data, many=True)
     return Response(serializer.data)
 
