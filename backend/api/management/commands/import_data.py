@@ -229,8 +229,27 @@ class Command(BaseCommand):
             f"  Диагностов с модальностями из исследований: {len(diag_modalities)}"
         )
 
-        df = pd.read_csv(csv_path, encoding="utf-8-sig")
-        id_col = df.columns[0]
+        doctor_cols = [
+        "id",
+        "snils",
+        "fio",
+        "fio_alias",
+        "gender",
+        "position_type",
+        "work_end",
+        "work_start",
+        "is_chief",
+        "is_nord_region",
+    ]
+
+        df = pd.read_csv(
+        csv_path,
+        encoding="utf-8-sig",
+        skiprows=1,
+        names=doctor_cols,
+    )
+
+        id_col = "id"
 
         created = updated = skipped = 0
 
