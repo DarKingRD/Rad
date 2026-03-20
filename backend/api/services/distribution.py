@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
@@ -31,7 +32,6 @@ from typing import Dict, List, Optional, Set, Tuple
 from django.utils import timezone
 
 from api.models import Schedule, Study
-
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +144,73 @@ class DoctorData:
         return max(0.0, gross - self.break_minutes / 60.0)
 
     @property
+
     def free_up(self) -> float:
         return max(0.0, self.max_up - self.used_up)
+
+
+@dataclass
+class MIPPreparedData:
+    pairs: List[Tuple[int, int]]
+    d_h: List[float]
+    remaining_h_by_doctor: Dict[int, float]
+    assign_cost: Dict[Tuple[int, int], float]
+    unassigned_cost: Dict[int, float]
+
+
+class ObjectiveStrategy(ABC):
+    code: str = "base"
+    description: str = "Base objective"
+
+    @abstractmethod
+    def build_objective(
+        self,
+        prob,
+        x,
+        studies: List["StudyData"],
+        doctors: List["DoctorData"],
+        prepared: MIPPreparedData,
+        pulp_module,
+    ) -> None:
+        raise NotImplementedError
+
+
+class WeightedTardinessObjective(ObjectiveStrategy):
+    code = "weighted_tardiness"
+    description = "MIN Σ assign_cost(i,j)*x(i,j) + Σ unassigned_cost(i)*(1-Σx(i,j))"
+
+    def build_objective(
+        self,
+        prob,
+        x,
+        studies: List["StudyData"],
+        doctors: List["DoctorData"],
+        prepared: MIPPreparedData,
+        pulp_module,
+    ) -> None:
+        prob += (
+            pulp_module.lpSum(
+                prepared.assign_cost[(i, j)] * x[(i, j)]
+                for (i, j) in prepared.pairs
+            )
+            + pulp_module.lpSum(
+                prepared.unassigned_cost[i]
+                * (
+                    1
+                    - pulp_module.lpSum(
+                        x[(ii, jj)]
+                        for (ii, jj) in prepared.pairs
+                        if ii == i
+                    )
+                )
+                for i in range(len(studies))
+            )
+        ), "Obj"
+
+
+OBJECTIVE_REGISTRY: Dict[str, type[ObjectiveStrategy]] = {
+    WeightedTardinessObjective.code: WeightedTardinessObjective,
+}
 
 
 # ==============================================================================
@@ -158,15 +223,48 @@ class DistributionService:
         self,
         target_date: Optional[datetime] = None,
         preview_mode: bool = False,
+        objective: Optional[ObjectiveStrategy | str] = None,
     ):
         self.now = timezone.now()
         self.target_date = target_date or self.now.date()
         self.preview_mode = preview_mode
+        self.objective = self._resolve_objective(objective)
         self._debug: List[str] = []
 
     def set_preview_mode(self, preview: bool = True):
         "Включить/выключить режим предпросмотра (не сохранять назначения)"
         self.preview_mode = preview
+
+    def _resolve_objective(
+        self, objective: Optional[ObjectiveStrategy | str]
+    ) -> ObjectiveStrategy:
+        if objective is None:
+            return WeightedTardinessObjective() # Здесь можно выбрать модель, которую мы используем для распределения
+        if isinstance(objective, ObjectiveStrategy):
+            return objective
+        if isinstance(objective, str):
+            key = objective.strip().lower()
+            cls = OBJECTIVE_REGISTRY.get(key)
+            if cls is None:
+                available = ", ".join(sorted(OBJECTIVE_REGISTRY))
+                raise ValueError(
+                    f"Неизвестная objective='{objective}'. Доступно: {available}"
+                )
+            return cls()
+        raise TypeError("objective должен быть None, строкой или ObjectiveStrategy")
+
+    def set_objective(self, objective: ObjectiveStrategy | str) -> None:
+        self.objective = self._resolve_objective(objective)
+        self._log(
+            f"Установлена целевая функция: "
+            f"{self.objective.code} | {self.objective.description}"
+        )
+
+    def _objective_meta(self) -> Dict[str, str]:
+        return {
+            "code": self.objective.code,
+            "description": self.objective.description,
+        }
 
     def _log(self, msg: str):
         logger.info(msg)
@@ -517,51 +615,24 @@ class DistributionService:
 
     # ── MIP ─────────────────────────────────────────────────────────
 
-    def solve_mip(
+    def _prepare_mip_data(
         self,
         studies: List[StudyData],
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> Dict[str, int]:
-        try:
-            import pulp
-        except ImportError:
-            self._log("PuLP не установлен → жадный (pip install pulp для MIP)")
-            return self.solve_greedy(
-                studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
-            )
-
-        self._log(f"MIP без батчинга: {len(studies)} исследований в одной задаче")
-        return self._solve_mip_single(studies, doctors, doc_prebooked_minutes)
-
-    def _solve_mip_single(
-        self,
-        studies: List[StudyData],
-        doctors: List[DoctorData],
-        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> Dict[str, int]:
-        import pulp
-
-        n, m = len(studies), len(doctors)
-        self._log(f"MIP: {n} × {m}")
-
+    ) -> MIPPreparedData:
         pairs = [
             (i, j)
             for i, s in enumerate(studies)
             for j, d in enumerate(doctors)
             if self._modality_ok(s.modality, d.modality)
         ]
-        self._log(f"  Совместимых пар: {len(pairs)}")
-        if not pairs:
-            self._log("  Нет совместимых пар → жадный fallback")
-            return self.solve_greedy(
-                studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
-            )
 
         d_h = [(s.deadline - self.now).total_seconds() / 3600.0 for s in studies]
         remaining_h_by_doctor: Dict[int, float] = {}
         assign_cost: Dict[Tuple[int, int], float] = {}
 
+        pair_set = set(pairs)
         for j, d in enumerate(doctors):
             prebooked_minutes = (doc_prebooked_minutes or {}).get(d.id, 0.0)
             remaining_minutes = self._remaining_work_minutes(d, prebooked_minutes)
@@ -574,7 +645,7 @@ class DistributionService:
             )
 
             for i, _ in enumerate(studies):
-                if (i, j) not in pairs:
+                if (i, j) not in pair_set:
                     continue
 
                 finish_dt = self._completion_after_load(
@@ -598,50 +669,118 @@ class DistributionService:
             i: studies[i].weight
             * (max(0.0, -d_h[i]) + horizon_h + studies[i].duration_hours)
             + 1.0
-            for i in range(n)
+            for i in range(len(studies))
         }
 
-        prob = pulp.LpProblem("PMWT_assignment_proxy", pulp.LpMinimize)
+        return MIPPreparedData(
+            pairs=pairs,
+            d_h=d_h,
+            remaining_h_by_doctor=remaining_h_by_doctor,
+            assign_cost=assign_cost,
+            unassigned_cost=unassigned_cost,
+        )
 
-        x = {(i, j): pulp.LpVariable(f"x_{i}_{j}", cat="Binary") for (i, j) in pairs}
-
-        prob += (
-            pulp.lpSum(assign_cost[(i, j)] * x[(i, j)] for (i, j) in pairs)
-            + pulp.lpSum(
-                unassigned_cost[i]
-                * (
-                    1
-                    - pulp.lpSum(
-                        x[(i, j)] for (ii, jj) in pairs if ii == i for j in [jj]
-                    )
-                )
-                for i in range(n)
-            )
-        ), "Obj"
-
-        for i in range(n):
-            row = [x[(i, j)] for (ii, jj) in pairs if ii == i for j in [jj]]
+    def _add_standard_constraints(
+        self,
+        prob,
+        x,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        prepared: MIPPreparedData,
+        pulp_module,
+    ) -> None:
+        for i in range(len(studies)):
+            row = [x[(ii, jj)] for (ii, jj) in prepared.pairs if ii == i]
             if row:
-                prob += pulp.lpSum(row) <= 1, f"A{i}"
+                prob += pulp_module.lpSum(row) <= 1, f"A{i}"
 
         for j, d in enumerate(doctors):
             col_up = [
-                studies[i].up_value * x[(i, j)]
-                for (ii, jj) in pairs
+                studies[i].up_value * x[(ii, jj)]
+                for (ii, jj) in prepared.pairs
                 if jj == j
                 for i in [ii]
             ]
             if col_up:
-                prob += pulp.lpSum(col_up) <= d.max_up, f"UP{j}"
+                prob += pulp_module.lpSum(col_up) <= d.max_up, f"UP{j}"
 
             col_time = [
-                studies[i].duration_hours * x[(i, j)]
-                for (ii, jj) in pairs
+                studies[i].duration_hours * x[(ii, jj)]
+                for (ii, jj) in prepared.pairs
                 if jj == j
                 for i in [ii]
             ]
             if col_time:
-                prob += pulp.lpSum(col_time) <= remaining_h_by_doctor[j], f"TM{j}"
+                prob += (
+                    pulp_module.lpSum(col_time) <= prepared.remaining_h_by_doctor[j],
+                    f"TM{j}",
+                )
+
+    def solve_mip(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
+    ) -> Dict[str, int]:
+        try:
+            import pulp
+        except ImportError:
+            self._log("PuLP не установлен → жадный (pip install pulp для MIP)")
+            return self.solve_greedy(
+                studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
+            )
+
+        self._log(f"MIP: {len(studies)} исследований в одной задаче")
+        return self._solve_mip_single(studies, doctors, doc_prebooked_minutes)
+
+    def _solve_mip_single(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
+    ) -> Dict[str, int]:
+        import pulp
+
+        n, m = len(studies), len(doctors)
+        self._log(f"MIP: {n} × {m}")
+        self._log(
+            f"Целевая функция: {self.objective.code} | {self.objective.description}"
+        )
+
+        prepared = self._prepare_mip_data(
+            studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
+        )
+
+        self._log(f"  Совместимых пар: {len(prepared.pairs)}")
+        if not prepared.pairs:
+            self._log("  Нет совместимых пар → жадный fallback")
+            return self.solve_greedy(
+                studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
+            )
+
+        prob = pulp.LpProblem("Flexible_assignment_model", pulp.LpMinimize)
+        x = {
+            (i, j): pulp.LpVariable(f"x_{i}_{j}", cat="Binary")
+            for (i, j) in prepared.pairs
+        }
+
+        self.objective.build_objective(
+            prob=prob,
+            x=x,
+            studies=studies,
+            doctors=doctors,
+            prepared=prepared,
+            pulp_module=pulp,
+        )
+
+        self._add_standard_constraints(
+            prob=prob,
+            x=x,
+            studies=studies,
+            doctors=doctors,
+            prepared=prepared,
+            pulp_module=pulp,
+        )
 
         try:
             solver = pulp.PULP_CBC_CMD(
@@ -656,18 +795,17 @@ class DistributionService:
                 1
                 for i in range(n)
                 if any(
-                    (pulp.value(x[(i, j)]) or 0) > 0.5
-                    for (ii, jj) in pairs
+                    (pulp.value(x[(ii, jj)]) or 0) > 0.5
+                    for (ii, jj) in prepared.pairs
                     if ii == i
-                    for j in [jj]
                 )
             )
             self._log(
-                f"CBC: статус={status}, proxy_obj={obj:.2f}, назначено={n_assigned}/{n}"
+                f"CBC: статус={status}, obj={obj:.2f}, назначено={n_assigned}/{n}"
             )
 
             result: Dict[str, int] = {}
-            for i, j in pairs:
+            for i, j in prepared.pairs:
                 val = pulp.value(x[(i, j)])
                 if val is not None and val > 0.5:
                     result[studies[i].research_number] = doctors[j].id
@@ -744,6 +882,9 @@ class DistributionService:
         self._log(f"Время: {self.now}")
         self._log(f"Целевая дата: {self.target_date}")
         self._log(f"Режим предпросмотра: {self.preview_mode}")
+        self._log(
+            f"Целевая функция: {self.objective.code} | {self.objective.description}"
+        )
         self._log("=" * 60)
 
         doctors = self.load_doctors()
@@ -870,10 +1011,11 @@ class DistributionService:
                 for d in doctors
             ],
             "priority_stats": pstats,
-            "objective_function": f"MIN Z = Σ wᵢ×Tᵢ (Pm|rⱼ|ΣwⱼTⱼ) = {z}",
+            "objective_function": self._objective_meta(),
+            "reported_weighted_tardiness": z,
             "message": (
                 f"Оффлайн: назначено {n_asgn} из {len(studies)}. "
-                f"CITO: {n_cito_assigned}/{n_cito_total}. Z={z}"
+                f"CITO: {n_cito_assigned}/{n_cito_total}. objective={self.objective.code}, Z={z}"
             ),
             "_debug": self._debug,
             "preview_mode": self.preview_mode,
@@ -891,7 +1033,8 @@ class DistributionService:
             "assignments": [],
             "doctor_stats": [],
             "priority_stats": {"cito": 0, "asap": 0, "normal": 0},
-            "objective_function": "Z = 0",
+            "objective_function": {"code": "none", "description": "Нет рассчитанной цели"},
+            "reported_weighted_tardiness": 0.0,
             "message": message,
             "_debug": self._debug,
         }
