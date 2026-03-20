@@ -6,37 +6,41 @@
 записи в базе данных для всех основных сущностей системы.
 """
 from django.contrib import admin
-from django.utils.html import format_html
 from .models import Doctor, StudyType, Schedule, Study
 
+
+class ModalityListFilter(admin.SimpleListFilter):
+    title = 'Модальность'
+    parameter_name = 'modality'
+
+    def lookups(self, request, model_admin):
+        modalities = set()
+        queryset = model_admin.get_queryset(request)
+        for doctor in queryset:
+            modalities.update(doctor.modality)
+        return [(mod, mod) for mod in sorted(modalities)]
+
+    def queryset(self, request, queryset):
+        if self.value():
+            return queryset.extra(
+                where=["modality @> ARRAY[%s]::text[]"],
+                params=[self.value()]
+            )
+        return queryset
 
 @admin.register(Doctor)
 class DoctorAdmin(admin.ModelAdmin):
     """
     Настройка админки для модели Врач.
     """
-    list_display = ('id', 'fio_alias', 'position_type', 'max_up_per_day', 'is_active', 'get_modality_count')
+    list_display = ('id', 'fio_alias', 'position_type', 'modality', 'max_up_per_day', 'is_active')
     list_display_links = ('id', 'fio_alias')
-    list_filter = ('is_active', 'position_type', 'modality')
+    list_filter = ('is_active', 'position_type', ModalityListFilter)
     search_fields = ('fio_alias', 'id', 'position_type')
-    list_editable = ('is_active',)
-    readonly_fields = ('id',)
-    
-    # Оптимизация: если бы были связи, использовали бы list_select_related
-    
-    fieldsets = (
-        ('Основная информация', {
-            'fields': ('id', 'fio_alias', 'position_type', 'is_active')
-        }),
-        ('Параметры работы', {
-            'fields': ('max_up_per_day', 'modality')
-        }),
-    )
 
-    @admin.display(description='Кол-во модальностей')
-    def get_modality_count(self, obj):
-        return len(obj.modality) if obj.modality else 0
 
+    def modality_filter(self, obj) -> str:
+        return ", ".join(obj.modality)
 
 @admin.register(StudyType)
 class StudyTypeAdmin(admin.ModelAdmin):
@@ -56,7 +60,8 @@ class ScheduleAdmin(admin.ModelAdmin):
     Настройка админки для расписания.
     Важно: используем date_hierarchy для удобной навигации по датам.
     """
-    list_display = ('id', 'doctor', 'work_date', 'time_start', 'time_end', 'is_day_off_status', 'planned_up')
+    list_display = ('id', 'doctor', 'work_date', 'time_start',
+                    'time_end', 'is_day_off_status', 'planned_up')
     list_display_links = ('id', 'doctor')
     list_filter = ('is_day_off', 'doctor', 'work_date')
     search_fields = ('doctor__fio_alias', 'id')
@@ -77,4 +82,12 @@ class StudyAdmin(admin.ModelAdmin):
     Настройка админки для исследований.
     Самая нагруженная модель, поэтому важно настроить фильтры и поиск.
     """
-    list
+    list_display = ('research_number', 'study_type', 'diagnostician', 
+                    'created_at', 'planned_at', 'status', 'study_type__modality')
+    list_display_links = ('research_number', 'study_type')
+    search_fields = ('research_number', 'doctor__fio_alias')
+    list_filter = ('study_type__modality', 'status', 'priority',)
+    date_hierarchy = 'created_at'
+    readonly_fields = ('research_number', 'created_at')
+    list_select_related = ('study_type', 'diagnostician')
+    list_per_page = 100

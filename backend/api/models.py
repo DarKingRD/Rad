@@ -3,7 +3,7 @@
 
 Этот модуль содержит модели Django, представляющие основные сущности системы:
 - Doctor: Представляет медицинского работника с его атрибутами и возможностями.
-- StudyType: Определяет типы медицинских исследований с соответствующими 
+- StudyType: Определяет типы медицинских исследований с соответствующими
 модальностями и значениями УП.
 - Schedule: Управляет расписанием врачей, включая рабочие часы и выходные дни.
 - Study: Представляет отдельные медицинские исследования со статусом, приоритетом и назначениями.
@@ -12,8 +12,17 @@
 и метаданные для интеграции с существующей схемой базы данных.
 """
 
+from typing import TYPE_CHECKING
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
+from django.contrib.postgres.indexes import GinIndex
+
+if TYPE_CHECKING:
+    from django.db.models.manager import Manager
+
+
+MANAGED = True
+
 
 class Doctor(models.Model):
     """
@@ -49,9 +58,20 @@ class Doctor(models.Model):
         verbose_name="Модальности",
     )
 
+    if TYPE_CHECKING:
+        objects: Manager["Doctor"]
+
     class Meta:
         db_table = "doctors"
-        managed = False
+        managed = MANAGED
+        verbose_name = "Врач"
+        verbose_name_plural = "Врачи"
+        indexes = [
+            models.Index(fields=["fio_alias"], name="doctor_fio_idx"),
+            models.Index(fields=["position_type"], name="doctor_position_idx"),
+            models.Index(fields=["is_active"], name="doctor_active_idx"),
+            GinIndex(fields=["modality"], name="doctor_modality_gin_idx"),
+        ]
 
     def __str__(self):
         return str(self.fio_alias) if self.fio_alias else f"Doctor {self.id}"
@@ -64,7 +84,7 @@ class StudyType(models.Model):
     Определяет виды медицинских исследований с их характеристиками:
     - id: Уникальный идентификатор типа исследования
     - name: Название вида исследования
-    - modality: Модальность исследования
+    - modality: Модальность исследования (массив для совместимости)
     - up_value: Количество условных пунктов (УП) за выполнение исследования
 
     Модель привязана к таблице 'study_types' в базе данных.
@@ -75,9 +95,7 @@ class StudyType(models.Model):
     name = models.CharField(
         max_length=500, blank=True, null=True, verbose_name="Название вида исследования"
     )
-    modality = models.CharField(
-        max_length=50, blank=True, null=True, verbose_name="Модальность исследования"
-    )
+    modality = models.CharField(max_length=50)
     up_value = models.DecimalField(
         max_digits=5,
         decimal_places=2,
@@ -86,9 +104,18 @@ class StudyType(models.Model):
         verbose_name="УП за исследование",
     )
 
+    if TYPE_CHECKING:
+        objects: Manager["StudyType"]
+
     class Meta:
         db_table = "study_types"
-        managed = False
+        managed = MANAGED
+        verbose_name = "Тип исследования"
+        verbose_name_plural = "Типы исследований"
+        indexes = [
+            models.Index(fields=["modality"], name="studytype_modality_idx"),
+            models.Index(fields=["name"], name="studytype_name_idx"),
+        ]
 
     def __str__(self):
         return str(f"{self.id} - {self.name}" if self.name else f"StudyType {self.id}")
@@ -104,13 +131,15 @@ class Schedule(models.Model):
     - work_date: Дата работы
     - time_start: Время начала работы
     - time_end: Время окончания работы
+    - break_start: Время начала перерыва (обед)
+    - break_end: Время окончания перерыва (обед)
     - is_day_off: Статус выходного дня (0 - рабочий день, 1 - выходной)
     - planned_up: Планируемое количество УП на день
 
     Модель привязана к таблице 'schedules' в базе данных.
     Расписания упорядочены по дате и времени начала работы.
     """
-    id = models.IntegerField(primary_key=True, verbose_name="Идентификатор расписания")
+    id = models.AutoField(primary_key=True, verbose_name="Идентификатор расписания")
     doctor = models.ForeignKey(
         Doctor,
         on_delete=models.CASCADE,
@@ -122,15 +151,27 @@ class Schedule(models.Model):
     work_date = models.DateField(blank=True, null=True, verbose_name="Дата")
     time_start = models.TimeField(blank=True, null=True, verbose_name="Начало работы")
     time_end = models.TimeField(blank=True, null=True, verbose_name="Конец работы")
+    break_start = models.TimeField(blank=True, null=True, verbose_name="Начало перерыва")
+    break_end = models.TimeField(blank=True, null=True, verbose_name="Конец перерыва")
     is_day_off = models.IntegerField(
         default=0, blank=True, null=True, verbose_name="Статус выходного"
     )
     planned_up = models.IntegerField(blank=True, null=True, verbose_name="План УП")
 
+    if TYPE_CHECKING:
+        objects: Manager["Schedule"]
+
     class Meta:
         db_table = "schedules"
-        managed = False
+        managed = MANAGED
         ordering = ["work_date", "time_start"]
+        verbose_name = "Расписание"
+        verbose_name_plural = "Расписания"
+        indexes = [
+            models.Index(fields=["doctor", "work_date"], name="schedule_doctor_date_idx"),
+            models.Index(fields=["work_date", "time_start"], name="schedule_date_time_idx"),
+            models.Index(fields=["doctor", "work_date", "is_day_off"], name="schedule_doc_date_dayoff_idx"),
+        ]
 
     def __str__(self):
         return f"Schedule {self.id} - {self.work_date}"
@@ -145,7 +186,7 @@ class Study(models.Model):
     - research_number: Уникальный номер исследования
     - study_type: Тип исследования
     - status: Статус исследования
-    - priority: Приоритет исследования (normal, high)
+    - priority: Приоритет исследования (normal, cito, asap)
     - created_at: Дата и время создания записи об исследовании
     - planned_at: Плановая дата и время проведения исследования
     - diagnostician: Диагност, назначенный для выполнения исследования
@@ -153,11 +194,8 @@ class Study(models.Model):
     Модель привязана к таблице 'studies' в базе данных.
     Исследования упорядочены по дате создания (сначала новые).
     """
-    id = models.IntegerField(
-        primary_key=True, verbose_name="Идентификатор исследования"
-    )
     research_number = models.CharField(
-        max_length=50, unique=True, verbose_name="Номер исследования"
+        max_length=50, primary_key=True, verbose_name="Номер исследования"
     )
     study_type = models.ForeignKey(
         StudyType,
@@ -168,7 +206,15 @@ class Study(models.Model):
         verbose_name="Тип исследования",
     )
     status = models.CharField(
-        max_length=50, blank=True, null=True, verbose_name="Статус исследования"
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name="Статус исследования",
+        choices=[
+            ("pending", "Ожидает назначения"),
+            ("confirmed", "Назначено"),
+            ("signed", "Выполнено"),
+        ],
     )
     priority = models.CharField(
         max_length=20,
@@ -176,6 +222,7 @@ class Study(models.Model):
         blank=True,
         null=True,
         verbose_name="Приоритет исследования",
+        choices=[("normal", "Нормальный"), ("cito", "Cito"), ("asap", "Asap")],
     )
     created_at = models.DateTimeField(
         blank=True, null=True, verbose_name="Дата создания"
@@ -193,10 +240,22 @@ class Study(models.Model):
         verbose_name="Диагност",
     )
 
+    if TYPE_CHECKING:
+        objects: Manager["Study"]
     class Meta:
         db_table = "studies"
-        managed = False
+        managed = MANAGED
         ordering = ["-created_at"]
+        verbose_name = "Исследование"
+        verbose_name_plural = "Исследования"
+        indexes = [
+            models.Index(fields=["status"], name="study_status_idx"),
+            models.Index(fields=["priority"], name="study_priority_idx"),
+            models.Index(fields=["created_at"], name="study_created_idx"),
+            models.Index(fields=["planned_at"], name="study_planned_idx"),
+            models.Index(fields=["diagnostician", "status"], name="study_diag_status_idx"),
+            models.Index(fields=["status", "planned_at"], name="study_status_planned_idx"),
+        ]
 
     def __str__(self):
         return self.research_number

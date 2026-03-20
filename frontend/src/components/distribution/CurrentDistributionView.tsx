@@ -1,491 +1,585 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { studiesApi, doctorsApi } from '../../services/api';
-import { UserCheck, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
-import { Study, DoctorWithLoad } from '../../types';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Archive,
+  Calendar,
+  Eye,
+  Filter,
+  Loader2,
+  UserCheck,
+  Zap,
+} from 'lucide-react';
+import { distributionApi, doctorsApi, studiesApi } from '../../services/api';
+import type {
+  Assignment,
+  DistResult,
+  DistributionDraft,
+  DoctorDistStat,
+  DoctorWithLoad,
+  DistributionInfo,
+  Study,
+} from '../../types';
 
-// ─── Вспомогательные утилиты ────────────────────────────────────────────────
+import DoctorCard from './components/DoctorCard';
+import Pagination from './components/Pagination';
+import ConfirmDistributionModal from './components/ConfirmDistributionModal';
+import DraftsModal from './components/DraftsModal';
 
-const PRIORITY_ORDER: Record<string, number> = { cito: 1, asap: 2, normal: 3 };
+import { useDistributionDrafts } from './hooks/useDistributionDrafts';
+import { useDoctorStudies } from './hooks/useDoctorStudies';
 
-const getPriorityColor = (priority: string) => {
-  if (priority === 'cito') return 'bg-red-100 text-red-700';
-  if (priority === 'asap') return 'bg-amber-100 text-amber-700';
-  return 'bg-slate-100 text-slate-600';
-};
+import {
+  DOCTORS_PER_PAGE,
+  ITEMS_PER_PAGE,
+  PRIORITY_ORDER,
+  type MobileTab,
+} from './utils/distributionConstants';
+import { getPriorityColor, getPriorityLabel, getTodayString } from './utils/distributionFormatters';
 
-const getPriorityLabel = (priority: string) => {
-  if (priority === 'cito') return 'CITO';
-  if (priority === 'asap') return 'ASAP';
-  return 'План';
-};
-
-const getStatusColor = (status: string) => {
-  if (status === 'confirmed' || status === 'Подтверждено') return 'bg-green-100 text-green-700';
-  if (status === 'signed'    || status === 'Подписано')    return 'bg-blue-100 text-blue-700';
-  return 'bg-slate-100 text-slate-600';
-};
-
-const formatDate = (iso: string) =>
-  new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
-
-const formatTime = (iso: string) =>
-  new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-
-// ─── Тип для исследований врача ─────────────────────────────────────────────
-
-interface DoctorStudiesState {
-  loading: boolean;
-  studies: Study[];
-  error: string | null;
-}
-
-// ─── Компонент карточки врача ────────────────────────────────────────────────
-
-interface DoctorCardProps {
-  doc: DoctorWithLoad;
-  isSelectedForAssign: boolean;
-  isExpanded: boolean;
-  studiesState: DoctorStudiesState;
-  hasSelectedStudy: boolean;
-  onToggleExpand: (id: number) => void;
-  onSelectForAssign: (id: number) => void;
-}
-
-const DoctorCard: React.FC<DoctorCardProps> = ({
-  doc,
-  isSelectedForAssign,
-  isExpanded,
-  studiesState,
-  hasSelectedStudy,
-  onToggleExpand,
-  onSelectForAssign,
-}) => {
-  const loadPct = doc.max_load > 0 ? Math.min((doc.current_load / doc.max_load) * 100, 100) : 0;
-  const isOverloaded = loadPct > 80;
-
-  return (
-    <div
-      className={`border rounded-lg transition-all ${
-        isSelectedForAssign && hasSelectedStudy
-          ? 'border-blue-500 ring-2 ring-blue-200'
-          : 'border-slate-200'
-      }`}
-    >
-      {/* Основная строка врача */}
-      <div className="flex items-center justify-between p-3 gap-3">
-        {/* Аватар + имя */}
-        <div className="flex items-center space-x-3 min-w-0 flex-1">
-          <div className="w-10 h-10 shrink-0 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold">
-            {doc.fio_alias.charAt(0)}
-          </div>
-          <div className="min-w-0">
-            <div className="font-medium text-slate-900 truncate">{doc.fio_alias}</div>
-            <div className="text-xs text-slate-500">{doc.specialty}</div>
-          </div>
-        </div>
-
-        {/* Нагрузка */}
-        <div className="text-right shrink-0">
-          <div className="text-sm font-medium text-slate-900">
-            {doc.current_load} / {doc.max_load} УП
-          </div>
-          <div className="w-24 h-2 bg-slate-100 rounded-full mt-1 overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all ${isOverloaded ? 'bg-red-500' : 'bg-green-500'}`}
-              style={{ width: `${loadPct}%` }}
-            />
-          </div>
-          <div className="text-xs text-green-600 mt-1 flex items-center justify-end">
-            <UserCheck size={12} className="mr-1" />
-            {doc.active_studies} исследований
-          </div>
-        </div>
-
-        {/* Кнопки */}
-        <div className="flex flex-col gap-1 shrink-0">
-          {/* Кнопка «выбрать для назначения» — видна только если выбрано исследование */}
-          {hasSelectedStudy && (
-            <button
-              onClick={() => onSelectForAssign(doc.id)}
-              className={`text-xs px-2 py-1 rounded border transition-all ${
-                isSelectedForAssign
-                  ? 'bg-blue-600 text-white border-blue-600'
-                  : 'border-slate-300 text-slate-600 hover:bg-blue-50 hover:border-blue-400'
-              }`}
-            >
-              {isSelectedForAssign ? '✓ Выбран' : 'Назначить'}
-            </button>
-          )}
-
-          {/* Кнопка раскрытия списка снимков */}
-          <button
-            onClick={() => onToggleExpand(doc.id)}
-            className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-500 hover:bg-slate-50 flex items-center gap-1"
-          >
-            {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-            Снимки
-          </button>
-        </div>
-      </div>
-
-      {/* Раскрывающийся список исследований врача */}
-      {isExpanded && (
-        <div className="border-t border-slate-100 bg-slate-50 rounded-b-lg">
-          {studiesState.loading ? (
-            <div className="flex items-center justify-center py-4 gap-2 text-slate-400 text-sm">
-              <Loader2 size={14} className="animate-spin" />
-              Загрузка...
-            </div>
-          ) : studiesState.error ? (
-            <div className="py-3 px-4 text-sm text-red-500">{studiesState.error}</div>
-          ) : studiesState.studies.length === 0 ? (
-            <div className="py-3 px-4 text-sm text-slate-400">Нет назначенных исследований</div>
-          ) : (
-            <div className="p-2 space-y-1 max-h-64 overflow-y-auto">
-              {studiesState.studies.map((study) => (
-                <div
-                  key={study.id}
-                  className="bg-white rounded-md border border-slate-200 px-3 py-2 flex items-center justify-between gap-2"
-                >
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-slate-800 truncate">
-                      {study.research_number}
-                    </div>
-                    <div className="text-xs text-slate-500 truncate flex items-center gap-1 flex-wrap">
-                      <span>{study.study_type?.name || `Тип ${study.study_type_id}`}</span>
-                      {study.study_type?.modality && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                          {study.study_type.modality}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-slate-400">
-                      {formatDate(study.created_at)} {formatTime(study.created_at)}
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${getPriorityColor(study.priority)}`}>
-                      {getPriorityLabel(study.priority)}
-                    </span>
-                    <span className={`px-1.5 py-0.5 rounded text-xs ${getStatusColor(study.status)}`}>
-                      {study.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ─── Главный компонент ───────────────────────────────────────────────────────
-
-export const CurrentDistributionView: React.FC = () => {
-  const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
-  const [selectedDoctor, setSelectedDoctor] = useState<number | null>(null);
-  const [allStudies, setAllStudies] = useState<Study[]>([]);
+const CurrentDistributionView: React.FC = () => {
+  const [studiesTotal, setStudiesTotal] = useState(0);
+  const [studies, setStudies] = useState<Study[]>([]);
   const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
   const [loading, setLoading] = useState(true);
+  const [studiesLoading, setStudiesLoading] = useState(false);
+  const [distributing, setDistributing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [selectedStudy, setSelectedStudy] = useState<Study | null>(null);
+  const [selectedDoctor, setSelectedDoctor] = useState<number | null>(null);
+
+  const [distInfo, setDistInfo] = useState<DistributionInfo | null>(null);
+  const [distResult, setDistResult] = useState<DistResult | null>(null);
+
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showDrafts, setShowDrafts] = useState(false);
+
+  const [distributionDate, setDistributionDate] = useState(getTodayString());
+  const [distributionDateFrom, setDistributionDateFrom] = useState('');
+  const [distributionDateTo, setDistributionDateTo] = useState('');
+  const [useMip, setUseMip] = useState(true);
+
+  const [mobileTab, setMobileTab] = useState<MobileTab>('studies');
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(20);
+  const [doctorPage, setDoctorPage] = useState(1);
 
-  // expandedDoctor — какой врач раскрыт; doctorStudies — кэш загруженных снимков
-  const [expandedDoctor, setExpandedDoctor] = useState<number | null>(null);
-  const [doctorStudies, setDoctorStudies] = useState<Record<number, DoctorStudiesState>>({});
+  const { drafts, loadDrafts, persistDraft, removeDraft } = useDistributionDrafts();
+  const { expandedDoctor, doctorStudies, handleToggleExpand } = useDoctorStudies();
 
-  useEffect(() => { loadData(); }, []);
+  const totalPages = Math.max(1, Math.ceil(studiesTotal / ITEMS_PER_PAGE));
+  const totalDoctorPages = Math.max(1, Math.ceil(doctors.length / DOCTORS_PER_PAGE));
+  const doctorStartIndex = (doctorPage - 1) * DOCTORS_PER_PAGE;
+
+  const paginatedDoctors = doctors.slice(
+    doctorStartIndex,
+    doctorStartIndex + DOCTORS_PER_PAGE
+  );
+
+  const distStatMap = useMemo<Record<number, DoctorDistStat>>(() => {
+    const map: Record<number, DoctorDistStat> = {};
+    (distResult?.doctor_stats || []).forEach((item) => {
+      map[item.doctor_id] = item;
+    });
+    return map;
+  }, [distResult]);
+
+  const loadStudies = async () => {
+    setStudiesLoading(true);
+    setError(null);
+
+    try {
+      const pendingData = await studiesApi.getPending(currentPage, ITEMS_PER_PAGE);
+      const pendingResults = pendingData.results || [];
+
+      const sortedStudies = [...pendingResults].sort((a, b) => {
+        const priorityDiff =
+          (PRIORITY_ORDER[a.priority] || 999) - (PRIORITY_ORDER[b.priority] || 999);
+
+        if (priorityDiff !== 0) return priorityDiff;
+
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+
+      setStudies(sortedStudies);
+      setStudiesTotal(pendingData.total || pendingResults.length);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Ошибка загрузки исследований';
+      setError(message);
+    } finally {
+      setStudiesLoading(false);
+    }
+  };
 
   const loadData = async () => {
+    setLoading(true);
+    setError(null);
+
     try {
-      const [studiesRes, doctorsRes] = await Promise.all([
-        studiesApi.getPending(),
+      const [doctorsData, infoData] = await Promise.all([
         doctorsApi.getWithLoad(),
+        distributionApi.getInfo(),
       ]);
-      setAllStudies(studiesRes.data || []);
-      setDoctors(doctorsRes.data);
-    } catch (error) {
-      console.error('Error loading data:', error);
+
+      setDoctors(doctorsData || []);
+      setDistInfo(infoData || null);
+      loadDrafts();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Ошибка загрузки данных';
+      setError(message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Загрузка исследований для конкретного врача
-  const loadDoctorStudies = async (doctorId: number) => {
-    // Уже загружено — не дёргаем снова
-    if (doctorStudies[doctorId] && !doctorStudies[doctorId].error) return;
+  useEffect(() => {
+    loadData();
+  }, []);
 
-    setDoctorStudies(prev => ({
-      ...prev,
-      [doctorId]: { loading: true, studies: [], error: null },
-    }));
-
-    try {
-      const res = await studiesApi.getList({ diagnostician_id: doctorId, status: 'confirmed' });
-      setDoctorStudies(prev => ({
-        ...prev,
-        [doctorId]: { loading: false, studies: res.data || [], error: null },
-      }));
-    } catch (err) {
-      setDoctorStudies(prev => ({
-        ...prev,
-        [doctorId]: { loading: false, studies: [], error: 'Ошибка загрузки' },
-      }));
-    }
-  };
-
-  const handleToggleExpand = (doctorId: number) => {
-    if (expandedDoctor === doctorId) {
-      setExpandedDoctor(null);
-    } else {
-      setExpandedDoctor(doctorId);
-      loadDoctorStudies(doctorId);
-    }
-  };
+  useEffect(() => {
+    loadStudies();
+  }, [currentPage]);
 
   const handleSelectForAssign = (doctorId: number) => {
-    setSelectedDoctor(prev => prev === doctorId ? null : doctorId);
+    setSelectedDoctor((prev) => (prev === doctorId ? null : doctorId));
   };
 
-  // Сортировка очереди: CITO → ASAP → План, внутри — по дате создания (старые первыми)
-  const sortedStudies = useMemo(() => {
-    return [...allStudies].sort((a, b) => {
-      const diff = (PRIORITY_ORDER[a.priority] || 3) - (PRIORITY_ORDER[b.priority] || 3);
-      if (diff !== 0) return diff;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
-  }, [allStudies]);
-
-  const totalPages = Math.ceil(sortedStudies.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedStudies = sortedStudies.slice(startIndex, startIndex + itemsPerPage);
-
-  const handlePageChange = (page: number) => {
-    setCurrentPage(page);
-    setSelectedStudy(null);
-    setSelectedDoctor(null);
-  };
-
-  const handleAssign = async (doctorId?: number) => {
-    if (!selectedStudy) return;
-    const targetId = doctorId ?? selectedDoctor;
-    if (!targetId) { alert('Выберите врача'); return; }
+  const handleAssign = async () => {
+    if (!selectedStudy || !selectedDoctor) return;
 
     try {
-      await studiesApi.assign(selectedStudy.id, targetId);
-      // Инвалидируем кэш назначенных снимков для этого врача
-      setDoctorStudies(prev => {
-        const next = { ...prev };
-        delete next[targetId];
-        return next;
-      });
-      await loadData();
+      await studiesApi.assign(selectedStudy.research_number, selectedDoctor);
       setSelectedStudy(null);
       setSelectedDoctor(null);
-    } catch {
-      alert('Ошибка при назначении');
+      await loadStudies();
+      await loadData();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Ошибка назначения исследования';
+      setError(message);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="animate-spin text-slate-400 mr-2" size={20} />
-        <span className="text-slate-500">Загрузка...</span>
-      </div>
+  const handleRunDistribution = async () => {
+    setDistributing(true);
+    setError(null);
+
+    try {
+      const result = await distributionApi.preview({
+        date: distributionDate,
+        preview: true,
+        date_from: distributionDateFrom || undefined,
+        date_to: distributionDateTo || undefined,
+        use_mip: useMip,
+      });
+
+      setDistResult(result);
+      persistDraft(result);
+      setShowConfirmModal(true);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Ошибка запуска распределения';
+      setError(message);
+    } finally {
+      setDistributing(false);
+    }
+  };
+
+  const handleConfirmDistribution = async () => {
+    if (!distResult?.distribution_id) return;
+
+    setConfirming(true);
+    try {
+      await distributionApi.confirm(distResult.distribution_id);
+      removeDraft(distResult.distribution_id);
+      setShowConfirmModal(false);
+      setDistResult(null);
+      await loadData();
+      await loadStudies();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Ошибка подтверждения распределения';
+      setError(message);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const handleReassign = (assignment: Assignment, newDoctorId: number) => {
+    if (!distResult) return;
+
+    const nextAssignments = (distResult.assignments || []).map((item) =>
+      item.study_number === assignment.study_number
+        ? {
+            ...item,
+            doctor_id: newDoctorId,
+            doctor_name:
+              doctors.find((doctor) => doctor.id === newDoctorId)?.fio_alias ||
+              item.doctor_name,
+          }
+        : item
     );
-  }
+
+    setDistResult({
+      ...distResult,
+      assignments: nextAssignments,
+    });
+  };
+
+  const openDraft = (draft: DistributionDraft) => {
+    setDistResult(draft);
+    setShowDrafts(false);
+    setShowConfirmModal(true);
+  };
+
+  const selectedDoctorObject = doctors.find((doctor) => doctor.id === selectedDoctor);
 
   return (
-    <div className="h-[calc(100vh-140px)] flex space-x-6">
-
-      {/* ── Очередь исследований ───────────────────────────────────────────── */}
-      <div className="w-1/2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-        <div className="p-4 border-b border-slate-200">
-          <h3 className="font-semibold text-slate-800">
-            Очередь исследований ({sortedStudies.length})
-          </h3>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">
+            Текущее распределение
+          </h2>
+          <p className="text-slate-500 mt-1">
+            Выбери исследование, врача и выполни ручное или автоматическое распределение
+          </p>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-2">
-          {paginatedStudies.length === 0 ? (
-            <div className="p-8 text-center text-slate-500">Нет исследований в очереди</div>
-          ) : (
-            paginatedStudies.map((study) => (
-              <div
-                key={study.id}
-                onClick={() => {
-                  setSelectedStudy(study);
-                  setSelectedDoctor(null);
-                }}
-                className={`p-4 rounded-lg border cursor-pointer transition-all ${
-                  selectedStudy?.id === study.id
-                    ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
-                    : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
-                }`}
-              >
-                <div className="flex justify-between items-start mb-2">
-                  <span className="font-medium text-slate-900">{study.research_number}</span>
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${getPriorityColor(study.priority)}`}>
-                    {getPriorityLabel(study.priority)}
-                  </span>
-                </div>
-                <div className="text-sm text-slate-600 mb-2 flex items-center gap-2 flex-wrap">
-                  <span>{study.study_type?.name || `ID: ${study.study_type_id}`}</span>
-                  {study.study_type?.modality && (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                      {study.study_type.modality}
-                    </span>
-                  )}
-                </div>
-                <div className="flex justify-between text-xs text-slate-400">
-                  <span>Создано: {formatDate(study.created_at)}</span>
-                  <span className={`px-2 py-0.5 rounded ${getStatusColor(study.status)}`}>
-                    {study.status}
-                  </span>
-                </div>
-              </div>
-            ))
-          )}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setShowDrafts(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+          >
+            <Archive size={16} />
+            Черновики
+            {drafts.length > 0 && (
+              <span className="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-slate-200 text-xs font-medium">
+                {drafts.length}
+              </span>
+            )}
+          </button>
         </div>
-
-        {/* Пагинация */}
-        {totalPages > 1 && (
-          <div className="p-4 border-t border-slate-200 flex items-center justify-between">
-            <div className="text-sm text-slate-600">
-              {startIndex + 1}–{Math.min(startIndex + itemsPerPage, sortedStudies.length)} из {sortedStudies.length}
-            </div>
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage === 1}
-                className="p-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                let p: number;
-                if (totalPages <= 5) p = i + 1;
-                else if (currentPage <= 3) p = i + 1;
-                else if (currentPage >= totalPages - 2) p = totalPages - 4 + i;
-                else p = currentPage - 2 + i;
-                return (
-                  <button
-                    key={p}
-                    onClick={() => handlePageChange(p)}
-                    className={`px-3 py-1 rounded-md text-sm ${
-                      currentPage === p
-                        ? 'bg-blue-600 text-white'
-                        : 'border border-slate-300 text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    {p}
-                  </button>
-                );
-              })}
-              <button
-                onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage === totalPages}
-                className="p-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* ── Правая колонка: врачи + панель назначения ─────────────────────── */}
-      <div className="w-1/2 flex flex-col space-y-4">
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+          {error}
+        </div>
+      )}
 
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex-1 overflow-y-auto">
-          <h3 className="font-semibold text-slate-800 mb-4 sticky top-0 bg-white pb-1">
-            Состояние врачей ({doctors.length})
-            {selectedStudy && (
-              <span className="ml-2 text-xs font-normal text-blue-600">
-                — нажмите «Назначить» у нужного врача
-              </span>
-            )}
-          </h3>
-
-          <div className="space-y-3">
-            {doctors.length === 0 ? (
-              <div className="p-8 text-center text-slate-500">Нет активных врачей</div>
-            ) : (
-              doctors.map((doc) => (
-                <DoctorCard
-                  key={doc.id}
-                  doc={doc}
-                  isSelectedForAssign={selectedDoctor === doc.id}
-                  isExpanded={expandedDoctor === doc.id}
-                  studiesState={doctorStudies[doc.id] ?? { loading: false, studies: [], error: null }}
-                  hasSelectedStudy={!!selectedStudy}
-                  onToggleExpand={handleToggleExpand}
-                  onSelectForAssign={handleSelectForAssign}
-                />
-              ))
-            )}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
+              <UserCheck size={22} />
+            </div>
+            <div>
+              <div className="text-sm text-slate-500">Доступно врачей</div>
+              <div className="text-2xl font-bold text-slate-900">
+                {loading ? '—' : distInfo?.available_doctors ?? doctors.length}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Панель назначения — появляется когда выбрано исследование */}
-        {selectedStudy && (
-          <div className="bg-blue-600 text-white p-4 rounded-xl shadow-lg shrink-0">
-            <h4 className="font-medium mb-1">
-              {selectedStudy.research_number}
-            </h4>
-            <p className="text-blue-100 text-sm mb-3 flex items-center gap-2 flex-wrap">
-              <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium mr-2 ${getPriorityColor(selectedStudy.priority)} !bg-blue-500 !text-white`}>
-                {getPriorityLabel(selectedStudy.priority)}
-              </span>
-              <span>{selectedStudy.study_type?.name}</span>
-              {selectedStudy.study_type?.modality && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-500/30 text-blue-100 text-[10px] font-medium uppercase tracking-wide">
-                  {selectedStudy.study_type.modality}
-                </span>
-              )}
-            </p>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
+              <Filter size={22} />
+            </div>
+            <div>
+              <div className="text-sm text-slate-500">Ожидают назначения</div>
+              <div className="text-2xl font-bold text-slate-900">
+                {studiesLoading ? '—' : studiesTotal}
+              </div>
+            </div>
+          </div>
+        </div>
 
-            {selectedDoctor && (
-              <p className="text-blue-100 text-sm mb-3">
-                Врач: <strong>{doctors.find(d => d.id === selectedDoctor)?.fio_alias}</strong>
-              </p>
-            )}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-green-50 flex items-center justify-center text-green-600">
+              <Calendar size={22} />
+            </div>
+            <div>
+              <div className="text-sm text-slate-500">Дата распределения</div>
+              <div className="text-2xl font-bold text-slate-900">
+                {distributionDate}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-            <div className="flex space-x-2">
-              {selectedDoctor ? (
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 md:p-5">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col lg:flex-row gap-3 lg:items-end">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Дата распределения
+              </label>
+              <input
+                type="date"
+                value={distributionDate}
+                onChange={(e) => setDistributionDate(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2"
+              />
+            </div>
+
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Период от
+              </label>
+              <input
+                type="date"
+                value={distributionDateFrom}
+                onChange={(e) => setDistributionDateFrom(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2"
+              />
+            </div>
+
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Период до
+              </label>
+              <input
+                type="date"
+                value={distributionDateTo}
+                onChange={(e) => setDistributionDateTo(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2"
+              />
+            </div>
+
+            <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 h-[42px]">
+              <input
+                type="checkbox"
+                checked={useMip}
+                onChange={(e) => setUseMip(e.target.checked)}
+              />
+              <span className="text-sm text-slate-700">Использовать MIP</span>
+            </label>
+
+            <button
+              onClick={handleRunDistribution}
+              disabled={distributing}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {distributing ? (
                 <>
-                  <button
-                    onClick={() => handleAssign()}
-                    className="flex-1 bg-white text-blue-600 py-2 rounded-md font-medium text-sm hover:bg-blue-50"
-                  >
-                    Подтвердить назначение
-                  </button>
-                  <button
-                    onClick={() => setSelectedDoctor(null)}
-                    className="px-3 py-2 bg-blue-500 text-white rounded-md text-sm hover:bg-blue-400"
-                  >
-                    Сбросить
-                  </button>
+                  <Loader2 size={16} className="animate-spin" />
+                  Распределяем...
                 </>
               ) : (
-                <p className="text-blue-200 text-sm py-1">
-                  ↑ Нажмите «Назначить» рядом с нужным врачом
-                </p>
+                <>
+                  <Zap size={16} />
+                  Запустить preview
+                </>
               )}
-              <button
-                onClick={() => { setSelectedStudy(null); setSelectedDoctor(null); }}
-                className="px-3 py-2 bg-blue-700 text-white border border-blue-500 rounded-md text-sm hover:bg-blue-800"
-              >
-                Отмена
-              </button>
+            </button>
+          </div>
+
+          {selectedStudy && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+              <div>
+                <div className="text-sm text-blue-700">Выбрано исследование</div>
+                <div className="font-medium text-blue-900">
+                  {selectedStudy.research_number}
+                </div>
+                <div className="text-xs text-blue-700 mt-1">
+                  {selectedStudy.study_type?.name || 'Тип не указан'}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedDoctorObject && (
+                  <div className="text-sm text-slate-700">
+                    Врач: <span className="font-medium">{selectedDoctorObject.fio_alias}</span>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleAssign}
+                  disabled={!selectedDoctor}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <Eye size={16} />
+                  Назначить вручную
+                </button>
+
+                <button
+                  onClick={() => {
+                    setSelectedStudy(null);
+                    setSelectedDoctor(null);
+                  }}
+                  className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+                >
+                  Сбросить
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="lg:hidden flex rounded-xl border border-slate-200 bg-white p-1">
+        <button
+          onClick={() => setMobileTab('studies')}
+          className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${
+            mobileTab === 'studies'
+              ? 'bg-blue-600 text-white'
+              : 'text-slate-700 hover:bg-slate-50'
+          }`}
+        >
+          Исследования
+        </button>
+        <button
+          onClick={() => setMobileTab('doctors')}
+          className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${
+            mobileTab === 'doctors'
+              ? 'bg-blue-600 text-white'
+              : 'text-slate-700 hover:bg-slate-50'
+          }`}
+        >
+          Врачи
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+        <div
+          className={`xl:col-span-5 space-y-4 ${
+            mobileTab !== 'studies' ? 'hidden lg:block' : ''
+          }`}
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-slate-900">
+                  Ожидающие исследования
+                </h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Выбери исследование для ручного назначения
+                </p>
+              </div>
+
+              {studiesLoading && <Loader2 size={18} className="animate-spin text-slate-400" />}
+            </div>
+
+            <div className="divide-y divide-slate-100 max-h-[720px] overflow-y-auto">
+              {studies.length === 0 && !studiesLoading ? (
+                <div className="px-5 py-12 text-center text-slate-500">
+                  Нет исследований для распределения
+                </div>
+              ) : (
+                studies.map((study) => {
+                  const isSelected = selectedStudy?.research_number === study.research_number;
+                  return (
+                    <button
+                      key={study.research_number}
+                      onClick={() => setSelectedStudy(study)}
+                      className={`w-full text-left px-5 py-4 hover:bg-slate-50 transition ${
+                        isSelected ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium text-slate-900 truncate">
+                            {study.research_number}
+                          </div>
+                          <div className="text-sm text-slate-500 mt-1 truncate">
+                            {study.study_type?.name || 'Тип исследования не указан'}
+                          </div>
+                        </div>
+
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium border shrink-0 ${getPriorityColor(
+                            study.priority
+                          )}`}
+                        >
+                          {getPriorityLabel(study.priority)}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="px-5 py-4 border-t border-slate-200">
+              <Pagination
+                page={currentPage}
+                setPage={setCurrentPage}
+                totalPages={totalPages}
+              />
             </div>
           </div>
-        )}
+        </div>
+
+        <div
+          className={`xl:col-span-7 space-y-4 ${
+            mobileTab !== 'doctors' ? 'hidden lg:block' : ''
+          }`}
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-slate-900">Доступные врачи</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Раскрой врача, чтобы посмотреть его текущие исследования
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 space-y-3 max-h-[720px] overflow-y-auto">
+              {paginatedDoctors.length === 0 && !loading ? (
+                <div className="text-center py-12 text-slate-500">Врачи не найдены</div>
+              ) : (
+                paginatedDoctors.map((doc) => (
+                  <DoctorCard
+                    key={doc.id}
+                    doc={doc}
+                    distStat={distStatMap[doc.id]}
+                    isSelectedForAssign={selectedDoctor === doc.id}
+                    isExpanded={expandedDoctor === doc.id}
+                    studiesState={doctorStudies[doc.id]}
+                    hasSelectedStudy={Boolean(selectedStudy)}
+                    onToggleExpand={handleToggleExpand}
+                    onSelectForAssign={handleSelectForAssign}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="px-5 py-4 border-t border-slate-200">
+              <Pagination
+                page={doctorPage}
+                setPage={setDoctorPage}
+                totalPages={totalDoctorPages}
+              />
+            </div>
+          </div>
+        </div>
       </div>
+
+      <ConfirmDistributionModal
+        isOpen={showConfirmModal}
+        distResult={distResult}
+        doctors={doctors}
+        onConfirm={handleConfirmDistribution}
+        onCancel={() => setShowConfirmModal(false)}
+        onReassign={handleReassign}
+        confirming={confirming}
+      />
+
+      <DraftsModal
+        isOpen={showDrafts}
+        drafts={drafts}
+        onClose={() => setShowDrafts(false)}
+        onOpenDraft={openDraft}
+        onRemoveDraft={removeDraft}
+      />
     </div>
   );
 };
+
+export default CurrentDistributionView;

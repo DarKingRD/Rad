@@ -1,6 +1,5 @@
 from pathlib import Path
 from decouple import config
-import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -9,6 +8,7 @@ DEBUG = config("DEBUG", default=True, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="").split(",")
 
 INSTALLED_APPS = [
+    "unfold",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -86,3 +86,10 @@ REST_FRAMEWORK = {
 
 # CORS
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="").split(",")
+
+# Админка Unfold
+UNFOLD = {
+    "SITE_TITLE": "РадПлан",  # Заголовок в браузере
+    "SITE_HEADER": "Админ-панель",           # Заголовок в шапке
+    "SITE_ICON": "/static/logo.svg",         # Путь к логотипу (SVG/PNG)
+}

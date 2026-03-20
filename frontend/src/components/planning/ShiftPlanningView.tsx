@@ -8,6 +8,8 @@ interface ScheduleFormData {
   work_date: string;
   time_start: string;
   time_end: string;
+  break_start: string;
+  break_end: string;
   is_day_off: number;
   planned_up: number;
 }
@@ -27,6 +29,8 @@ export const ShiftPlanningView: React.FC = () => {
     work_date: '',
     time_start: '09:00',
     time_end: '18:00',
+    break_start: '12:00',
+    break_end: '13:00',
     is_day_off: 0,
     planned_up: 0,
   });
@@ -50,9 +54,8 @@ export const ShiftPlanningView: React.FC = () => {
   useEffect(() => {
     const loadDoctors = async () => {
       try {
-        const res = await doctorsApi.getAll();
-        const doctorsData = res.data.results || res.data;
-        setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
+        const doctorsData = await doctorsApi.getAll();
+        setDoctors(doctorsData);
       } catch (err) {
         console.error('Error loading doctors:', err);
       }
@@ -65,7 +68,7 @@ export const ShiftPlanningView: React.FC = () => {
     const loadData = async () => {
       try {
         setLoading(true);
-        const [schedulesRes, studiesRes] = await Promise.all([
+        const [schedulesData, studiesData] = await Promise.all([
           schedulesApi.getAll({
             date_from: dates[0],
             date_to: dates[6],
@@ -76,12 +79,8 @@ export const ShiftPlanningView: React.FC = () => {
             date_to: dates[6],
           })
         ]);
-        
-        const schedulesData = schedulesRes.data.results || schedulesRes.data;
-        const studiesData = studiesRes.data.results || studiesRes.data;
-        
-        setSchedules(Array.isArray(schedulesData) ? schedulesData : []);
-        setStudies(Array.isArray(studiesData) ? studiesData : []);
+        setSchedules(schedulesData);
+        setStudies(studiesData);
       } catch (err) {
         console.error('Error loading data:', err);
       } finally {
@@ -93,7 +92,7 @@ export const ShiftPlanningView: React.FC = () => {
   }, [dates, selectedDoctor]);
 
   const loadSchedulesData = async () => {
-    const [schedulesRes, studiesRes] = await Promise.all([
+    const [schedulesData, studiesData] = await Promise.all([
       schedulesApi.getAll({
         date_from: dates[0],
         date_to: dates[6],
@@ -104,12 +103,8 @@ export const ShiftPlanningView: React.FC = () => {
         date_to: dates[6],
       })
     ]);
-    
-    const schedulesData = schedulesRes.data.results || schedulesRes.data;
-    const studiesData = studiesRes.data.results || studiesRes.data;
-    
-    setSchedules(Array.isArray(schedulesData) ? schedulesData : []);
-    setStudies(Array.isArray(studiesData) ? studiesData : []);
+      setSchedules(schedulesData);
+      setStudies(studiesData);
   };
 
   const handlePrevWeek = () => {
@@ -147,6 +142,8 @@ export const ShiftPlanningView: React.FC = () => {
         work_date: schedule.work_date?.split('T')[0] || date,
         time_start: schedule.time_start?.substring(0, 5) || '09:00',
         time_end: schedule.time_end?.substring(0, 5) || '18:00',
+        break_start: schedule.break_start?.substring(0, 5) || '12:00',
+        break_end: schedule.break_end?.substring(0, 5) || '13:00',
         is_day_off: schedule.is_day_off || 0,
         planned_up: schedule.planned_up || 0,
       });
@@ -157,6 +154,8 @@ export const ShiftPlanningView: React.FC = () => {
         work_date: date,
         time_start: '09:00',
         time_end: '18:00',
+        break_start: '12:00',
+        break_end: '13:00',
         is_day_off: 0,
         planned_up: 0,
       });
@@ -173,10 +172,12 @@ export const ShiftPlanningView: React.FC = () => {
     e.preventDefault();
     try {
       const submitData = {
-        doctor: formData.doctor_id,
+        doctor_id: formData.doctor_id,
         work_date: formData.work_date,
         time_start: formData.time_start,
         time_end: formData.time_end,
+        break_start: formData.break_start || null,
+        break_end: formData.break_end || null,
         is_day_off: formData.is_day_off,
         planned_up: formData.planned_up,
       };
@@ -302,28 +303,27 @@ export const ShiftPlanningView: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-slate-900">Планирование смен</h2>
-        <div className="flex items-center space-x-3">
-          <select 
+    <div className="space-y-4 md:space-y-6">
+      {/* Заголовок + контролы */}
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+        <h2 className="text-xl md:text-2xl font-bold text-slate-900">Планирование смен</h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
             value={selectedDoctor}
             onChange={(e) => setSelectedDoctor(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-            className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+            className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white flex-1 sm:flex-none min-w-0"
           >
             <option value="all">Все врачи</option>
             {doctors.map((doc) => (
-              <option key={doc.id} value={doc.id}>
-                {doc.fio_alias}
-              </option>
+              <option key={doc.id} value={doc.id}>{doc.fio_alias}</option>
             ))}
           </select>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-1">
             <button onClick={handlePrevWeek} className="p-2 bg-white border border-slate-300 rounded-md hover:bg-slate-50">
               <ChevronLeft size={16} />
             </button>
-            <button onClick={handleToday} className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50">
+            <button onClick={handleToday} className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 whitespace-nowrap">
               Сегодня
             </button>
             <button onClick={handleNextWeek} className="p-2 bg-white border border-slate-300 rounded-md hover:bg-slate-50">
@@ -333,97 +333,90 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      {/* Карточки статистики */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
-          <div className="text-sm text-slate-600 mb-1">Всего врачей</div>
-          <div className="text-2xl font-bold text-slate-900">{calculateStats.totalDoctors}</div>
+      {/* Карточки статистики: 2 колонки на мобиле, 4 на десктопе */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
+          <div className="text-xs md:text-sm text-slate-600 mb-1">Всего врачей</div>
+          <div className="text-xl md:text-2xl font-bold text-slate-900">{calculateStats.totalDoctors}</div>
         </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-sm text-slate-600">Смен заполнено</div>
-            <CheckCircle2 size={16} className="text-green-600" />
+            <div className="text-xs md:text-sm text-slate-600">Смен заполнено</div>
+            <CheckCircle2 size={14} className="text-green-600" />
           </div>
-          <div className="text-2xl font-bold text-slate-900">
+          <div className="text-xl md:text-2xl font-bold text-slate-900">
             {calculateStats.filledShifts}/{calculateStats.totalPossibleShifts}
           </div>
         </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-sm text-slate-600">Близко к лимиту</div>
-            <AlertTriangle size={16} className="text-amber-600" />
+            <div className="text-xs md:text-sm text-slate-600">Близко к лимиту</div>
+            <AlertTriangle size={14} className="text-amber-600" />
           </div>
-          <div className="text-2xl font-bold text-amber-600">{calculateStats.warningShifts}</div>
+          <div className="text-xl md:text-2xl font-bold text-amber-600">{calculateStats.warningShifts}</div>
         </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-sm text-slate-600">Перегрузки</div>
-            <AlertCircle size={16} className="text-red-600" />
+            <div className="text-xs md:text-sm text-slate-600">Перегрузки</div>
+            <AlertCircle size={14} className="text-red-600" />
           </div>
-          <div className="text-2xl font-bold text-red-600">{calculateStats.overloadShifts}</div>
+          <div className="text-xl md:text-2xl font-bold text-red-600">{calculateStats.overloadShifts}</div>
         </div>
       </div>
 
-      {/* Кнопки действий */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
-            <RefreshCw size={16} className="mr-2" />
-            Очистить неделю
+      {/* Кнопки действий — скрыть на мобиле лишние */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
+            <RefreshCw size={16} />Очистить неделю
           </button>
-          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
-            <Search size={16} className="mr-2" />
-            Балансировать нагрузку
+          <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
+            <Search size={16} />Балансировать нагрузку
           </button>
-          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
-            <Search size={16} className="mr-2" />
-            Найти пробелы
-          </button>
-          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
-            <Printer size={16} className="mr-2" />
-            Печать
+          <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
+            <Printer size={16} />Печать
           </button>
         </div>
-        <div className="flex items-center space-x-2">
-          <button className="px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 flex items-center">
-            <Copy size={16} className="mr-2" />
-            Копировать неделю
+        <div className="flex items-center gap-2">
+          <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
+            <Copy size={16} />Копировать неделю
           </button>
-          <button className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 font-medium">
+          <button className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 font-medium whitespace-nowrap">
             Сгенерировать план
           </button>
         </div>
       </div>
 
-      <div className="text-sm text-slate-600 bg-slate-50 px-4 py-2 rounded-md">
+      <div className="text-xs md:text-sm text-slate-600 bg-slate-50 px-4 py-2 rounded-md">
         <span className="font-medium">Неделя:</span> {new Date(dates[0]).toLocaleDateString('ru-RU')} — {new Date(dates[6]).toLocaleDateString('ru-RU')}
       </div>
 
       {/* Легенда */}
-      <div className="bg-white rounded-lg border border-slate-200 p-4">
-        <div className="text-sm font-semibold text-slate-700 mb-2">Индикаторы нагрузки</div>
-        <div className="flex items-center space-x-6 text-xs">
-          <div className="flex items-center space-x-2">
-            <div className="w-4 h-4 rounded bg-green-100 border border-green-300"></div>
+      <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
+        <div className="text-xs md:text-sm font-semibold text-slate-700 mb-2">Индикаторы нагрузки</div>
+        <div className="flex items-center flex-wrap gap-3 md:gap-6 text-xs">
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-3 md:w-4 md:h-4 rounded bg-green-100 border border-green-300 shrink-0"></div>
             <span className="text-slate-600">Норма (&lt;80%)</span>
           </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-4 h-4 rounded bg-amber-100 border border-amber-300"></div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-3 md:w-4 md:h-4 rounded bg-amber-100 border border-amber-300 shrink-0"></div>
             <span className="text-slate-600">Близко к лимиту (80-95%)</span>
           </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-4 h-4 rounded bg-red-100 border border-red-300"></div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-3 md:w-4 md:h-4 rounded bg-red-100 border border-red-300 shrink-0"></div>
             <span className="text-slate-600">Перегруз (&gt;95%)</span>
           </div>
         </div>
       </div>
 
+      {/* Таблица недели — горизонтальный скролл на мобиле */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-left text-sm" style={{ minWidth: '640px' }}>
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th className="px-6 py-4 font-semibold text-slate-700">Врач</th>
+                <th className="px-4 md:px-6 py-4 font-semibold text-slate-700 sticky left-0 bg-slate-50 z-10">Врач</th>
                 {dates.map(date => {
                   const d = new Date(date);
                   const dayName = d.toLocaleDateString('ru-RU', { weekday: 'short' });
@@ -440,8 +433,8 @@ export const ShiftPlanningView: React.FC = () => {
             <tbody className="divide-y divide-slate-100">
               {doctors.map((doc) => (
                 <tr key={doc.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-4 font-medium text-slate-900">
-                    <div>{doc.fio_alias}</div>
+                  <td className="px-4 md:px-6 py-4 font-medium text-slate-900 sticky left-0 bg-white z-10 shadow-sm">
+                    <div className="text-sm">{doc.fio_alias}</div>
                     <div className="text-xs text-slate-500">{doc.specialty}</div>
                   </td>
                   {dates.map(date => {
@@ -459,6 +452,11 @@ export const ShiftPlanningView: React.FC = () => {
                               <div className="font-semibold">
                                 {schedule.time_start?.substring(0, 5) || '—'}–{schedule.time_end?.substring(0, 5) || '—'}
                               </div>
+                              {schedule.break_start && schedule.break_end && (
+                                <div className="mt-0.5 text-[10px] opacity-75">
+                                  ☕ {schedule.break_start.substring(0, 5)}–{schedule.break_end.substring(0, 5)}
+                                </div>
+                              )}
                               {schedule.planned_up > 0 && (
                                 <div className="mt-1 font-bold">
                                   {schedule.planned_up} УП
@@ -566,6 +564,42 @@ export const ShiftPlanningView: React.FC = () => {
                     required
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  ☕ Перерыв (обед)
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Начало</label>
+                    <input
+                      type="time"
+                      value={formData.break_start}
+                      onChange={(e) => setFormData({ ...formData, break_start: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Конец</label>
+                    <input
+                      type="time"
+                      value={formData.break_end}
+                      onChange={(e) => setFormData({ ...formData, break_end: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                </div>
+                {formData.break_start && formData.break_end && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    Длительность: {(() => {
+                      const [bsh, bsm] = formData.break_start.split(':').map(Number);
+                      const [beh, bem] = formData.break_end.split(':').map(Number);
+                      const mins = (beh * 60 + bem) - (bsh * 60 + bsm);
+                      return mins > 0 ? `${mins} мин` : '—';
+                    })()}
+                  </p>
+                )}
               </div>
 
               <div>

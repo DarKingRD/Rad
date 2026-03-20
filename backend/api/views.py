@@ -1,22 +1,51 @@
-from rest_framework import viewsets
-from rest_framework.decorators import api_view, action
-from rest_framework.response import Response
-from django.utils import timezone
 from datetime import datetime, timedelta
-from django.db.models import Q, Sum, F, Case, When, IntegerField, Value
-from .models import Doctor, StudyType, Schedule, Study
+import uuid
+
+from django.core.cache import cache
+from django.db.models import Case, F, IntegerField, Max, Min, Sum, When
+from django.utils import timezone
+from rest_framework import status, viewsets
+from rest_framework.decorators import action, api_view
+from rest_framework.response import Response
+
+from .models import Doctor, Schedule, Study, StudyType
 from .serializers import (
+    ChartDataSerializer,
+    DashboardStatsSerializer,
+    DistributionConfirmSerializer,
+    DistributionInfoSerializer,
+    DistributionPreviewInfoSerializer,
+    DistributionRunSerializer,
     DoctorSerializer,
     DoctorWithLoadSerializer,
-    StudyTypeSerializer,
     ScheduleSerializer,
     ScheduleWithDoctorSerializer,
+    StudyAssignSerializer,
     StudySerializer,
+    StudyStatusUpdateSerializer,
     StudyWithDetailsSerializer,
-    DashboardStatsSerializer,
-    ChartDataSerializer,
+    StudyTypeSerializer,
 )
-
+from .services.distribution import DistributionService
+from .services.doctor_queries import get_doctors_with_load_context
+from .services.study_queries import (
+    get_pending_studies_queryset,
+    get_priority_studies_queryset,
+)
+from .services.dashboard_queries import (
+    get_chart_data,
+    get_dashboard_stats_data,
+    parse_dashboard_range,
+)
+from .services.distribution_api import (
+    confirm_distribution_result,
+    get_distribution_info,
+    get_distribution_preview_info,
+    parse_distribution_date,
+    parse_distribution_datetime_end,
+    parse_distribution_datetime_start,
+    run_distribution,
+)
 
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.all()
@@ -24,8 +53,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
     pagination_class = None
 
     def get_queryset(self):
-        # Для списка показываем всех врачей, можно фильтровать по is_active
-        queryset = Doctor.objects.all()
+        queryset = super().get_queryset()
         is_active = self.request.query_params.get("is_active")
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active.lower() == "true")
@@ -33,69 +61,15 @@ class DoctorViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def with_load(self, request):
-        """Врачи с текущей загрузкой ЗА ТЕКУЩИЙ МЕСЯЦ"""
-        from django.utils import timezone
-        from django.db.models import Sum, F
-        from datetime import datetime
+        """Врачи с текущей загрузкой за текущий месяц + расписание на сегодня."""
+        doctors_qs, today_schedules = get_doctors_with_load_context()
 
-        now = timezone.now()
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-        if now.month == 12:
-            month_end = now.replace(year=now.year + 1, month=1, day=1)
-        else:
-            month_end = now.replace(month=now.month + 1, day=1)
-
-        doctors = Doctor.objects.all()
-
-        data = []
-        for doctor in doctors:
-            # Считаем УП по формуле: ∑ (количество исследований * весовой коэффициент)
-            # Используем агрегацию для суммирования весовых коэффициентов
-            up_data = Study.objects.filter(
-                diagnostician=doctor,
-                created_at__gte=month_start,
-                created_at__lt=month_end,
-                status__in=["confirmed", "pending", "signed"],  # Считаем все описанные
-            ).aggregate(
-                total_up=Sum(F('study_type__up_value')),  # ← Поле с коэффициентом в StudyType
-                active_count=Sum(
-                    Case(
-                        When(status__in=["confirmed", "pending"], then=1),
-                        default=0,
-                        output_field=IntegerField()
-                    )
-                )
-            )
-
-            current_load = round(up_data['total_up'] or 0, 3)
-            active_studies = up_data['active_count'] or 0
-
-            # Норма УП в месяц согласно положению
-            norm_up = 40 if doctor.position_type == "head" else 50
-
-            data.append(
-                {
-                    "id": doctor.id,
-                    "fio_alias": doctor.fio_alias or f"Врач {doctor.id}",
-                    "position_type": doctor.position_type,
-                    "max_up_per_day": doctor.max_up_per_day or norm_up,
-                    "is_active": (
-                        doctor.is_active if doctor.is_active is not None else True
-                    ),
-                    "specialty": (
-                        "Рентгенолог"
-                        if doctor.position_type == "radiologist"
-                        else "КТ-диагност"
-                    ),
-                    "current_load": current_load,
-                    "max_load": norm_up,
-                    "active_studies": active_studies,
-                    "load_percentage": round((current_load / norm_up) * 100, 1) if norm_up > 0 else 0,
-                }
-            )
-
-        return Response(data)
+        serializer = DoctorWithLoadSerializer(
+            doctors_qs,
+            many=True,
+            context={"today_schedules": today_schedules},
+        )
+        return Response(serializer.data)
 
 
 class StudyTypeViewSet(viewsets.ReadOnlyModelViewSet):
@@ -110,7 +84,7 @@ class ScheduleViewSet(viewsets.ModelViewSet):
     filterset_fields = ["doctor_id", "work_date", "is_day_off"]
 
     def get_queryset(self):
-        queryset = Schedule.objects.all().select_related("doctor")
+        queryset = super().get_queryset()
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
         doctor_id = self.request.query_params.get("doctor_id")
@@ -129,7 +103,6 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def by_date(self, request):
-        """Расписание на конкретную дату"""
         date = request.query_params.get("date")
         if not date:
             return Response({"error": "Date parameter required"}, status=400)
@@ -148,14 +121,14 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ["status", "priority", "diagnostician_id"]
 
     def get_queryset(self):
-        queryset = Study.objects.all().select_related("study_type", "diagnostician")
-        status = self.request.query_params.get("status")
+        queryset = super().get_queryset()
+        status_param = self.request.query_params.get("status")
         priority = self.request.query_params.get("priority")
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
 
-        if status:
-            queryset = queryset.filter(status=status)
+        if status_param:
+            queryset = queryset.filter(status=status_param)
         if priority:
             queryset = queryset.filter(priority=priority)
         if date_from:
@@ -167,59 +140,85 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"])
     def pending(self, request):
-        """Ожидающие исследования (без врача)"""
-        studies = (
-            Study.objects.filter(diagnostician_id__isnull=True)
-            .select_related("study_type", "diagnostician")
-            .order_by("-created_at")
-        )
+        """Ожидающие исследования (без назначенного врача) с пагинацией."""
+        page_size = min(int(request.query_params.get("page_size", 100)), 500)
+        page = max(int(request.query_params.get("page", 1)), 1)
+        offset = (page - 1) * page_size
+
+        qs = get_pending_studies_queryset()
+
+        total = qs.count()
+        studies = qs[offset : offset + page_size]
         serializer = StudyWithDetailsSerializer(studies, many=True)
-        return Response(serializer.data)
+
+        return Response(
+            {
+                "results": serializer.data,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size,
+            }
+        )
 
     @action(detail=False, methods=["get"])
     def cito(self, request):
-        """CITO исследования"""
-        studies = Study.objects.filter(priority="cito").select_related(
-            "study_type", "diagnostician"
-        )[:100]
+        """CITO исследования."""
+        limit = min(int(request.query_params.get("limit", 100)), 500)
+        studies = get_priority_studies_queryset("cito")[:limit]
         serializer = StudyWithDetailsSerializer(studies, many=True)
         return Response(serializer.data)
 
     @action(detail=False, methods=["get"])
     def asap(self, request):
-        """ASAP исследования"""
-        studies = Study.objects.filter(priority="asap").select_related(
-            "study_type", "diagnostician"
-        )[:100]
+        """ASAP исследования."""
+        limit = min(int(request.query_params.get("limit", 100)), 500)
+        studies = get_priority_studies_queryset("asap")[:limit]
         serializer = StudyWithDetailsSerializer(studies, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
     def assign(self, request, pk=None):
-        """Назначить исследование врачу"""
+        """Назначить исследование врачу."""
         study = self.get_object()
-        doctor_id = request.data.get("doctor_id")
 
-        if not doctor_id:
-            return Response({"error": "doctor_id required"}, status=400)
+        input_serializer = StudyAssignSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        doctor_id = input_serializer.validated_data["doctor_id"]
 
         study.diagnostician_id = doctor_id
         study.status = "confirmed"
-        study.save()
+        study.save(update_fields=["diagnostician_id", "status"])
 
-        return Response({"status": "assigned", "doctor_id": doctor_id})
+        output_serializer = StudyWithDetailsSerializer(
+            study,
+            context=self.get_serializer_context(),
+        )
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["put"])
+    @action(detail=True, methods=["put", "patch"])
     def update_status(self, request, pk=None):
-        """Обновить статус исследования"""
+        """Обновить статус исследования."""
         study = self.get_object()
-        new_status = request.data.get("status")
 
-        if new_status:
-            study.status = new_status
-            study.save()
+        input_serializer = StudyStatusUpdateSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
 
-        return Response({"status": study.status})
+        new_status = input_serializer.validated_data["status"]
+        study.status = new_status
+
+        if new_status == "pending":
+            study.diagnostician_id = None
+            study.save(update_fields=["status", "diagnostician_id"])
+        else:
+            study.save(update_fields=["status"])
+
+        output_serializer = StudyWithDetailsSerializer(
+            study,
+            context=self.get_serializer_context(),
+        )
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
 
     def get_serializer_class(self):
         if self.action in ["list", "retrieve", "pending", "cito", "asap"]:
@@ -229,102 +228,154 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
 
 @api_view(["GET"])
 def dashboard_stats(request):
-    """Статистика для дашборда ЗА ТЕКУЩИЙ МЕСЯЦ"""
-    from django.utils import timezone
-    from datetime import datetime
+    """
+    Статистика для дашборда за период date_from/date_to.
+    Если даты не переданы — берём текущий месяц.
+    """
+    date_from = request.query_params.get("date_from")
+    date_to = request.query_params.get("date_to")
 
-    now = timezone.now()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    try:
+        start_dt, end_dt = parse_dashboard_range(date_from, date_to)
+    except ValueError:
+        return Response(
+            {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+            status=400,
+        )
 
-    # Фильтр по месяцу (если не передана конкретная дата)
-    date = request.query_params.get("date")
-    if date:
-        try:
-            date_obj = datetime.strptime(date, "%Y-%m-%d").date()
-            studies_qs = Study.objects.filter(created_at__date=date_obj)
-        except ValueError:
-            studies_qs = Study.objects.filter(created_at__gte=month_start)
-    else:
-        studies_qs = Study.objects.filter(created_at__gte=month_start)
-
-    total_studies = studies_qs.count()
-
-    # Signed не считаем в pending
-    completed_studies = studies_qs.filter(status="signed").count()
-    pending_studies = studies_qs.filter(
-        status__in=["confirmed", "pending"], diagnostician_id__isnull=False
-    ).count()
-
-    # Врачи которые были активны в этом месяце
-    active_doctors = (
-        Doctor.objects.filter(studies__created_at__gte=month_start).distinct().count()
-    )
-
-    cito_studies = studies_qs.filter(priority="cito").count()
-    asap_studies = studies_qs.filter(priority="asap").count()
-
-    avg_load = 0
-    if active_doctors > 0:
-        avg_load = int(pending_studies / active_doctors * 1.5)
-    else:
-        avg_load = 0
-
-    data = {
-        "total_studies": total_studies,
-        "completed_studies": completed_studies,
-        "pending_studies": pending_studies,
-        "active_doctors": active_doctors,
-        "avg_load_per_doctor": avg_load,
-        "cito_studies": cito_studies,
-        "asap_studies": asap_studies,
-    }
-
+    data = get_dashboard_stats_data(start_dt, end_dt)
     serializer = DashboardStatsSerializer(data)
     return Response(serializer.data)
 
 
 @api_view(["GET"])
 def chart_data(request):
-    """Данные для графиков ЗА ТЕКУЩИЙ МЕСЯЦ"""
-    from django.utils import timezone
-    from datetime import datetime, timedelta
-
+    """
+    Данные для графиков за период date_from/date_to.
+    Если даты не переданы — берём текущий месяц.
+    """
     date_from = request.query_params.get("date_from")
     date_to = request.query_params.get("date_to")
 
-    # Если даты не переданы — берём текущий месяц
-    if not date_from or not date_to:
-        now = timezone.now()
-        date_from_obj = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        date_to_obj = now
-    else:
-        try:
-            date_from_obj = datetime.strptime(date_from, "%Y-%m-%d").date()
-            date_to_obj = datetime.strptime(date_to, "%Y-%m-%d").date()
-        except ValueError:
-            now = timezone.now()
-            date_from_obj = now.replace(day=1)
-            date_to_obj = now
-
-    data = []
-    current_date = date_from_obj
-    while current_date <= date_to_obj:
-        studies = Study.objects.filter(created_at__date=current_date)
-
-        # План — все исследования за день
-        plan = studies.count()
-
-        # Факт — только подписанные
-        actual = studies.filter(status="signed").count()
-
-        data.append(
-            {
-                "name": current_date.strftime("%d.%m"),
-                "plan": plan,
-                "actual": actual,
-            }
+    try:
+        start_dt, end_dt = parse_dashboard_range(date_from, date_to)
+    except ValueError:
+        return Response(
+            {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+            status=400,
         )
-        current_date += timedelta(days=1)
 
+    start_date = start_dt.date()
+    end_date = end_dt.date() if end_dt.time() != datetime.min.time() else end_dt.date()
+
+    # Так как parse_dashboard_range для переданного date_to возвращает exclusive end_dt (+1 day),
+    # для графика нужно вернуть последний реальный день периода.
+    if date_from and date_to:
+        end_date = (end_dt - timedelta(days=1)).date()
+
+    if start_date > end_date:
+        return Response(
+            {"error": "date_from не может быть позже date_to"},
+            status=400,
+        )
+
+    data = get_chart_data(start_date, end_date)
     serializer = ChartDataSerializer(data, many=True)
     return Response(serializer.data)
+
+
+@api_view(["GET", "POST"])
+def distribute_studies_view(request):
+    """
+    GET  -> служебная информация для экрана распределения
+    POST -> запуск распределения / preview
+    """
+    if request.method == "GET":
+        data = get_distribution_info()
+        serializer = DistributionInfoSerializer(data)
+        return Response(serializer.data)
+
+    input_serializer = DistributionRunSerializer(data=request.data)
+    input_serializer.is_valid(raise_exception=True)
+
+    validated = input_serializer.validated_data
+
+    target_date = validated.get("date")
+    preview = validated.get("preview", True)
+    date_from = validated.get("date_from")
+    date_to = validated.get("date_to")
+    use_mip = validated.get("use_mip", True)
+
+    date_from_dt = parse_distribution_datetime_start(
+        date_from.isoformat() if date_from else None
+    )
+    date_to_dt = parse_distribution_datetime_end(
+        date_to.isoformat() if date_to else None
+    )
+
+    try:
+        result = run_distribution(
+            target_date=target_date,
+            preview=preview,
+            date_from=date_from_dt,
+            date_to=date_to_dt,
+            use_mip=use_mip,
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {
+                "error": str(e),
+                "message": "Ошибка при распределении исследований",
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["POST"])
+def confirm_distribution(request):
+    """
+    Подтверждение preview-распределения и сохранение в БД.
+    """
+    input_serializer = DistributionConfirmSerializer(data=request.data)
+    input_serializer.is_valid(raise_exception=True)
+
+    distribution_id = input_serializer.validated_data["distribution_id"]
+
+    try:
+        result = confirm_distribution_result(distribution_id)
+        if result is None:
+            return Response(
+                {"error": "Распределение не найдено или истекло время (1 час)"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {
+                "error": str(e),
+                "message": "Ошибка при сохранении распределения",
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["GET"])
+def distribution_preview(request):
+    """
+    Быстрый preview без запуска алгоритма.
+    """
+    date_str = request.query_params.get("date")
+
+    try:
+        target_date = parse_distribution_date(date_str) if date_str else timezone.now().date()
+    except ValueError:
+        return Response(
+            {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    data = get_distribution_preview_info(target_date)
+    serializer = DistributionPreviewInfoSerializer(data)
+    return Response(serializer.data)
+
