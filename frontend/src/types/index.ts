@@ -105,6 +105,24 @@ export interface Assignment {
   is_overdue: boolean;
 }
 
+export interface PriorityBreakdownStat {
+  priority: 'normal' | 'asap' | 'cito' | string;
+  total: number;
+  assigned: number;
+  unassigned: number;
+  share_percent: number;
+  assigned_rate_percent: number;
+  overdue_total: number;
+  overdue_assigned: number;
+  overdue_unassigned: number;
+  overdue_rate_percent: number;
+  overdue_hours_total?: number;
+  overdue_hours_avg?: number;
+  tardiness_p50?: number;
+  tardiness_p95?: number;
+  tardiness_p99?: number;
+}
+
 export interface DistResult {
   doctor_stats: DoctorDistStat[];
   assigned: number;
@@ -114,6 +132,19 @@ export interface DistResult {
   total_tardiness: number;
   total_weighted_tardiness: number;
   avg_tardiness: number;
+ assignment_rate_percent?: number;
+  tardiness_p50?: number;
+  tardiness_p95?: number;
+  tardiness_p99?: number;
+  overdue_total?: number;
+  overdue_assigned?: number;
+  overdue_unassigned?: number;
+  overdue_rate_percent?: number;
+  priority_breakdown?: {
+    plan?: PriorityBreakdownStat;
+    asap?: PriorityBreakdownStat;
+    cito?: PriorityBreakdownStat;
+  };
   assignments: Assignment[];
   distribution_id?: string;
   preview_mode?: boolean;
