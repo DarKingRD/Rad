@@ -1,30 +1,29 @@
 """
 Сервис оффлайн-распределения исследований по врачам.
 
-Постановка задачи: Pm | rⱼ | ΣwⱼTⱼ  (Parallel Machine Weighted Tardiness)
-Лит.: Лазарев А.А., Гафаров Е.Р. «Теория расписаний» (МГУ, 2011)
+Текущая реализация использует ДВУХЭТАПНУЮ схему:
+1) Формируется дневной shortlist (пул на текущую смену) из backlog'а.
+2) Для shortlist решается точная задача вида:
 
-Целевая функция:
-    MIN Z = Σᵢ wᵢ × Tᵢ,  Tᵢ = max(0, Cᵢ - dᵢ)
+       MIN Z = Σ_i w_i * T_i,
+       T_i = max(0, C_i - d_i)
 
-    Cᵢ считается для ВСЕХ исследований — не только назначенных:
-      - назначено врачу j : Cᵢ = Cᵢⱼ  (плановое время завершения)
-      - не назначено       : Cᵢ = t_now + pᵢ  (оптимистичная нижняя оценка)
+   где C_i — фактическое время завершения исследования в расписании.
 
-Реализация:
-  - Основной метод: MILP через PuLP + CBC (pip install pulp)
-  - Fallback: жадный WSPT алгоритм (работает без зависимостей)
+Важно:
+- Целевая функция Σ w_i T_i применяется ИМЕННО к shortlist текущего дня.
+- Исследования, не попавшие в shortlist из-за ограничения дневной мощности,
+  остаются в очереди и не штрафуются внутри objective текущего запуска.
+- Для exact-модели используется time-indexed MILP (слоты по 5 минут) с реальным
+  учётом смены и перерыва врача.
 
-УП согласно Положению об оплате ОМС:
-  Рентген = 0.083 УП, КТ = 0.25 УП, МРТ = 0.333 УП
-  Норма = 50 УП/месяц (рентгенолог), 40 УП (завед.)
-  max_up_per_day в Doctor — дневной лимит УП (используется напрямую)
+Требует PuLP + CBC для exact-режима.
+Без PuLP используется жадный fallback.
 """
 
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
@@ -76,7 +75,6 @@ def parse_modalities(data) -> Set[str]:
 PRIORITY_WEIGHTS = {"cito": 36.0, "asap": 3.0, "normal": 1.0}
 DEADLINE_HOURS = {"cito": 2, "asap": 24, "normal": 72}
 
-# Рекомендованное время описания (мин) из Положения об оплате
 MODALITY_DURATION_MINUTES = {
     "XRAY": 5,
     "CT": 15,
@@ -91,8 +89,9 @@ MODALITY_DURATION_MINUTES = {
     "US": 10,
 }
 
-MIP_TIME_LIMIT = 300  # 5 минут на одну MIP-задачу
-MIP_GAP_REL = 0.01  # 1% gap — хорошее качество
+TIME_SLOT_MINUTES = 5
+MIP_TIME_LIMIT = 300
+MIP_GAP_REL = 0.01
 
 
 # ==============================================================================
@@ -132,85 +131,30 @@ class DoctorData:
 
     @property
     def break_minutes(self) -> float:
-        """Длительность перерыва в минутах (0 если не задан или уже прошёл)."""
         if self.break_start and self.break_end and self.break_end > self.break_start:
             return (self.break_end - self.break_start).total_seconds() / 60.0
         return 0.0
 
     @property
     def shift_hours(self) -> float:
-        """Рабочее время смены за вычетом перерыва (в часах)."""
         gross = (self.shift_end - self.shift_start).total_seconds() / 3600.0
         return max(0.0, gross - self.break_minutes / 60.0)
 
     @property
-
     def free_up(self) -> float:
         return max(0.0, self.max_up - self.used_up)
 
 
 @dataclass
-class MIPPreparedData:
-    pairs: List[Tuple[int, int]]
-    d_h: List[float]
-    remaining_h_by_doctor: Dict[int, float]
-    assign_cost: Dict[Tuple[int, int], float]
-    unassigned_cost: Dict[int, float]
-
-
-class ObjectiveStrategy(ABC):
-    code: str = "base"
-    description: str = "Base objective"
-
-    @abstractmethod
-    def build_objective(
-        self,
-        prob,
-        x,
-        studies: List["StudyData"],
-        doctors: List["DoctorData"],
-        prepared: MIPPreparedData,
-        pulp_module,
-    ) -> None:
-        raise NotImplementedError
-
-
-class WeightedTardinessObjective(ObjectiveStrategy):
-    code = "weighted_tardiness"
-    description = "MIN Σ assign_cost(i,j)*x(i,j) + Σ unassigned_cost(i)*(1-Σx(i,j))"
-
-    def build_objective(
-        self,
-        prob,
-        x,
-        studies: List["StudyData"],
-        doctors: List["DoctorData"],
-        prepared: MIPPreparedData,
-        pulp_module,
-    ) -> None:
-        prob += (
-            pulp_module.lpSum(
-                prepared.assign_cost[(i, j)] * x[(i, j)]
-                for (i, j) in prepared.pairs
-            )
-            + pulp_module.lpSum(
-                prepared.unassigned_cost[i]
-                * (
-                    1
-                    - pulp_module.lpSum(
-                        x[(ii, jj)]
-                        for (ii, jj) in prepared.pairs
-                        if ii == i
-                    )
-                )
-                for i in range(len(studies))
-            )
-        ), "Obj"
-
-
-OBJECTIVE_REGISTRY: Dict[str, type[ObjectiveStrategy]] = {
-    WeightedTardinessObjective.code: WeightedTardinessObjective,
-}
+class ScheduleOption:
+    option_id: int
+    study_idx: int
+    doctor_idx: int
+    start_dt: datetime
+    finish_dt: datetime
+    tardiness_hours: float
+    weighted_tardiness: float
+    occupied_slots: List[int]
 
 
 # ==============================================================================
@@ -223,52 +167,33 @@ class DistributionService:
         self,
         target_date: Optional[datetime] = None,
         preview_mode: bool = False,
-        objective: Optional[ObjectiveStrategy | str] = None,
+        objective: Optional[str] = None,
     ):
         self.now = timezone.now()
         self.target_date = target_date or self.now.date()
         self.preview_mode = preview_mode
-        self.objective = self._resolve_objective(objective)
+        self.objective_code = "exact_weighted_tardiness"
+        self.objective_description = "MIN Σ_i w_i * T_i over shortlisted studies"
         self._debug: List[str] = []
 
     def set_preview_mode(self, preview: bool = True):
-        "Включить/выключить режим предпросмотра (не сохранять назначения)"
         self.preview_mode = preview
-
-    def _resolve_objective(
-        self, objective: Optional[ObjectiveStrategy | str]
-    ) -> ObjectiveStrategy:
-        if objective is None:
-            return WeightedTardinessObjective() # Здесь можно выбрать модель, которую мы используем для распределения
-        if isinstance(objective, ObjectiveStrategy):
-            return objective
-        if isinstance(objective, str):
-            key = objective.strip().lower()
-            cls = OBJECTIVE_REGISTRY.get(key)
-            if cls is None:
-                available = ", ".join(sorted(OBJECTIVE_REGISTRY))
-                raise ValueError(
-                    f"Неизвестная objective='{objective}'. Доступно: {available}"
-                )
-            return cls()
-        raise TypeError("objective должен быть None, строкой или ObjectiveStrategy")
-
-    def set_objective(self, objective: ObjectiveStrategy | str) -> None:
-        self.objective = self._resolve_objective(objective)
-        self._log(
-            f"Установлена целевая функция: "
-            f"{self.objective.code} | {self.objective.description}"
-        )
 
     def _objective_meta(self) -> Dict[str, str]:
         return {
-            "code": self.objective.code,
-            "description": self.objective.description,
+            "code": self.objective_code,
+            "description": self.objective_description,
         }
 
     def _log(self, msg: str):
         logger.info(msg)
         self._debug.append(msg)
+
+    def set_objective(self, objective: str) -> None:
+        self._log(
+            "set_objective вызван, но в этой версии используется только "
+            f"{self.objective_code}"
+        )
 
     def _make_aware(self, dt: Optional[datetime]) -> Optional[datetime]:
         if dt is None:
@@ -312,9 +237,9 @@ class DistributionService:
     def _remaining_work_minutes(
         self, doctor: DoctorData, prebooked_minutes: float = 0.0
     ) -> float:
-        effective_start = max(doctor.shift_start, self.now)
+        effective_start = self._effective_start_after_prebook(doctor, prebooked_minutes)
         available = self._work_minutes_between(doctor, effective_start, doctor.shift_end)
-        return max(0.0, available - prebooked_minutes)
+        return max(0.0, available)
 
     def _add_work_minutes(
         self, doctor: DoctorData, start: datetime, minutes: float
@@ -348,11 +273,88 @@ class DistributionService:
 
         return current
 
-    def _completion_after_load(
-        self, doctor: DoctorData, total_minutes_from_now: float
+    def _effective_start_after_prebook(
+        self, doctor: DoctorData, prebooked_minutes: float = 0.0
     ) -> datetime:
-        start = max(doctor.shift_start, self.now)
-        return self._add_work_minutes(doctor, start, total_minutes_from_now)
+        base = max(doctor.shift_start, self.now)
+        return self._add_work_minutes(doctor, base, prebooked_minutes)
+
+    def _round_up_to_slot(self, dt: datetime) -> datetime:
+        minute = dt.minute
+        remainder = minute % TIME_SLOT_MINUTES
+        if remainder == 0 and dt.second == 0 and dt.microsecond == 0:
+            return dt.replace(second=0, microsecond=0)
+        delta = TIME_SLOT_MINUTES - remainder if remainder else 0
+        rounded = dt + timedelta(minutes=delta)
+        return rounded.replace(second=0, microsecond=0)
+
+    def _execution_segments(
+        self, doctor: DoctorData, start: datetime, minutes: float
+    ) -> List[Tuple[datetime, datetime]]:
+        remaining = max(0.0, float(minutes))
+        current = self._align_to_work_time(doctor, start)
+        segments: List[Tuple[datetime, datetime]] = []
+
+        while remaining > 1e-9 and current < doctor.shift_end:
+            current = self._align_to_work_time(doctor, current)
+            if current >= doctor.shift_end:
+                break
+
+            next_stop = doctor.shift_end
+            if doctor.break_start and doctor.break_end and current < doctor.break_start:
+                next_stop = min(next_stop, doctor.break_start)
+
+            available = max(0.0, (next_stop - current).total_seconds() / 60.0)
+            chunk = min(remaining, available)
+            if chunk > 1e-9:
+                seg_end = current + timedelta(minutes=chunk)
+                segments.append((current, seg_end))
+                remaining -= chunk
+                current = seg_end
+            else:
+                current = next_stop
+
+            if (
+                doctor.break_start
+                and doctor.break_end
+                and current == doctor.break_start
+            ):
+                current = doctor.break_end
+
+        return segments
+
+    def _slot_boundaries(
+        self, doctor: DoctorData, prebooked_minutes: float = 0.0
+    ) -> List[datetime]:
+        start = self._round_up_to_slot(
+            self._effective_start_after_prebook(doctor, prebooked_minutes)
+        )
+        slots: List[datetime] = []
+        current = start
+        while current < doctor.shift_end:
+            if (
+                doctor.break_start
+                and doctor.break_end
+                and doctor.break_start <= current < doctor.break_end
+            ):
+                current = self._round_up_to_slot(doctor.break_end)
+                continue
+            slots.append(current)
+            current += timedelta(minutes=TIME_SLOT_MINUTES)
+        return slots
+
+    def _occupied_slot_indices(
+        self,
+        doctor: DoctorData,
+        segments: List[Tuple[datetime, datetime]],
+        slot_boundaries: List[datetime],
+    ) -> List[int]:
+        occupied: List[int] = []
+        for idx, slot_start in enumerate(slot_boundaries):
+            slot_end = slot_start + timedelta(minutes=TIME_SLOT_MINUTES)
+            if any(seg_start < slot_end and slot_start < seg_end for seg_start, seg_end in segments):
+                occupied.append(idx)
+        return occupied
 
     # ── Загрузка данных ──────────────────────────────────────────────
 
@@ -373,36 +375,22 @@ class DistributionService:
     def load_studies(
         self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None
     ) -> List[StudyData]:
-        qs = Study.objects.filter(diagnostician__isnull=True).select_related(
-            "study_type"
-        )
+        qs = Study.objects.filter(diagnostician__isnull=True).select_related("study_type")
 
         if date_from is not None:
             qs = qs.filter(created_at__gte=date_from)
         if date_to is not None:
             qs = qs.filter(created_at__lt=date_to)
 
-        result = []
+        result: List[StudyData] = []
         for s in qs:
-            priority = s.priority or "normal"
+            priority = (s.priority or "normal").strip().lower()
+            if priority not in PRIORITY_WEIGHTS:
+                priority = "normal"
+
             created = self._make_aware(s.created_at) or self.now
-
-            # Номинальный дедлайн по регламенту (всегда от created_at, не зажатый).
-            # Дедлайн в прошлом — это не повод не назначать, а повод назначить первым.
-            # Целевая функция сама учтёт накопленную просрочку через T[i].
             deadline = created + timedelta(hours=DEADLINE_HOURS.get(priority, 72))
-
-            # Вес по приоритету.
-            # Для уже просроченных увеличиваем пропорционально просрочке:
-            # чем дольше снимок ждёт — тем больше штраф за дальнейшее промедление.
-            base_weight = PRIORITY_WEIGHTS.get(priority, 1.0)
-            if deadline < self.now:
-                overdue_hours = (self.now - deadline).total_seconds() / 3600.0
-                # +10% за каждый час просрочки, но не более ×10
-                overdue_multiplier = min(1.0 + overdue_hours * 0.1, 10.0)
-                weight = base_weight * overdue_multiplier
-            else:
-                weight = base_weight
+            weight = PRIORITY_WEIGHTS.get(priority, 1.0)
 
             result.append(
                 StudyData(
@@ -420,13 +408,11 @@ class DistributionService:
             )
 
         self._log(f"Исследований без назначения: {len(result)}")
-        if result:
-            sample = result[:3]
-            for s in sample:
-                self._log(
-                    f"  Пример: research_number={s.research_number}, priority={s.priority}, "
-                    f"modality={s.modality}, up={s.up_value}, dur={s.duration_minutes}мин"
-                )
+        for s in result[:3]:
+            self._log(
+                f"  Пример: research_number={s.research_number}, priority={s.priority}, "
+                f"modality={s.modality}, up={s.up_value}, dur={s.duration_minutes}мин"
+            )
         return result
 
     def load_doctors(self) -> List[DoctorData]:
@@ -437,7 +423,7 @@ class DistributionService:
 
         self._log(f"Расписаний на {target}: {schedules.count()}")
 
-        result = []
+        result: List[DoctorData] = []
         for sch in schedules:
             doc = sch.doctor
             if not doc or not doc.is_active:
@@ -455,7 +441,6 @@ class DistributionService:
                 s_start = self.now.replace(hour=9, minute=0, second=0, microsecond=0)
                 s_end = self.now.replace(hour=17, minute=0, second=0, microsecond=0)
 
-            # Перерыв (обед)
             b_start = (
                 timezone.make_aware(datetime.combine(target, sch.break_start))
                 if sch.break_start
@@ -495,292 +480,277 @@ class DistributionService:
         self._log(f"Врачей загружено: {len(result)}")
         return result
 
-    # ── Жадный WSPT (fallback) ───────────────────────────
+    # ── Shortlist на день ───────────────────────────────────────────
+
+    def _shortlist_priority_key(self, study: StudyData) -> Tuple:
+        overdue = study.deadline < self.now
+        pr = {"cito": 0, "asap": 1, "normal": 2}.get(study.priority, 2)
+        if overdue and study.priority == "cito":
+            bucket = 0
+        elif overdue and study.priority == "asap":
+            bucket = 1
+        elif overdue and study.priority == "normal":
+            bucket = 2
+        elif study.deadline.date() <= self.target_date:
+            bucket = 3
+        else:
+            bucket = 4
+        return (bucket, pr, study.deadline, study.created_at)
+
+    def build_daily_pool(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
+    ) -> List[StudyData]:
+        ordered = sorted(studies, key=self._shortlist_priority_key)
+
+        remaining_up = {d.id: d.max_up for d in doctors}
+        remaining_minutes = {
+            d.id: self._remaining_work_minutes(d, (doc_prebooked_minutes or {}).get(d.id, 0.0))
+            for d in doctors
+        }
+
+        selected: List[StudyData] = []
+
+        for s in ordered:
+            candidates = []
+            for d in doctors:
+                if not self._modality_ok(s.modality, d.modality):
+                    continue
+                if remaining_up[d.id] + 1e-9 < s.up_value:
+                    continue
+                if remaining_minutes[d.id] + 1e-9 < s.duration_minutes:
+                    continue
+
+                score = (
+                    remaining_minutes[d.id] - s.duration_minutes,
+                    remaining_up[d.id] - s.up_value,
+                )
+                candidates.append((score, d.id))
+
+            if not candidates:
+                continue
+
+            candidates.sort(reverse=True)
+            chosen_doc_id = candidates[0][1]
+            remaining_up[chosen_doc_id] -= s.up_value
+            remaining_minutes[chosen_doc_id] -= s.duration_minutes
+            selected.append(s)
+
+        self._log(
+            f"Shortlist на текущий день: {len(selected)} из {len(studies)} исследований"
+        )
+        return selected
+
+    # ── Жадный fallback ─────────────────────────────────────────────
 
     def solve_greedy(
         self,
         studies: List[StudyData],
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> Dict[str, int]:
-        self._log("Запуск: Жадный WSPT...")
+    ) -> Tuple[Dict[str, int], Dict[str, Dict]]:
+        self._log("Запуск: жадный fallback по shortlist...")
 
-        sorted_s = sorted(
-            studies,
-            key=lambda s: (
-                {"cito": 0, "asap": 1, "normal": 2}.get(s.priority, 2),
-                -(s.weight / s.duration_hours) if s.duration_hours > 0 else 0,
-                s.deadline,
-            ),
-        )
+        ordered = sorted(studies, key=self._shortlist_priority_key)
 
-        doc_up: Dict[int, float] = {d.id: 0.0 for d in doctors}
-        doc_min: Dict[int, float] = {
-            d.id: (doc_prebooked_minutes or {}).get(d.id, 0.0) for d in doctors
-        }
+        doctor_state: Dict[int, Dict[str, float | datetime]] = {}
+        for d in doctors:
+            prebooked = (doc_prebooked_minutes or {}).get(d.id, 0.0)
+            doctor_state[d.id] = {
+                "cursor": self._effective_start_after_prebook(d, prebooked),
+                "used_up": 0.0,
+            }
 
         assignment: Dict[str, int] = {}
+        details: Dict[str, Dict] = {}
 
-        for s in sorted_s:
-            best_id = None
-            best_score = float("inf")
+        for s in ordered:
+            best = None
+            best_finish = None
 
             for d in doctors:
                 if not self._modality_ok(s.modality, d.modality):
                     continue
-                if doc_up[d.id] + s.up_value > d.max_up + 1e-9:
+                if float(doctor_state[d.id]["used_up"]) + s.up_value > d.max_up + 1e-9:
                     continue
-                effective_start = max(d.shift_start, self.now)
-                gross_min = max(
-                    0.0, (d.shift_end - effective_start).total_seconds() / 60
-                )
-                # Перерыв, пересекающийся с остатком смены
-                break_overlap_min = 0.0
-                if d.break_start and d.break_end:
-                    ov_start = max(effective_start, d.break_start)
-                    ov_end = min(d.shift_end, d.break_end)
-                    if ov_end > ov_start:
-                        break_overlap_min = (ov_end - ov_start).total_seconds() / 60
-                remaining_minutes = max(
-                    0.0, gross_min - break_overlap_min - doc_min[d.id]
-                )
-                if s.duration_minutes > remaining_minutes + 1e-9:
+
+                start_dt = self._align_to_work_time(d, doctor_state[d.id]["cursor"])
+                finish_dt = self._add_work_minutes(d, start_dt, s.duration_minutes)
+                if finish_dt > d.shift_end:
                     continue
-                score = (
-                    doc_min[d.id] / (d.shift_hours * 60) if d.shift_hours > 0 else 1.0
-                )
-                if score < best_score:
-                    best_score = score
-                    best_id = d.id
 
-            if best_id is not None:
-                assignment[s.research_number] = best_id
-                doc_up[best_id] += s.up_value
-                doc_min[best_id] += s.duration_minutes
+                if best_finish is None or finish_dt < best_finish:
+                    best = d
+                    best_finish = finish_dt
 
-        self._log(f"Жадный WSPT: назначено {len(assignment)} / {len(studies)}")
+            if best is None:
+                continue
 
-        # Диагностика: сколько просроченных CITO назначено vs пропущено
-        overdue_cito = [
-            s for s in studies if s.priority == "cito" and s.deadline < self.now
-        ]
-        assigned_overdue = [s for s in overdue_cito if s.research_number in assignment]
-        skipped_overdue = [
-            s for s in overdue_cito if s.research_number not in assignment
-        ]
-        if overdue_cito:
-            self._log(
-                f"  Просроченных CITO: {len(overdue_cito)} | "
-                f"назначено: {len(assigned_overdue)} | "
-                f"пропущено: {len(skipped_overdue)}"
-            )
+            start_dt = self._align_to_work_time(best, doctor_state[best.id]["cursor"])
+            finish_dt = self._add_work_minutes(best, start_dt, s.duration_minutes)
+            tardiness = max(0.0, (finish_dt - s.deadline).total_seconds() / 3600.0)
 
-        overdue_asap = [
-            s for s in studies if s.priority == "asap" and s.deadline < self.now
-        ]
-        assigned_asap = [s for s in overdue_asap if s.research_number in assignment]
-        skipped_asap = [s for s in overdue_asap if s.research_number not in assignment]
+            assignment[s.research_number] = best.id
+            details[s.research_number] = {
+                "doctor_id": best.id,
+                "doctor_name": best.name,
+                "start_dt": start_dt,
+                "finish_dt": finish_dt,
+                "tardiness_hours": tardiness,
+                "weighted_tardiness": tardiness * s.weight,
+            }
 
-        if overdue_asap:
-            self._log(
-                f"  Просроченных ASAP: {len(overdue_asap)} | "
-                f"назначено: {len(assigned_asap)} | "
-                f"пропущено: {len(skipped_asap)}"
-            )
+            doctor_state[best.id]["cursor"] = finish_dt
+            doctor_state[best.id]["used_up"] = float(doctor_state[best.id]["used_up"]) + s.up_value
 
-        overdue_normal = [
-            s for s in studies if s.priority == "normal" and s.deadline < self.now
-        ]
-        assigned_normal = [s for s in overdue_normal if s.research_number in assignment]
-        skipped_normal = [
-            s for s in overdue_normal if s.research_number not in assignment
-        ]
+        self._log(f"Жадный fallback: назначено {len(assignment)} / {len(studies)}")
+        return assignment, details
 
-        if overdue_normal:
-            self._log(
-                f"  Просроченных normal: {len(overdue_normal)} | "
-                f"назначено: {len(assigned_normal)} | "
-                f"пропущено: {len(skipped_normal)}"
-            )
+    # ── Exact MILP: MIN Σ w_i T_i ───────────────────────────────────
 
-        for d in doctors:
-            cnt = sum(1 for did in assignment.values() if did == d.id)
-            up = doc_up[d.id]
-            mins = doc_min[d.id]
-            self._log(
-                f"  {d.name}: {cnt} исслед., {up:.2f}/{d.max_up} УП, "
-                f"{mins:.0f}/{d.shift_hours * 60:.0f} мин"
-            )
-        return assignment
-
-    # ── MIP ─────────────────────────────────────────────────────────
-
-    def _prepare_mip_data(
+    def _build_exact_options(
         self,
         studies: List[StudyData],
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> MIPPreparedData:
-        pairs = [
-            (i, j)
-            for i, s in enumerate(studies)
-            for j, d in enumerate(doctors)
-            if self._modality_ok(s.modality, d.modality)
-        ]
+    ) -> Tuple[List[ScheduleOption], Dict[int, List[int]], Dict[int, List[int]], Dict[int, List[datetime]]]:
+        options: List[ScheduleOption] = []
+        options_by_study: Dict[int, List[int]] = {i: [] for i in range(len(studies))}
+        options_by_doctor: Dict[int, List[int]] = {j: [] for j in range(len(doctors))}
+        slot_boundaries_by_doctor: Dict[int, List[datetime]] = {}
 
-        d_h = [(s.deadline - self.now).total_seconds() / 3600.0 for s in studies]
-        remaining_h_by_doctor: Dict[int, float] = {}
-        assign_cost: Dict[Tuple[int, int], float] = {}
-
-        pair_set = set(pairs)
+        option_id = 0
         for j, d in enumerate(doctors):
-            prebooked_minutes = (doc_prebooked_minutes or {}).get(d.id, 0.0)
-            remaining_minutes = self._remaining_work_minutes(d, prebooked_minutes)
-            remaining_h = remaining_minutes / 60.0
-            remaining_h_by_doctor[j] = remaining_h
+            prebooked = (doc_prebooked_minutes or {}).get(d.id, 0.0)
+            slot_boundaries = self._slot_boundaries(d, prebooked)
+            slot_boundaries_by_doctor[j] = slot_boundaries
 
-            self._log(
-                f"  Врач {d.name}: оставшееся время={remaining_h:.2f}ч "
-                f"(prebooked={prebooked_minutes / 60.0:.2f}ч)"
-            )
+            if not slot_boundaries:
+                continue
 
-            for i, _ in enumerate(studies):
-                if (i, j) not in pair_set:
+            for i, s in enumerate(studies):
+                if not self._modality_ok(s.modality, d.modality):
+                    continue
+                if s.up_value > d.max_up + 1e-9:
                     continue
 
-                finish_dt = self._completion_after_load(
-                    d, prebooked_minutes + studies[i].duration_minutes
-                )
-                completion_h = max(
-                    0.0, (finish_dt - self.now).total_seconds() / 3600.0
-                )
-                tard_lb = max(0.0, completion_h - d_h[i])
+                for start_dt in slot_boundaries:
+                    finish_dt = self._add_work_minutes(d, start_dt, s.duration_minutes)
+                    if finish_dt > d.shift_end:
+                        continue
 
-                load_penalty = 0.0
-                if remaining_h > 1e-9:
-                    load_penalty = studies[i].duration_hours / remaining_h
+                    segments = self._execution_segments(d, start_dt, s.duration_minutes)
+                    occupied_slots = self._occupied_slot_indices(d, segments, slot_boundaries)
+                    if not occupied_slots:
+                        continue
 
-                assign_cost[(i, j)] = studies[i].weight * tard_lb + 0.01 * load_penalty
+                    tardiness_hours = max(
+                        0.0, (finish_dt - s.deadline).total_seconds() / 3600.0
+                    )
+                    weighted_tardiness = tardiness_hours * s.weight
 
-        horizon_h = max(
-            (d.shift_end - self.now).total_seconds() / 3600.0 for d in doctors
-        )
-        unassigned_cost = {
-            i: studies[i].weight
-            * (max(0.0, -d_h[i]) + horizon_h + studies[i].duration_hours)
-            + 1.0
-            for i in range(len(studies))
-        }
+                    option = ScheduleOption(
+                        option_id=option_id,
+                        study_idx=i,
+                        doctor_idx=j,
+                        start_dt=start_dt,
+                        finish_dt=finish_dt,
+                        tardiness_hours=tardiness_hours,
+                        weighted_tardiness=weighted_tardiness,
+                        occupied_slots=occupied_slots,
+                    )
+                    options.append(option)
+                    options_by_study[i].append(option_id)
+                    options_by_doctor[j].append(option_id)
+                    option_id += 1
 
-        return MIPPreparedData(
-            pairs=pairs,
-            d_h=d_h,
-            remaining_h_by_doctor=remaining_h_by_doctor,
-            assign_cost=assign_cost,
-            unassigned_cost=unassigned_cost,
-        )
+        return options, options_by_study, options_by_doctor, slot_boundaries_by_doctor
 
-    def _add_standard_constraints(
-        self,
-        prob,
-        x,
-        studies: List[StudyData],
-        doctors: List[DoctorData],
-        prepared: MIPPreparedData,
-        pulp_module,
-    ) -> None:
-        for i in range(len(studies)):
-            row = [x[(ii, jj)] for (ii, jj) in prepared.pairs if ii == i]
-            if row:
-                prob += pulp_module.lpSum(row) <= 1, f"A{i}"
-
-        for j, d in enumerate(doctors):
-            col_up = [
-                studies[i].up_value * x[(ii, jj)]
-                for (ii, jj) in prepared.pairs
-                if jj == j
-                for i in [ii]
-            ]
-            if col_up:
-                prob += pulp_module.lpSum(col_up) <= d.max_up, f"UP{j}"
-
-            col_time = [
-                studies[i].duration_hours * x[(ii, jj)]
-                for (ii, jj) in prepared.pairs
-                if jj == j
-                for i in [ii]
-            ]
-            if col_time:
-                prob += (
-                    pulp_module.lpSum(col_time) <= prepared.remaining_h_by_doctor[j],
-                    f"TM{j}",
-                )
-
-    def solve_mip(
+    def solve_exact_mip(
         self,
         studies: List[StudyData],
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> Dict[str, int]:
+    ) -> Tuple[Dict[str, int], Dict[str, Dict], float]:
         try:
             import pulp
         except ImportError:
-            self._log("PuLP не установлен → жадный (pip install pulp для MIP)")
-            return self.solve_greedy(
+            self._log("PuLP не установлен → используем жадный fallback")
+            assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
+            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            return assignment, details, float(solver_obj)
 
-        self._log(f"MIP: {len(studies)} исследований в одной задаче")
-        return self._solve_mip_single(studies, doctors, doc_prebooked_minutes)
+        self._log(f"Exact MILP: shortlist={len(studies)}, doctors={len(doctors)}")
 
-    def _solve_mip_single(
-        self,
-        studies: List[StudyData],
-        doctors: List[DoctorData],
-        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> Dict[str, int]:
-        import pulp
-
-        n, m = len(studies), len(doctors)
-        self._log(f"MIP: {n} × {m}")
-        self._log(
-            f"Целевая функция: {self.objective.code} | {self.objective.description}"
-        )
-
-        prepared = self._prepare_mip_data(
+        options, options_by_study, _, slot_boundaries_by_doctor = self._build_exact_options(
             studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
         )
 
-        self._log(f"  Совместимых пар: {len(prepared.pairs)}")
-        if not prepared.pairs:
-            self._log("  Нет совместимых пар → жадный fallback")
-            return self.solve_greedy(
+        self._log(f"  Кандидатных стартов: {len(options)}")
+        if not options:
+            self._log("  Нет допустимых стартов → жадный fallback")
+            assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
+            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            return assignment, details, float(solver_obj)
 
-        prob = pulp.LpProblem("Flexible_assignment_model", pulp.LpMinimize)
+        infeasible_studies = [i for i, ids in options_by_study.items() if not ids]
+        if infeasible_studies:
+            self._log(
+                f"  В shortlist попали исследования без допустимых стартов: {len(infeasible_studies)} → жадный fallback"
+            )
+            assignment, details = self.solve_greedy(
+                studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
+            )
+            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            return assignment, details, float(solver_obj)
+
+        prob = pulp.LpProblem("Exact_weighted_tardiness", pulp.LpMinimize)
         x = {
-            (i, j): pulp.LpVariable(f"x_{i}_{j}", cat="Binary")
-            for (i, j) in prepared.pairs
+            option.option_id: pulp.LpVariable(f"x_{option.option_id}", cat="Binary")
+            for option in options
         }
 
-        self.objective.build_objective(
-            prob=prob,
-            x=x,
-            studies=studies,
-            doctors=doctors,
-            prepared=prepared,
-            pulp_module=pulp,
-        )
+        prob += pulp.lpSum(
+            option.weighted_tardiness * x[option.option_id] for option in options
+        ), "Obj"
 
-        self._add_standard_constraints(
-            prob=prob,
-            x=x,
-            studies=studies,
-            doctors=doctors,
-            prepared=prepared,
-            pulp_module=pulp,
-        )
+        # Каждое исследование из shortlist должно быть назначено ровно один раз.
+        for study_idx, option_ids in options_by_study.items():
+            prob += (
+                pulp.lpSum(x[oid] for oid in option_ids) == 1,
+                f"Study_{study_idx}",
+            )
+
+        # В один момент времени у врача не более одного исследования.
+        options_by_id = {option.option_id: option for option in options}
+        for doctor_idx, slot_boundaries in slot_boundaries_by_doctor.items():
+            for slot_idx, _ in enumerate(slot_boundaries):
+                occupying = [
+                    x[option.option_id]
+                    for option in options
+                    if option.doctor_idx == doctor_idx and slot_idx in option.occupied_slots
+                ]
+                if occupying:
+                    prob += (
+                        pulp.lpSum(occupying) <= 1,
+                        f"Cap_d{doctor_idx}_s{slot_idx}",
+                    )
+
+        # Ограничение по УП врача.
+        for doctor_idx, d in enumerate(doctors):
+            up_terms = [
+                studies[options_by_id[oid].study_idx].up_value * x[oid]
+                for oid in x
+                if options_by_id[oid].doctor_idx == doctor_idx
+            ]
+            if up_terms:
+                prob += pulp.lpSum(up_terms) <= d.max_up, f"UP_{doctor_idx}"
 
         try:
             solver = pulp.PULP_CBC_CMD(
@@ -790,70 +760,53 @@ class DistributionService:
             )
             prob.solve(solver)
             status = pulp.LpStatus[prob.status]
-            obj = pulp.value(prob.objective)
-            n_assigned = sum(
-                1
-                for i in range(n)
-                if any(
-                    (pulp.value(x[(ii, jj)]) or 0) > 0.5
-                    for (ii, jj) in prepared.pairs
-                    if ii == i
+            solver_obj = float(pulp.value(prob.objective) or 0.0)
+            self._log(f"CBC: статус={status}, obj={solver_obj:.3f}")
+
+            if status not in {"Optimal", "Not Solved", "Undefined", "Infeasible", "Integer Feasible"}:
+                self._log("  Неожиданный статус решателя → жадный fallback")
+                assignment, details = self.solve_greedy(
+                    studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
                 )
-            )
-            self._log(
-                f"CBC: статус={status}, obj={obj:.2f}, назначено={n_assigned}/{n}"
-            )
+                solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+                return assignment, details, float(solver_obj)
 
-            result: Dict[str, int] = {}
-            for i, j in prepared.pairs:
-                val = pulp.value(x[(i, j)])
-                if val is not None and val > 0.5:
-                    result[studies[i].research_number] = doctors[j].id
+            chosen = [option for option in options if (pulp.value(x[option.option_id]) or 0) > 0.5]
+            if len(chosen) != len(studies):
+                self._log(
+                    f"  Exact MILP выбрал {len(chosen)} вместо {len(studies)} → жадный fallback"
+                )
+                assignment, details = self.solve_greedy(
+                    studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
+                )
+                solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+                return assignment, details, float(solver_obj)
 
-            if result:
-                self._log(f"MIP назначил {len(result)} / {n} (статус: {status})")
-                return result
+            assignment: Dict[str, int] = {}
+            details: Dict[str, Dict] = {}
+            for option in chosen:
+                study = studies[option.study_idx]
+                doctor = doctors[option.doctor_idx]
+                assignment[study.research_number] = doctor.id
+                details[study.research_number] = {
+                    "doctor_id": doctor.id,
+                    "doctor_name": doctor.name,
+                    "start_dt": option.start_dt,
+                    "finish_dt": option.finish_dt,
+                    "tardiness_hours": option.tardiness_hours,
+                    "weighted_tardiness": option.weighted_tardiness,
+                }
 
-            self._log(f"MIP: 0 назначений (статус={status}) → жадный fallback")
-            return self.solve_greedy(
-                studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
-            )
+            self._log(f"Exact MILP: назначено {len(assignment)} / {len(studies)}")
+            return assignment, details, solver_obj
 
         except Exception as e:
             self._log(f"CBC ошибка: {e} → жадный fallback")
-            return self.solve_greedy(
+            assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
-
-    # ── Sequencing + расчёт tardiness ───────────────────────────────
-
-    def sequence(self, studies: List[StudyData]) -> List[StudyData]:
-        return sorted(
-            studies,
-            key=lambda s: (
-                {"cito": 0, "asap": 1, "normal": 2}.get(s.priority, 2),
-                s.deadline,
-            ),
-        )
-
-    def build_schedule(
-        self, doctor: DoctorData, ordered: List[StudyData]
-    ) -> List[Dict]:
-        results = []
-        t = self._align_to_work_time(doctor, max(doctor.shift_start, self.now))
-        for s in ordered:
-            finish = self._add_work_minutes(doctor, t, s.duration_minutes)
-            tardiness = max(0.0, (finish - s.deadline).total_seconds() / 3600.0)
-            results.append(
-                {
-                    "study": s,
-                    "completion_time": finish,
-                    "tardiness_hours": tardiness,
-                    "weighted_tardiness": tardiness * s.weight,
-                }
-            )
-            t = finish
-        return results
+            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            return assignment, details, float(solver_obj)
 
     # ── Сохранение ───────────────────────────────────────────────────
 
@@ -866,7 +819,7 @@ class DistributionService:
             Study.objects.filter(research_number=study_id).update(
                 diagnostician_id=doc_id,
                 status="confirmed",
-                planned_at=self.now,  # или target_date
+                planned_at=self.now,
             )
 
     # ── Главный метод ────────────────────────────────────────────────
@@ -883,7 +836,7 @@ class DistributionService:
         self._log(f"Целевая дата: {self.target_date}")
         self._log(f"Режим предпросмотра: {self.preview_mode}")
         self._log(
-            f"Целевая функция: {self.objective.code} | {self.objective.description}"
+            f"Целевая функция: {self.objective_code} | {self.objective_description}"
         )
         self._log("=" * 60)
 
@@ -904,16 +857,22 @@ class DistributionService:
         if not studies:
             return self._empty("Нет исследований без назначения", studies)
 
-        assignment: Dict[str, int] = {}
+        daily_pool = self.build_daily_pool(studies, doctors)
+        if not daily_pool:
+            return self._empty("Не удалось сформировать shortlist на текущий день", studies)
+
         if use_mip:
-            assignment = self.solve_mip(studies, doctors)
+            assignment, details, solver_obj = self.solve_exact_mip(daily_pool, doctors)
         else:
-            assignment = self.solve_greedy(studies, doctors)
+            assignment, details = self.solve_greedy(daily_pool, doctors)
+            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
 
         study_map = {s.research_number: s for s in studies}
         doctor_map = {d.id: d for d in doctors}
 
         for sid, did in assignment.items():
+            if sid not in study_map or did not in doctor_map:
+                continue
             d = doctor_map[did]
             d.assigned_ids.append(sid)
             d.used_up += study_map[sid].up_value
@@ -921,65 +880,184 @@ class DistributionService:
 
         all_assignments = []
         total_tardiness = 0.0
-        total_w_tardiness = 0.0
+        total_weighted_tardiness = 0.0
         pstats = {"cito": 0, "asap": 0, "normal": 0}
 
-        for d in doctors:
-            if not d.assigned_ids:
-                continue
-            ordered = self.sequence([study_map[sid] for sid in d.assigned_ids])
-            schedule = self.build_schedule(d, ordered)
-            for entry in schedule:
-                s = entry["study"]
-                tar = entry["tardiness_hours"]
-                wt = entry["weighted_tardiness"]
-                total_tardiness += tar
-                total_w_tardiness += wt
-                pstats[s.priority] = pstats.get(s.priority, 0) + 1
-                all_assignments.append(
-                    {
-                        "study_number": s.research_number,
-                        "study_modality": list(s.modality),
-                        "doctor_id": d.id,
-                        "doctor_name": d.name,
-                        "doctor_modality": list(d.modality),
-                        "priority": s.priority,
-                        "deadline": s.deadline.isoformat(),
-                        "completion_time": entry["completion_time"].isoformat(),
-                        "tardiness_hours": round(tar, 2),
-                        "up_value": s.up_value,
-                        "is_overdue": s.deadline < self.now,
-                    }
-                )
+        for sid, meta in details.items():
+            s = study_map[sid]
+            d = doctor_map[meta["doctor_id"]]
+            tardiness = float(meta["tardiness_hours"])
+            weighted_tardiness = float(meta["weighted_tardiness"])
 
+            total_tardiness += tardiness
+            total_weighted_tardiness += weighted_tardiness
+            pstats[s.priority] = pstats.get(s.priority, 0) + 1
+
+            all_assignments.append(
+                {
+                    "study_number": s.research_number,
+                    "study_modality": list(s.modality),
+                    "doctor_id": d.id,
+                    "doctor_name": d.name,
+                    "doctor_modality": list(d.modality),
+                    "priority": s.priority,
+                    "deadline": s.deadline.isoformat(),
+                    "start_time": meta["start_dt"].isoformat(),
+                    "completion_time": meta["finish_dt"].isoformat(),
+                    "tardiness_hours": round(tardiness, 2),
+                    "weighted_tardiness": round(weighted_tardiness, 3),
+                    "up_value": s.up_value,
+                    "is_overdue": s.deadline < self.now,
+                }
+            )
+        
+        assigned_ids = set(assignment.keys())
+
+        for s in studies:
+            if s.research_number in assigned_ids:
+                continue
+
+            all_assignments.append(
+                {
+                    "study_number": s.research_number,
+                    "study_modality": list(s.modality),
+                    "doctor_id": None,
+                    "doctor_name": None,
+                    "doctor_modality": [],
+                    "priority": s.priority,
+                    "deadline": s.deadline.isoformat(),
+                    "start_time": None,
+                    "completion_time": None,
+                    "tardiness_hours": None,
+                    "weighted_tardiness": None,
+                    "up_value": s.up_value,
+                    "is_overdue": s.deadline < self.now,
+                }
+            )
+
+        all_assignments.sort(
+            key=lambda item: (
+                item["doctor_id"] is None,
+                item["doctor_name"] or "",
+                item["start_time"] or "",
+                item["study_number"] or "",
+            )
+        )
         self.save_to_db(assignment)
 
         n_asgn = len(assignment)
-        z = round(total_w_tardiness, 3)
-        n_cito_assigned = sum(
-            1
-            for s in studies
-            if s.priority == "cito" and s.research_number in assignment
-        )
-        n_asap_assigned = sum(
-            1
-            for s in studies
-            if s.priority == "asap" and s.research_number in assignment
-        )
-        n_normal_assigned = sum(
-            1
-            for s in studies
-            if s.priority == "normal" and s.research_number in assignment
-        )
-        n_cito_total = sum(1 for s in studies if s.priority == "cito")
-        n_asap_total = sum(1 for s in studies if s.priority == "asap")
-        n_normal_total = sum(1 for s in studies if s.priority == "normal")
+        total_studies = len(studies)
+        pool_size = len(daily_pool)
+        backlog_outside_pool = max(0, total_studies - pool_size)
+        z = round(total_weighted_tardiness, 3)
+
+        def _pct(value: float, total: float) -> float:
+            if total <= 0:
+                return 0.0
+            return round(value / total * 100, 2)
+
+        def _percentile(values: List[float], q: float) -> float:
+            if not values:
+                return 0.0
+            if len(values) == 1:
+                return round(values[0], 2)
+            ordered = sorted(values)
+            idx = (len(ordered) - 1) * q
+            lo = int(idx)
+            hi = min(lo + 1, len(ordered) - 1)
+            frac = idx - lo
+            return round(ordered[lo] + (ordered[hi] - ordered[lo]) * frac, 2)
+
+        assigned_tardiness_by_study = {
+            item["study_number"]: float(item["tardiness_hours"])
+            for item in all_assignments
+            if item["tardiness_hours"] is not None
+        }
+
+        priority_labels = {
+            "normal": "plan",
+            "asap": "asap",
+            "cito": "cito",
+        }
+        priority_breakdown: Dict[str, Dict[str, float | int | str]] = {}
+
+        overdue_total = 0
+        overdue_assigned = 0
+
+        for priority_code, output_key in priority_labels.items():
+            priority_studies = [s for s in studies if s.priority == priority_code]
+            priority_total = len(priority_studies)
+            priority_assigned = sum(
+                1 for s in priority_studies if s.research_number in assignment
+            )
+            priority_overdue_total = sum(
+                1 for s in priority_studies if s.deadline < self.now
+            )
+            priority_overdue_assigned = sum(
+                1
+                for s in priority_studies
+                if s.deadline < self.now and s.research_number in assignment
+            )
+            priority_overdue_hours_total = round(
+                sum(
+                    max(0.0, (self.now - s.deadline).total_seconds() / 3600.0)
+                    for s in priority_studies
+                ),
+                2,
+            )
+            priority_tardiness_values = [
+                assigned_tardiness_by_study.get(s.research_number, 0.0)
+                for s in priority_studies
+            ]
+
+            priority_breakdown[output_key] = {
+                "priority": priority_code,
+                "total": priority_total,
+                "assigned": priority_assigned,
+                "unassigned": priority_total - priority_assigned,
+                "share_percent": _pct(priority_total, total_studies),
+                "assigned_rate_percent": _pct(priority_assigned, priority_total),
+                "overdue_total": priority_overdue_total,
+                "overdue_assigned": priority_overdue_assigned,
+                "overdue_unassigned": priority_overdue_total - priority_overdue_assigned,
+                "overdue_rate_percent": _pct(priority_overdue_total, priority_total),
+                "overdue_hours_total": priority_overdue_hours_total,
+                "overdue_hours_avg": round(
+                    priority_overdue_hours_total / priority_overdue_total, 2
+                )
+                if priority_overdue_total
+                else 0.0,
+                "tardiness_p50": _percentile(priority_tardiness_values, 0.5),
+                "tardiness_p95": _percentile(priority_tardiness_values, 0.95),
+                "tardiness_p99": _percentile(priority_tardiness_values, 0.99),
+            }
+
+            overdue_total += priority_overdue_total
+            overdue_assigned += priority_overdue_assigned
+
+        n_cito_total = int(priority_breakdown["cito"]["total"])
+        n_asap_total = int(priority_breakdown["asap"]["total"])
+        n_normal_total = int(priority_breakdown["plan"]["total"])
+        n_cito_assigned = int(priority_breakdown["cito"]["assigned"])
+        n_asap_assigned = int(priority_breakdown["asap"]["assigned"])
+        n_normal_assigned = int(priority_breakdown["plan"]["assigned"])
+
+        tardiness_values = [
+            item["tardiness_hours"]
+            for item in all_assignments
+            if item["tardiness_hours"] is not None
+        ]
+        tardiness_p50 = _percentile(tardiness_values, 0.5)
+        tardiness_p95 = _percentile(tardiness_values, 0.95)
+        tardiness_p99 = _percentile(tardiness_values, 0.99)
+
         self._log(
-            f"Итого: {n_asgn}/{len(studies)} | "
+            f"Итого: shortlist={pool_size}/{total_studies}, назначено={n_asgn}/{total_studies} "
+            f"({_pct(n_asgn, total_studies):.2f}%) | "
             f"CITO: {n_cito_assigned}/{n_cito_total} | "
             f"ASAP: {n_asap_assigned}/{n_asap_total} | "
             f"NORMAL: {n_normal_assigned}/{n_normal_total} | "
-            f"Z={z}"
+            f"Backlog вне shortlist: {backlog_outside_pool} | Z={z}"
         )
 
         if not self.preview_mode:
@@ -989,12 +1067,23 @@ class DistributionService:
 
         return {
             "assigned": n_asgn,
-            "unassigned": len(studies) - n_asgn,
+            "unassigned": total_studies - n_asgn,
+            "assigment_rate_percent": _pct(n_asgn, total_studies),
+            "scheduled_pool_size": pool_size,
+            "backlog_outside_pool": backlog_outside_pool,
             "cito_assigned": n_cito_assigned,
             "cito_total": n_cito_total,
             "total_tardiness": round(total_tardiness, 2),
             "total_weighted_tardiness": z,
             "avg_tardiness": round(total_tardiness / n_asgn, 2) if n_asgn else 0,
+            "tardiness_p50": tardiness_p50,
+            "tardiness_p95": tardiness_p95,
+            "tardiness_p99": tardiness_p99,
+            "overdue_total": overdue_total,
+            "overdue_assigned": overdue_assigned,
+            "overdue_unassigned": overdue_total - overdue_assigned,
+            "overdue_rate_percent": _pct(overdue_total, total_studies),
+            "priority_breakdown": priority_breakdown,
             "assignments": all_assignments,
             "doctor_stats": [
                 {
@@ -1012,10 +1101,12 @@ class DistributionService:
             ],
             "priority_stats": pstats,
             "objective_function": self._objective_meta(),
+            "solver_objective_value": round(float(solver_obj), 3),
             "reported_weighted_tardiness": z,
             "message": (
-                f"Оффлайн: назначено {n_asgn} из {len(studies)}. "
-                f"CITO: {n_cito_assigned}/{n_cito_total}. objective={self.objective.code}, Z={z}"
+                f"Оффлайн: shortlist {pool_size} из {total_studies}, назначено {n_asgn} "
+                f"({_pct(n_asgn, total_studies):.2f}%). "
+                f"CITO: {n_cito_assigned}/{n_cito_total}. objective={self.objective_code}, Z={z}"
             ),
             "_debug": self._debug,
             "preview_mode": self.preview_mode,
@@ -1027,13 +1118,77 @@ class DistributionService:
         return {
             "assigned": 0,
             "unassigned": len(studies or []),
+            "assignment_rate_percent": 0.0,
+            "scheduled_pool_size": 0,
+            "backlog_outside_pool": len(studies or []),
             "total_tardiness": 0.0,
             "total_weighted_tardiness": 0.0,
             "avg_tardiness": 0,
+            "tardiness_p50": 0.0,
+            "tardiness_p95": 0.0,
+            "tardiness_p99": 0.0,
+            "overdue_total": 0,
+            "overdue_assigned": 0,
+            "overdue_unassigned": 0,
+            "overdue_rate_percent": 0.0,
+            "priority_breakdown": {
+                "plan": {
+                    "priority": "normal",
+                    "total": 0,
+                    "assigned": 0,
+                    "unassigned": 0,
+                    "share_percent": 0.0,
+                    "assigned_rate_percent": 0.0,
+                    "overdue_total": 0,
+                    "overdue_assigned": 0,
+                    "overdue_unassigned": 0,
+                    "overdue_rate_percent": 0.0,
+                    "overdue_hours_total": 0.0,
+                    "overdue_hours_avg": 0.0,
+                    "tardiness_p50": 0.0,
+                    "tardiness_p95": 0.0,
+                    "tardiness_p99": 0.0,
+                },
+                "asap": {
+                    "priority": "asap",
+                    "total": 0,
+                    "assigned": 0,
+                    "unassigned": 0,
+                    "share_percent": 0.0,
+                    "assigned_rate_percent": 0.0,
+                    "overdue_total": 0,
+                    "overdue_assigned": 0,
+                    "overdue_unassigned": 0,
+                    "overdue_rate_percent": 0.0,
+                    "overdue_hours_total": 0.0,
+                    "overdue_hours_avg": 0.0,
+                    "tardiness_p50": 0.0,
+                    "tardiness_p95": 0.0,
+                    "tardiness_p99": 0.0,
+                },
+                "cito": {
+                    "priority": "cito",
+                    "total": 0,
+                    "assigned": 0,
+                    "unassigned": 0,
+                    "share_percent": 0.0,
+                    "assigned_rate_percent": 0.0,
+                    "overdue_total": 0,
+                    "overdue_assigned": 0,
+                    "overdue_unassigned": 0,
+                    "overdue_rate_percent": 0.0,
+                    "overdue_hours_total": 0.0,
+                    "overdue_hours_avg": 0.0,
+                    "tardiness_p50": 0.0,
+                    "tardiness_p95": 0.0,
+                    "tardiness_p99": 0.0,
+                },
+            },
             "assignments": [],
             "doctor_stats": [],
             "priority_stats": {"cito": 0, "asap": 0, "normal": 0},
-            "objective_function": {"code": "none", "description": "Нет рассчитанной цели"},
+            "objective_function": self._objective_meta(),
+            "solver_objective_value": 0.0,
             "reported_weighted_tardiness": 0.0,
             "message": message,
             "_debug": self._debug,
