@@ -1,24 +1,49 @@
 """
 Сервис оффлайн-распределения исследований по врачам.
 
+Назначение модуля
+-----------------
+Этот файл реализует прикладной сервис, который берёт:
+1. список нераспределённых исследований;
+2. список врачей с расписанием на целевую дату;
+3. правила приоритетов, дедлайнов, длительностей и ограничений по УП;
+и возвращает результат распределения исследований между врачами.
+
+Ключевая идея текущей версии
+----------------------------
 Текущая реализация использует ДВУХЭТАПНУЮ схему:
-1) Формируется дневной shortlist (пул на текущую смену) из backlog'а.
+
+1) Из всего backlog формируется дневной shortlist.
+   Это подмножество исследований, которое реально можно пытаться поставить
+   в расписание текущего дня.
+
 2) Для shortlist решается точная задача вида:
 
        MIN Z = Σ_i w_i * T_i,
        T_i = max(0, C_i - d_i)
 
-   где C_i — фактическое время завершения исследования в расписании.
+   где:
+   - w_i — вес исследования в зависимости от приоритета;
+   - C_i — фактическое время завершения исследования;
+   - d_i — дедлайн исследования;
+   - T_i — просрочка в часах.
 
-Важно:
+Важно понимать ограничения модели
+---------------------------------
 - Целевая функция Σ w_i T_i применяется ИМЕННО к shortlist текущего дня.
-- Исследования, не попавшие в shortlist из-за ограничения дневной мощности,
-  остаются в очереди и не штрафуются внутри objective текущего запуска.
-- Для exact-модели используется time-indexed MILP (слоты по 5 минут) с реальным
-  учётом смены и перерыва врача.
+- Исследования, которые не попали в shortlist, остаются в очереди backlog и
+  не штрафуются внутри objective текущего запуска.
+- Для exact-модели используется time-indexed MILP: время дискретизируется
+  слотами по 5 минут.
+- Смена врача и перерыв учитываются явно: нельзя ставить исследование в слот,
+  который пересекается с перерывом или выходит за пределы рабочей смены.
 
-Требует PuLP + CBC для exact-режима.
-Без PuLP используется жадный fallback.
+Fallback-логика
+---------------
+Если exact-режим по какой-то причине недоступен (например, не установлен PuLP,
+нет допустимых стартов или solver завершился нештатно), сервис переходит на
+жадный fallback. Жадная версия не гарантирует глобальный оптимум, но позволяет
+получить практический результат и не сорвать распределение полностью.
 """
 
 from __future__ import annotations
@@ -38,6 +63,15 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 # МАППИНГ МОДАЛЬНОСТЕЙ
 # ==============================================================================
+#
+# В исходных данных модальность может быть записана по-разному:
+# - русскими и латинскими сокращениями;
+# - в разных регистрах;
+# - в виде альтернативных кодов.
+#
+# Чтобы логика совместимости "врач ↔ исследование" работала корректно,
+# мы приводим все варианты к единому внутреннему виду.
+#
 
 MODALITY_ALIASES: Dict[str, str] = {
     "KT": "CT",
@@ -56,12 +90,37 @@ MODALITY_ALIASES: Dict[str, str] = {
 
 
 def normalize_modality(m: str) -> str:
+    """
+    Нормализовать обозначение модальности к единому внутреннему коду.
+
+    Примеры:
+    - "КТ" -> "CT"
+    - "рентген" -> "XRAY"
+    - "MRI" -> "MRI"
+
+    Если значение пустое, возвращается "OTHER".
+    Если значение неизвестно, возвращается его upper-case представление.
+    """
     if not m:
         return "OTHER"
     return MODALITY_ALIASES.get(m.strip().upper(), m.strip().upper())
 
 
+
 def parse_modalities(data) -> Set[str]:
+    """
+    Преобразовать поле модальности в множество нормализованных кодов.
+
+    На вход может прийти:
+    - список строк;
+    - одна строка, где модальности разделены '/';
+    - пустое значение.
+
+    Возвращается множество, потому что:
+    - дубли нам не нужны;
+    - операции пересечения множеств удобны для проверки совместимости
+      исследования и врача.
+    """
     if not data:
         return set()
     items = data if isinstance(data, list) else str(data).split("/")
@@ -71,10 +130,25 @@ def parse_modalities(data) -> Set[str]:
 # ==============================================================================
 # КОНФИГУРАЦИЯ
 # ==============================================================================
+#
+# Здесь сосредоточены базовые параметры модели:
+# - веса приоритетов для objective;
+# - SLA/дедлайны по приоритетам;
+# - типовые длительности исследований по модальностям;
+# - параметры exact MILP.
+#
+# Замечание: веса и дедлайны жёстко зашиты в коде. Если бизнес-правила
+# изменятся, править нужно именно этот блок.
+#
 
+# Веса w_i в целевой функции Σ w_i T_i.
 PRIORITY_WEIGHTS = {"cito": 36.0, "asap": 3.0, "normal": 1.0}
+
+# Дедлайны d_i в часах от created_at.
 DEADLINE_HOURS = {"cito": 2, "asap": 24, "normal": 72}
 
+# Грубая длительность исследования в минутах по модальности.
+# Используется как рабочая оценка для планирования времени врача.
 MODALITY_DURATION_MINUTES = {
     "XRAY": 5,
     "CT": 15,
@@ -89,7 +163,10 @@ MODALITY_DURATION_MINUTES = {
     "US": 10,
 }
 
+# Размер временного слота exact-модели.
 TIME_SLOT_MINUTES = 5
+
+# Ограничения solver'а CBC.
 MIP_TIME_LIMIT = 300
 MIP_GAP_REL = 0.01
 
@@ -97,10 +174,29 @@ MIP_GAP_REL = 0.01
 # ==============================================================================
 # СТРУКТУРЫ ДАННЫХ
 # ==============================================================================
+#
+# Вместо постоянной работы прямо с Django-моделями сервис сначала переводит
+# данные в компактные dataclass-структуры. Это упрощает расчёты и делает код
+# более предсказуемым.
+#
 
 
 @dataclass
 class StudyData:
+    """
+    Внутреннее представление исследования для алгоритма распределения.
+
+    Поля:
+    - research_number: внешний идентификатор исследования;
+    - priority: приоритет (`cito`, `asap`, `normal`);
+    - created_at: время создания исследования;
+    - modality: множество допустимых модальностей исследования;
+    - up_value: УП исследования;
+    - duration_minutes: оценка длительности исследования в минутах;
+    - deadline: крайний допустимый срок завершения;
+    - weight: вес исследования в objective.
+    """
+
     research_number: str
     priority: str
     created_at: datetime
@@ -112,11 +208,25 @@ class StudyData:
 
     @property
     def duration_hours(self) -> float:
+        """Длительность исследования в часах."""
         return self.duration_minutes / 60.0
 
 
 @dataclass
 class DoctorData:
+    """
+    Внутреннее представление врача для алгоритма распределения.
+
+    Поля:
+    - modality: множество модальностей, по которым врач может работать;
+    - max_up: суточный лимит УП;
+    - shift_start / shift_end: границы смены;
+    - break_start / break_end: границы перерыва, если он задан;
+    - assigned_ids: список исследований, назначенных в рамках текущего запуска;
+    - used_up: накопленный УП после распределения;
+    - used_minutes: накопленное занятое время после распределения.
+    """
+
     id: int
     name: str
     modality: Set[str]
@@ -131,22 +241,46 @@ class DoctorData:
 
     @property
     def break_minutes(self) -> float:
+        """Длительность перерыва в минутах."""
         if self.break_start and self.break_end and self.break_end > self.break_start:
             return (self.break_end - self.break_start).total_seconds() / 60.0
         return 0.0
 
     @property
     def shift_hours(self) -> float:
+        """
+        Эффективная длительность смены в часах.
+
+        Это не просто (shift_end - shift_start), а смена за вычетом перерыва.
+        """
         gross = (self.shift_end - self.shift_start).total_seconds() / 3600.0
         return max(0.0, gross - self.break_minutes / 60.0)
 
     @property
     def free_up(self) -> float:
+        """Оставшийся лимит УП после уже назначенных исследований."""
         return max(0.0, self.max_up - self.used_up)
 
 
 @dataclass
 class ScheduleOption:
+    """
+    Один допустимый вариант старта исследования в exact-модели.
+
+    Exact MILP работает не напрямую с "назначить исследование врачу", а с
+    более детализированными опциями: "назначить исследование i врачу j и начать
+    его в слот t".
+
+    Поля:
+    - option_id: уникальный идентификатор бинарной переменной x_option_id;
+    - study_idx: индекс исследования в shortlist;
+    - doctor_idx: индекс врача в списке doctors;
+    - start_dt / finish_dt: реальное время начала и завершения;
+    - tardiness_hours: просрочка исследования в часах;
+    - weighted_tardiness: вклад этой опции в objective;
+    - occupied_slots: номера временных слотов врача, которые занимает опция.
+    """
+
     option_id: int
     study_idx: int
     doctor_idx: int
@@ -158,17 +292,38 @@ class ScheduleOption:
 
 
 # ==============================================================================
-# СЕРВИС
+# СЕРВИС РАСПРЕДЕЛЕНИЯ
 # ==============================================================================
 
 
 class DistributionService:
+    """
+    Главный сервис оффлайн-распределения исследований.
+
+    Общий сценарий работы:
+    1. Загружаем врачей с расписанием на target_date.
+    2. Загружаем неназначенные исследования из backlog.
+    3. Формируем shortlist на текущий день.
+    4. Пытаемся решить exact MILP для shortlist.
+    5. Если exact-режим недоступен — используем greedy fallback.
+    6. Собираем подробный ответ для UI и, при необходимости, сохраняем результат.
+    """
+
     def __init__(
         self,
         target_date: Optional[datetime] = None,
         preview_mode: bool = False,
         objective: Optional[str] = None,
     ):
+        """
+        Инициализация сервиса.
+
+        Параметры:
+        - target_date: дата, на которую строится распределение;
+        - preview_mode: если True, результат не записывается в БД;
+        - objective: внешний параметр сохранён для совместимости API, но в
+          текущей версии фактически используется только exact_weighted_tardiness.
+        """
         self.now = timezone.now()
         self.target_date = target_date or self.now.date()
         self.preview_mode = preview_mode
@@ -177,30 +332,59 @@ class DistributionService:
         self._debug: List[str] = []
 
     def set_preview_mode(self, preview: bool = True):
+        """Включить или выключить режим предпросмотра."""
         self.preview_mode = preview
 
     def _objective_meta(self) -> Dict[str, str]:
+        """Вернуть краткое описание текущей objective-функции для ответа API."""
         return {
             "code": self.objective_code,
             "description": self.objective_description,
         }
 
     def _log(self, msg: str):
+        """
+        Записать сообщение в системный лог и во внутренний debug-список.
+
+        `_debug` затем отдаётся на фронт, чтобы можно было понимать, что именно
+        происходило во время распределения.
+        """
         logger.info(msg)
         self._debug.append(msg)
 
     def set_objective(self, objective: str) -> None:
+        """
+        Попытка сменить objective-функцию.
+
+        Метод оставлен для совместимости со старым интерфейсом, но в текущей
+        версии сервис поддерживает только exact_weighted_tardiness.
+        """
         self._log(
             "set_objective вызван, но в этой версии используется только "
             f"{self.objective_code}"
         )
 
     def _make_aware(self, dt: Optional[datetime]) -> Optional[datetime]:
+        """
+        Привести datetime к timezone-aware формату.
+
+        В Django легко столкнуться со смешением aware и naive datetime.
+        Для расчётов это критично, поэтому здесь приводим значения к единому виду.
+        """
         if dt is None:
             return None
         return dt if timezone.is_aware(dt) else timezone.make_aware(dt)
 
     def _modality_ok(self, study_mods: Set[str], doc_mods: Set[str]) -> bool:
+        """
+        Проверить совместимость модальностей исследования и врача.
+
+        Правило:
+        - если у врача нет модальностей, он не подходит;
+        - если у исследования модальность не указана, считаем его совместимым с
+          любым врачом;
+        - иначе нужен непустой intersection множеств модальностей.
+        """
         if not doc_mods:
             return False
         if not study_mods:
@@ -208,6 +392,15 @@ class DistributionService:
         return bool(study_mods & doc_mods)
 
     def _align_to_work_time(self, doctor: DoctorData, dt: datetime) -> datetime:
+        """
+        Сдвинуть момент времени к допустимому рабочему времени врача.
+
+        Что делает метод:
+        - если время раньше начала смены, переносит его на shift_start;
+        - если время попало в перерыв, переносит его на конец перерыва.
+
+        Это базовый helper, который используется почти во всех расчётах времени.
+        """
         if dt < doctor.shift_start:
             dt = doctor.shift_start
         if (
@@ -221,6 +414,15 @@ class DistributionService:
     def _work_minutes_between(
         self, doctor: DoctorData, start: datetime, end: datetime
     ) -> float:
+        """
+        Посчитать, сколько рабочих минут врача содержится в интервале [start, end].
+
+        При этом:
+        - интервалы за пределами смены отсекаются;
+        - время, попадающее в перерыв, вычитается.
+
+        Метод нужен в первую очередь для грубой оценки доступной мощности врача.
+        """
         start = max(start, doctor.shift_start)
         end = min(end, doctor.shift_end)
         if end <= start:
@@ -237,6 +439,12 @@ class DistributionService:
     def _remaining_work_minutes(
         self, doctor: DoctorData, prebooked_minutes: float = 0.0
     ) -> float:
+        """
+        Оценить, сколько рабочих минут у врача осталось доступными.
+
+        `prebooked_minutes` — это уже занятое или заранее зарезервированное время,
+        которое нужно учитывать до начала нового распределения.
+        """
         effective_start = self._effective_start_after_prebook(doctor, prebooked_minutes)
         available = self._work_minutes_between(doctor, effective_start, doctor.shift_end)
         return max(0.0, available)
@@ -244,6 +452,21 @@ class DistributionService:
     def _add_work_minutes(
         self, doctor: DoctorData, start: datetime, minutes: float
     ) -> datetime:
+        """
+        Добавить к моменту `start` указанное количество РАБОЧИХ минут врача.
+
+        Это один из самых важных методов во всём сервисе.
+        Он не просто делает `start + timedelta(minutes=...)`, а двигается по
+        реальному календарю врача:
+        - учитывает начало смены;
+        - пропускает перерыв;
+        - не считает нерабочие интервалы;
+        - если минут больше, чем осталось в смене, возвращает момент уже за её
+          пределами.
+
+        Именно этот helper позволяет корректно вычислять фактическое `finish_dt`
+        и, следовательно, точное `C_i` в objective Σ w_i T_i.
+        """
         remaining = max(0.0, float(minutes))
         current = self._align_to_work_time(doctor, start)
 
@@ -258,6 +481,7 @@ class DistributionService:
                 next_stop = min(next_stop, doctor.break_start)
 
             available = max(0.0, (next_stop - current).total_seconds() / 60.0)
+
             if remaining <= available + 1e-9:
                 return current + timedelta(minutes=remaining)
 
@@ -276,10 +500,25 @@ class DistributionService:
     def _effective_start_after_prebook(
         self, doctor: DoctorData, prebooked_minutes: float = 0.0
     ) -> datetime:
+        """
+        Посчитать фактический старт врача с учётом already booked времени.
+
+        В качестве базовой точки берётся максимум из:
+        - начала смены;
+        - текущего времени `self.now`.
+
+        После этого к базовой точке добавляются заранее занятые рабочие минуты.
+        """
         base = max(doctor.shift_start, self.now)
         return self._add_work_minutes(doctor, base, prebooked_minutes)
 
     def _round_up_to_slot(self, dt: datetime) -> datetime:
+        """
+        Округлить время вверх до ближайшей границы временного слота.
+
+        Exact MILP дискретизирует время слотами по TIME_SLOT_MINUTES.
+        Поэтому все допустимые старты должны лежать на этих границах.
+        """
         minute = dt.minute
         remainder = minute % TIME_SLOT_MINUTES
         if remainder == 0 and dt.second == 0 and dt.microsecond == 0:
@@ -291,6 +530,16 @@ class DistributionService:
     def _execution_segments(
         self, doctor: DoctorData, start: datetime, minutes: float
     ) -> List[Tuple[datetime, datetime]]:
+        """
+        Разбить выполнение исследования на рабочие сегменты.
+
+        Зачем это нужно:
+        если исследование началось до перерыва и заканчивается после перерыва,
+        его исполнение состоит из двух сегментов. Exact-модель должна понимать,
+        какие временные слоты действительно заняты этим исследованием.
+
+        Результат — список интервалов `(segment_start, segment_end)`.
+        """
         remaining = max(0.0, float(minutes))
         current = self._align_to_work_time(doctor, start)
         segments: List[Tuple[datetime, datetime]] = []
@@ -326,6 +575,17 @@ class DistributionService:
     def _slot_boundaries(
         self, doctor: DoctorData, prebooked_minutes: float = 0.0
     ) -> List[datetime]:
+        """
+        Сгенерировать все допустимые начала временных слотов для врача.
+
+        Важно:
+        - стартуем не раньше эффективного доступного времени врача;
+        - пропускаем перерыв;
+        - не выходим за пределы смены.
+
+        Это основа для построения exact MILP: каждый слот становится кандидатом
+        на старт исследования.
+        """
         start = self._round_up_to_slot(
             self._effective_start_after_prebook(doctor, prebooked_minutes)
         )
@@ -349,22 +609,49 @@ class DistributionService:
         segments: List[Tuple[datetime, datetime]],
         slot_boundaries: List[datetime],
     ) -> List[int]:
+        """
+        Найти индексы временных слотов, которые занимает исследование.
+
+        Exact-модели нужно ограничение вида:
+        "в один и тот же слот у врача не может стоять больше одного исследования".
+
+        Поэтому для каждой опции старта мы заранее вычисляем, какие именно слоты
+        она занимает.
+        """
         occupied: List[int] = []
         for idx, slot_start in enumerate(slot_boundaries):
             slot_end = slot_start + timedelta(minutes=TIME_SLOT_MINUTES)
-            if any(seg_start < slot_end and slot_start < seg_end for seg_start, seg_end in segments):
+            if any(
+                seg_start < slot_end and slot_start < seg_end
+                for seg_start, seg_end in segments
+            ):
                 occupied.append(idx)
         return occupied
 
     # ── Загрузка данных ──────────────────────────────────────────────
 
     def _get_duration(self, study: Study) -> float:
+        """
+        Оценить длительность исследования в минутах.
+
+        Если у исследования известна модальность study_type, длительность берётся
+        из конфигурационного словаря `MODALITY_DURATION_MINUTES`.
+        Иначе используется значение по умолчанию 15 минут.
+        """
         if study.study_type:
             mod = normalize_modality(study.study_type.modality or "")
             return float(MODALITY_DURATION_MINUTES.get(mod, 15))
         return 15.0
 
     def _get_up(self, study: Study) -> float:
+        """
+        Получить УП исследования.
+
+        Приоритет источников:
+        1. Явное значение `study.study_type.up_value`, если оно есть.
+        2. Грубая оценка по модальности.
+        3. Значение по умолчанию 0.25.
+        """
         if study.study_type and study.study_type.up_value:
             return float(study.study_type.up_value)
         if study.study_type:
@@ -375,6 +662,20 @@ class DistributionService:
     def load_studies(
         self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None
     ) -> List[StudyData]:
+        """
+        Загрузить все неназначенные исследования, которые можно рассматривать
+        для распределения.
+
+        Фильтрация:
+        - берём только исследования без diagnostician;
+        - опционально ограничиваем backlog временным окном `created_at`.
+
+        На выходе Django-модели преобразуются в `StudyData`.
+        Здесь же рассчитываются:
+        - приоритет;
+        - дедлайн;
+        - вес исследования.
+        """
         qs = Study.objects.filter(diagnostician__isnull=True).select_related("study_type")
 
         if date_from is not None:
@@ -416,6 +717,15 @@ class DistributionService:
         return result
 
     def load_doctors(self) -> List[DoctorData]:
+        """
+        Загрузить врачей, у которых есть рабочее расписание на target_date.
+
+        Что здесь происходит:
+        - выбираются записи Schedule на целевую дату;
+        - отбрасываются выходные и неактивные врачи;
+        - формируются интервалы смены и перерыва;
+        - модальности врача приводятся к нормализованному множеству.
+        """
         target = self.target_date
         schedules = Schedule.objects.filter(
             work_date=target, is_day_off=0
@@ -438,6 +748,7 @@ class DistributionService:
                 s_start = timezone.make_aware(datetime.combine(target, sch.time_start))
                 s_end = timezone.make_aware(datetime.combine(target, sch.time_end))
             else:
+                # Если в расписании время смены не задано, используем разумный дефолт.
                 s_start = self.now.replace(hour=9, minute=0, second=0, microsecond=0)
                 s_end = self.now.replace(hour=17, minute=0, second=0, microsecond=0)
 
@@ -483,6 +794,18 @@ class DistributionService:
     # ── Shortlist на день ───────────────────────────────────────────
 
     def _shortlist_priority_key(self, study: StudyData) -> Tuple:
+        """
+        Построить ключ сортировки исследования для формирования shortlist.
+
+        Логика bucket'ов:
+        0 - просроченные CITO;
+        1 - просроченные ASAP;
+        2 - просроченные NORMAL;
+        3 - исследования, чей дедлайн наступает не позже target_date;
+        4 - остальные.
+
+        Далее внутри bucket используется приоритет и более ранние сроки.
+        """
         overdue = study.deadline < self.now
         pr = {"cito": 0, "asap": 1, "normal": 2}.get(study.priority, 2)
         if overdue and study.priority == "cito":
@@ -503,6 +826,24 @@ class DistributionService:
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> List[StudyData]:
+        """
+        Построить shortlist исследований на текущий день.
+
+        Это НЕ окончательное расписание и НЕ точная оптимизация.
+        Здесь решается более грубая задача: выбрать из backlog такой пул
+        исследований, который вообще имеет шанс поместиться в доступную дневную
+        мощность врачей.
+
+        Логика:
+        - исследования сортируются по приоритетному ключу;
+        - для каждого исследования ищутся врачи, у которых хватает и УП, и минут;
+        - если кандидаты есть, исследование попадает в shortlist, а доступный
+          ресурс выбранного врача уменьшается.
+
+        Важно:
+        выбранный здесь врач не является окончательным назначением. Мы используем
+        его лишь как способ оценить, что shortlist в целом реалистичен по ресурсам.
+        """
         ordered = sorted(studies, key=self._shortlist_priority_key)
 
         remaining_up = {d.id: d.max_up for d in doctors}
@@ -523,6 +864,8 @@ class DistributionService:
                 if remaining_minutes[d.id] + 1e-9 < s.duration_minutes:
                     continue
 
+                # Чем больше запас по времени и УП после помещения исследования,
+                # тем предпочтительнее врач для грубой shortlist-оценки.
                 score = (
                     remaining_minutes[d.id] - s.duration_minutes,
                     remaining_up[d.id] - s.up_value,
@@ -551,10 +894,27 @@ class DistributionService:
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> Tuple[Dict[str, int], Dict[str, Dict]]:
+        """
+        Распределить shortlist жадным способом.
+
+        Это fallback-алгоритм, который используется, если exact MILP недоступен
+        или не дал пригодного решения.
+
+        Идея:
+        - исследования обрабатываются в порядке shortlist-приоритета;
+        - для каждого исследования ищется врач, у которого самый ранний finish_dt;
+        - если подходящий врач найден, исследование фиксируется за ним.
+
+        Возвращает:
+        - assignment: mapping research_number -> doctor_id;
+        - details: подробные метаданные по каждому назначенному исследованию.
+        """
         self._log("Запуск: жадный fallback по shortlist...")
 
         ordered = sorted(studies, key=self._shortlist_priority_key)
 
+        # Для каждого врача храним текущее положение "курсора времени" и уже
+        # использованный УП в рамках жадного распределения.
         doctor_state: Dict[int, Dict[str, float | datetime]] = {}
         for d in doctors:
             prebooked = (doc_prebooked_minutes or {}).get(d.id, 0.0)
@@ -581,6 +941,7 @@ class DistributionService:
                 if finish_dt > d.shift_end:
                     continue
 
+                # Жадное правило выбора: берём врача с самым ранним завершением.
                 if best_finish is None or finish_dt < best_finish:
                     best = d
                     best_finish = finish_dt
@@ -616,6 +977,22 @@ class DistributionService:
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> Tuple[List[ScheduleOption], Dict[int, List[int]], Dict[int, List[int]], Dict[int, List[datetime]]]:
+        """
+        Построить все допустимые опции старта для exact MILP.
+
+        Для каждой пары (исследование, врач) генерируются допустимые моменты
+        старта по сетке временных слотов. Для каждого такого старта рассчитываются:
+        - реальное время завершения finish_dt;
+        - просрочка tardiness_hours;
+        - вклад в objective weighted_tardiness;
+        - список занятых временных слотов occupied_slots.
+
+        Возвращаются:
+        - список всех опций;
+        - mapping study_idx -> список option_id;
+        - mapping doctor_idx -> список option_id;
+        - mapping doctor_idx -> границы слотов по времени.
+        """
         options: List[ScheduleOption] = []
         options_by_study: Dict[int, List[int]] = {i: [] for i in range(len(studies))}
         options_by_doctor: Dict[int, List[int]] = {j: [] for j in range(len(doctors))}
@@ -674,6 +1051,23 @@ class DistributionService:
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> Tuple[Dict[str, int], Dict[str, Dict], float]:
+        """
+        Решить точную задачу распределения shortlist через MILP.
+
+        Objective:
+            MIN Σ_i w_i * T_i
+
+        Но технически solver минимизирует сумму по опциям старта:
+            Σ(option) weighted_tardiness(option) * x_option
+
+        где каждая бинарная переменная x_option отвечает за выбор конкретного
+        врача и конкретного времени старта.
+
+        Возвращает:
+        - assignment: mapping research_number -> doctor_id;
+        - details: детальная информация по выбранным назначениям;
+        - solver_obj: значение objective, посчитанное solver'ом.
+        """
         try:
             import pulp
         except ImportError:
@@ -699,6 +1093,9 @@ class DistributionService:
             solver_obj = sum(item["weighted_tardiness"] for item in details.values())
             return assignment, details, float(solver_obj)
 
+        # Если для какого-то исследования из shortlist вообще нет допустимых опций,
+        # exact-модель для всего shortlist становится неудобной/невыполнимой.
+        # В таком случае переходим на жадную схему.
         infeasible_studies = [i for i, ids in options_by_study.items() if not ids]
         if infeasible_studies:
             self._log(
@@ -716,6 +1113,7 @@ class DistributionService:
             for option in options
         }
 
+        # Целевая функция: сумма взвешенной просрочки по выбранным опциям старта.
         prob += pulp.lpSum(
             option.weighted_tardiness * x[option.option_id] for option in options
         ), "Obj"
@@ -728,6 +1126,7 @@ class DistributionService:
             )
 
         # В один момент времени у врача не более одного исследования.
+        # Реализуется через ограничения по занятым временным слотам.
         options_by_id = {option.option_id: option for option in options}
         for doctor_idx, slot_boundaries in slot_boundaries_by_doctor.items():
             for slot_idx, _ in enumerate(slot_boundaries):
@@ -742,7 +1141,7 @@ class DistributionService:
                         f"Cap_d{doctor_idx}_s{slot_idx}",
                     )
 
-        # Ограничение по УП врача.
+        # Ограничение по дневному лимиту УП врача.
         for doctor_idx, d in enumerate(doctors):
             up_terms = [
                 studies[options_by_id[oid].study_idx].up_value * x[oid]
@@ -811,6 +1210,15 @@ class DistributionService:
     # ── Сохранение ───────────────────────────────────────────────────
 
     def save_to_db(self, assignment: Dict[str, int]) -> None:
+        """
+        Сохранить результат распределения в БД.
+
+        Если сервис запущен в preview-режиме, изменения не сохраняются.
+        Иначе для каждого исследования выставляются:
+        - diagnostician_id;
+        - статус `confirmed`;
+        - planned_at = self.now.
+        """
         if self.preview_mode:
             self._log("Режим предпросмотра - сохранение пропущено")
             return
@@ -830,6 +1238,22 @@ class DistributionService:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
     ) -> Dict:
+        """
+        Выполнить полный цикл распределения и вернуть подробный результат.
+
+        Основные этапы метода:
+        1. Логирование параметров запуска.
+        2. Загрузка врачей и исследований.
+        3. Формирование shortlist текущего дня.
+        4. Решение exact MILP или greedy fallback.
+        5. Построение агрегированных метрик и структуры ответа для UI.
+        6. Сохранение результата в БД, если это не preview.
+
+        Параметры:
+        - use_mip: если False, exact MILP принудительно не используется,
+          даже если доступен PuLP.
+        - date_from / date_to: окно отбора исследований по created_at.
+        """
         self._log("=" * 60)
         self._log("OFFLINE DISTRIBUTION SERVICE")
         self._log(f"Время: {self.now}")
@@ -842,6 +1266,10 @@ class DistributionService:
 
         doctors = self.load_doctors()
 
+        # Если сервис запущен позже начала смены, в симуляции "сегодняшнего" дня
+        # текущее время сдвигается к min_start. Это позволяет избежать ситуации,
+        # когда весь утренний интервал автоматически считается потерянным просто
+        # из-за времени запуска сервиса.
         if doctors:
             min_start = min(d.shift_start for d in doctors)
             if self.now > min_start:
@@ -870,6 +1298,7 @@ class DistributionService:
         study_map = {s.research_number: s for s in studies}
         doctor_map = {d.id: d for d in doctors}
 
+        # Переносим итог назначения в агрегаты врача, чтобы потом отдать doctor_stats.
         for sid, did in assignment.items():
             if sid not in study_map or did not in doctor_map:
                 continue
@@ -883,6 +1312,7 @@ class DistributionService:
         total_weighted_tardiness = 0.0
         pstats = {"cito": 0, "asap": 0, "normal": 0}
 
+        # Сначала добавляем в итоговый список назначенные исследования.
         for sid, meta in details.items():
             s = study_map[sid]
             d = doctor_map[meta["doctor_id"]]
@@ -910,7 +1340,9 @@ class DistributionService:
                     "is_overdue": s.deadline < self.now,
                 }
             )
-        
+
+        # Затем добавляем исследования, которые остались неназначенными.
+        # Это нужно фронту для вкладки "Не назначено" и общей аналитики.
         assigned_ids = set(assignment.keys())
 
         for s in studies:
@@ -935,6 +1367,10 @@ class DistributionService:
                 }
             )
 
+        # Сортировка нужна прежде всего для удобства UI:
+        # - сначала назначенные;
+        # - потом неназначенные;
+        # - внутри — по врачу, времени старта и номеру исследования.
         all_assignments.sort(
             key=lambda item: (
                 item["doctor_id"] is None,
@@ -952,11 +1388,17 @@ class DistributionService:
         z = round(total_weighted_tardiness, 3)
 
         def _pct(value: float, total: float) -> float:
+            """Безопасно посчитать процент `value / total * 100`."""
             if total <= 0:
                 return 0.0
             return round(value / total * 100, 2)
 
         def _percentile(values: List[float], q: float) -> float:
+            """
+            Посчитать q-перцентиль линейной интерполяцией.
+
+            Используется для p50/p95/p99 по tardiness.
+            """
             if not values:
                 return 0.0
             if len(values) == 1:
@@ -968,6 +1410,8 @@ class DistributionService:
             frac = idx - lo
             return round(ordered[lo] + (ordered[hi] - ordered[lo]) * frac, 2)
 
+        # Словарь вида research_number -> tardiness для уже назначенных исследований.
+        # Нужен для priority_breakdown и percentile-метрик.
         assigned_tardiness_by_study = {
             item["study_number"]: float(item["tardiness_hours"])
             for item in all_assignments
@@ -984,6 +1428,7 @@ class DistributionService:
         overdue_total = 0
         overdue_assigned = 0
 
+        # Формируем подробную статистику по каждому уровню приоритета.
         for priority_code, output_key in priority_labels.items():
             priority_studies = [s for s in studies if s.priority == priority_code]
             priority_total = len(priority_studies)
@@ -1038,6 +1483,7 @@ class DistributionService:
         n_cito_total = int(priority_breakdown["cito"]["total"])
         n_asap_total = int(priority_breakdown["asap"]["total"])
         n_normal_total = int(priority_breakdown["plan"]["total"])
+
         n_cito_assigned = int(priority_breakdown["cito"]["assigned"])
         n_asap_assigned = int(priority_breakdown["asap"]["assigned"])
         n_normal_assigned = int(priority_breakdown["plan"]["assigned"])
@@ -1114,6 +1560,12 @@ class DistributionService:
         }
 
     def _empty(self, message: str, studies: List = None) -> Dict:
+        """
+        Сформировать пустой ответ сервиса.
+
+        Используется в ситуациях, когда распределение невозможно начать или
+        продолжить: нет врачей, нет исследований, не сформировался shortlist и т.п.
+        """
         self._log(f"ПУСТО: {message}")
         return {
             "assigned": 0,
