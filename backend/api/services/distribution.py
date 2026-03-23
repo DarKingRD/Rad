@@ -49,9 +49,10 @@ Fallback-логика
 from __future__ import annotations
 
 import logging
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from django.utils import timezone
 
@@ -267,17 +268,18 @@ class ScheduleOption:
     """
     Один допустимый вариант старта исследования в exact-модели.
 
-    Exact MILP работает не напрямую с "назначить исследование врачу", а с
-    более детализированными опциями: "назначить исследование i врачу j и начать
-    его в слот t".
+    В универсальной версии опция хранит не только время старта/завершения, но и
+    словарь вычисленных метрик. Это позволяет менять матмодель без переписывания
+    всего сервиса: новая objective-функция может использовать любые метрики,
+    посчитанные на уровне опции.
 
     Поля:
     - option_id: уникальный идентификатор бинарной переменной x_option_id;
     - study_idx: индекс исследования в shortlist;
     - doctor_idx: индекс врача в списке doctors;
     - start_dt / finish_dt: реальное время начала и завершения;
-    - tardiness_hours: просрочка исследования в часах;
-    - weighted_tardiness: вклад этой опции в objective;
+    - metrics: словарь производных характеристик опции;
+    - objective_value: вклад этой опции в текущую objective;
     - occupied_slots: номера временных слотов врача, которые занимает опция.
     """
 
@@ -286,14 +288,169 @@ class ScheduleOption:
     doctor_idx: int
     start_dt: datetime
     finish_dt: datetime
-    tardiness_hours: float
-    weighted_tardiness: float
-    occupied_slots: List[int]
+    metrics: Dict[str, float] = field(default_factory=dict)
+    objective_value: float = 0.0
+    occupied_slots: List[int] = field(default_factory=list)
+
+    @property
+    def tardiness_hours(self) -> float:
+        """Просрочка опции в часах, если эта метрика рассчитана objective-стратегией."""
+        return float(self.metrics.get("tardiness_hours", 0.0))
+
+    @property
+    def weighted_tardiness(self) -> float:
+        """Взвешенная просрочка, если она присутствует среди метрик."""
+        return float(self.metrics.get("weighted_tardiness", 0.0))
 
 
-# ==============================================================================
-# СЕРВИС РАСПРЕДЕЛЕНИЯ
-# ==============================================================================
+@dataclass
+class MIPModelContext:
+    """
+    Контекст сборки MILP-модели.
+
+    Мы передаём его в objective-стратегию, чтобы новая матмодель могла строить
+    не только другую целевую функцию, но и свои дополнительные переменные и
+    ограничения.
+    """
+
+    studies: List[StudyData]
+    doctors: List[DoctorData]
+    options: List[ScheduleOption]
+    options_by_study: Dict[int, List[int]]
+    options_by_doctor: Dict[int, List[int]]
+    slot_boundaries_by_doctor: Dict[int, List[datetime]]
+
+
+class ObjectiveStrategy(ABC):
+    """Базовый интерфейс objective-функции для exact MILP и greedy fallback."""
+
+    code: str = "base"
+    description: str = "Base objective"
+
+    def option_metrics(
+        self,
+        study: StudyData,
+        doctor: DoctorData,
+        start_dt: datetime,
+        finish_dt: datetime,
+    ) -> Dict[str, float]:
+        """
+        Посчитать метрики конкретной опции старта.
+
+        Это место, где удобно вычислять всё, от чего потом может зависеть
+        objective: просрочку, weighted tardiness, completion time, отклонения от
+        дедлайна и т.д.
+        """
+        return {}
+
+    @abstractmethod
+    def build_objective(self, prob, x, ctx: MIPModelContext, pulp_module):
+        """Построить выражение objective для MILP."""
+        raise NotImplementedError
+
+    def add_extra_constraints(self, prob, x, ctx: MIPModelContext, pulp_module) -> None:
+        """
+        Хук для дополнительных ограничений матмодели.
+
+        Благодаря этому новая objective может оказаться не только другой целевой
+        функцией, но и полноценной другой постановкой, если ей нужны свои
+        переменные/ограничения.
+        """
+        return None
+
+    def greedy_rank(
+        self,
+        study: StudyData,
+        doctor: DoctorData,
+        start_dt: datetime,
+        finish_dt: datetime,
+        metrics: Dict[str, float],
+    ) -> Tuple:
+        """
+        Правило сравнения вариантов в greedy fallback.
+
+        По умолчанию greedy старается минимизировать вклад в текущую objective.
+        Это не делает greedy оптимальным, но хотя бы синхронизирует его с выбранной
+        матмоделью.
+        """
+        return (float(metrics.get("objective_value", 0.0)), finish_dt, doctor.id)
+
+    def assignment_payload(self, option: ScheduleOption, study: StudyData, doctor: DoctorData) -> Dict[str, Any]:
+        """Метаданные назначения, которые попадут в details и ответ API."""
+        return {
+            "doctor_id": doctor.id,
+            "doctor_name": doctor.name,
+            "start_dt": option.start_dt,
+            "finish_dt": option.finish_dt,
+            "objective_value": option.objective_value,
+            **option.metrics,
+        }
+
+
+class WeightedTardinessObjective(ObjectiveStrategy):
+    code = "weighted_tardiness"
+    description = "MIN Σ_i w_i * T_i"
+
+    def option_metrics(self, study: StudyData, doctor: DoctorData, start_dt: datetime, finish_dt: datetime) -> Dict[str, float]:
+        tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
+        weighted_tardiness = tardiness_hours * study.weight
+        completion_hour = (finish_dt - study.created_at).total_seconds() / 3600.0
+        return {
+            "tardiness_hours": tardiness_hours,
+            "weighted_tardiness": weighted_tardiness,
+            "completion_hours_from_created": completion_hour,
+            "objective_value": weighted_tardiness,
+        }
+
+    def build_objective(self, prob, x, ctx: MIPModelContext, pulp_module):
+        return pulp_module.lpSum(
+            option.objective_value * x[option.option_id]
+            for option in ctx.options
+        )
+
+
+class MinCompletionTimeObjective(ObjectiveStrategy):
+    code = "min_completion_time"
+    description = "MIN Σ_i C_i (в часах от created_at)"
+
+    def option_metrics(self, study: StudyData, doctor: DoctorData, start_dt: datetime, finish_dt: datetime) -> Dict[str, float]:
+        tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
+        completion_hour = (finish_dt - study.created_at).total_seconds() / 3600.0
+        return {
+            "tardiness_hours": tardiness_hours,
+            "weighted_tardiness": tardiness_hours * study.weight,
+            "completion_hours_from_created": completion_hour,
+            "objective_value": completion_hour,
+        }
+
+    def build_objective(self, prob, x, ctx: MIPModelContext, pulp_module):
+        return pulp_module.lpSum(
+            option.objective_value * x[option.option_id]
+            for option in ctx.options
+        )
+
+class TardinessObjective(ObjectiveStrategy):
+    code = "tardiness"
+    description = "MIN Σ_i T_i, где T_i = max(0, C_i - d_i)"
+
+    def option_metrics(self, study, doctor, start_dt, finish_dt):
+        tardiness_hours = max(
+            0.0,
+            (finish_dt - study.deadline).total_seconds() / 3600.0
+        )
+        completion_hour = (finish_dt - study.created_at).total_seconds() / 3600.0
+
+        return {
+            "tardiness_hours": tardiness_hours,
+            "completion_hours_from_created": completion_hour,
+            "objective_value": tardiness_hours,
+        }
+
+    def build_objective(self, prob, x, ctx, pulp_module):
+        return pulp_module.lpSum(
+            option.objective_value * x[option.option_id]
+            for option in ctx.options
+        )
 
 
 class DistributionService:
@@ -321,19 +478,36 @@ class DistributionService:
         Параметры:
         - target_date: дата, на которую строится распределение;
         - preview_mode: если True, результат не записывается в БД;
-        - objective: внешний параметр сохранён для совместимости API, но в
-          текущей версии фактически используется только exact_weighted_tardiness.
+        - objective: код objective-стратегии.
+
+        ВАЖНО: теперь objective действительно влияет на построение модели.
+        Чтобы добавить совсем другую матмодель, достаточно зарегистрировать
+        новую стратегию в `_build_objective_registry`.
         """
         self.now = timezone.now()
         self.target_date = target_date or self.now.date()
         self.preview_mode = preview_mode
-        self.objective_code = "exact_weighted_tardiness"
-        self.objective_description = "MIN Σ_i w_i * T_i over shortlisted studies"
+        self._objective_registry = self._build_objective_registry()
+        self.objective: ObjectiveStrategy = self._objective_registry.get(
+            objective or "weighted_tardiness",
+            self._objective_registry["weighted_tardiness"],
+        )
+        self.objective_code = self.objective.code
+        self.objective_description = self.objective.description
         self._debug: List[str] = []
 
     def set_preview_mode(self, preview: bool = True):
         """Включить или выключить режим предпросмотра."""
         self.preview_mode = preview
+
+    def _build_objective_registry(self) -> Dict[str, ObjectiveStrategy]:
+        """Реестр доступных objective-стратегий."""
+        strategies: List[ObjectiveStrategy] = [
+            WeightedTardinessObjective(),
+            MinCompletionTimeObjective(),
+            TardinessObjective(),
+        ]
+        return {strategy.code: strategy for strategy in strategies}
 
     def _objective_meta(self) -> Dict[str, str]:
         """Вернуть краткое описание текущей objective-функции для ответа API."""
@@ -354,15 +528,24 @@ class DistributionService:
 
     def set_objective(self, objective: str) -> None:
         """
-        Попытка сменить objective-функцию.
+        Сменить objective-функцию на одну из зарегистрированных стратегий.
 
-        Метод оставлен для совместимости со старым интерфейсом, но в текущей
-        версии сервис поддерживает только exact_weighted_tardiness.
+        Примеры:
+        - `weighted_tardiness`
+        - `min_completion_time`
+        - `tardiness`
         """
-        self._log(
-            "set_objective вызван, но в этой версии используется только "
-            f"{self.objective_code}"
-        )
+        strategy = self._objective_registry.get(objective)
+        if strategy is None:
+            available = ", ".join(sorted(self._objective_registry))
+            raise ValueError(
+                f"Неизвестная objective '{objective}'. Доступно: {available}"
+            )
+
+        self.objective = strategy
+        self.objective_code = strategy.code
+        self.objective_description = strategy.description
+        self._log(f"Целевая функция переключена на: {self.objective_code}")
 
     def _make_aware(self, dt: Optional[datetime]) -> Optional[datetime]:
         """
@@ -941,30 +1124,36 @@ class DistributionService:
                 if finish_dt > d.shift_end:
                     continue
 
-                # Жадное правило выбора: берём врача с самым ранним завершением.
-                if best_finish is None or finish_dt < best_finish:
-                    best = d
-                    best_finish = finish_dt
+                metrics = self.objective.option_metrics(s, d, start_dt, finish_dt)
+                rank = self.objective.greedy_rank(s, d, start_dt, finish_dt, metrics)
+
+                # Жадное правило теперь согласовано с выбранной objective.
+                if best is None or rank < best_finish:
+                    best = (d, metrics)
+                    best_finish = rank
 
             if best is None:
                 continue
 
-            start_dt = self._align_to_work_time(best, doctor_state[best.id]["cursor"])
-            finish_dt = self._add_work_minutes(best, start_dt, s.duration_minutes)
-            tardiness = max(0.0, (finish_dt - s.deadline).total_seconds() / 3600.0)
+            best_doctor, best_metrics = best
+            start_dt = self._align_to_work_time(best_doctor, doctor_state[best_doctor.id]["cursor"])
+            finish_dt = self._add_work_minutes(best_doctor, start_dt, s.duration_minutes)
+            option = ScheduleOption(
+                option_id=-1,
+                study_idx=-1,
+                doctor_idx=-1,
+                start_dt=start_dt,
+                finish_dt=finish_dt,
+                metrics=best_metrics,
+                objective_value=float(best_metrics.get("objective_value", 0.0)),
+                occupied_slots=[],
+            )
 
-            assignment[s.research_number] = best.id
-            details[s.research_number] = {
-                "doctor_id": best.id,
-                "doctor_name": best.name,
-                "start_dt": start_dt,
-                "finish_dt": finish_dt,
-                "tardiness_hours": tardiness,
-                "weighted_tardiness": tardiness * s.weight,
-            }
+            assignment[s.research_number] = best_doctor.id
+            details[s.research_number] = self.objective.assignment_payload(option, s, best_doctor)
 
-            doctor_state[best.id]["cursor"] = finish_dt
-            doctor_state[best.id]["used_up"] = float(doctor_state[best.id]["used_up"]) + s.up_value
+            doctor_state[best_doctor.id]["cursor"] = finish_dt
+            doctor_state[best_doctor.id]["used_up"] = float(doctor_state[best_doctor.id]["used_up"]) + s.up_value
 
         self._log(f"Жадный fallback: назначено {len(assignment)} / {len(studies)}")
         return assignment, details
@@ -1023,10 +1212,7 @@ class DistributionService:
                     if not occupied_slots:
                         continue
 
-                    tardiness_hours = max(
-                        0.0, (finish_dt - s.deadline).total_seconds() / 3600.0
-                    )
-                    weighted_tardiness = tardiness_hours * s.weight
+                    metrics = self.objective.option_metrics(s, d, start_dt, finish_dt)
 
                     option = ScheduleOption(
                         option_id=option_id,
@@ -1034,8 +1220,8 @@ class DistributionService:
                         doctor_idx=j,
                         start_dt=start_dt,
                         finish_dt=finish_dt,
-                        tardiness_hours=tardiness_hours,
-                        weighted_tardiness=weighted_tardiness,
+                        metrics=metrics,
+                        objective_value=float(metrics.get("objective_value", 0.0)),
                         occupied_slots=occupied_slots,
                     )
                     options.append(option)
@@ -1054,19 +1240,13 @@ class DistributionService:
         """
         Решить точную задачу распределения shortlist через MILP.
 
-        Objective:
-            MIN Σ_i w_i * T_i
+        В универсальной версии exact MILP сам по себе остаётся тем же по
+        структуре (assignment + временные слоты + ограничения по УП), но
+        целевая функция и её дополнительные ограничения делегируются выбранной
+        objective-стратегии.
 
-        Но технически solver минимизирует сумму по опциям старта:
-            Σ(option) weighted_tardiness(option) * x_option
-
-        где каждая бинарная переменная x_option отвечает за выбор конкретного
-        врача и конкретного времени старта.
-
-        Возвращает:
-        - assignment: mapping research_number -> doctor_id;
-        - details: детальная информация по выбранным назначениям;
-        - solver_obj: значение objective, посчитанное solver'ом.
+        Благодаря этому можно подставлять другие матмодели, не переписывая
+        базовый сервис распределения.
         """
         try:
             import pulp
@@ -1075,12 +1255,12 @@ class DistributionService:
             assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
-            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
             return assignment, details, float(solver_obj)
 
         self._log(f"Exact MILP: shortlist={len(studies)}, doctors={len(doctors)}")
 
-        options, options_by_study, _, slot_boundaries_by_doctor = self._build_exact_options(
+        options, options_by_study, options_by_doctor, slot_boundaries_by_doctor = self._build_exact_options(
             studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
         )
 
@@ -1090,7 +1270,7 @@ class DistributionService:
             assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
-            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
             return assignment, details, float(solver_obj)
 
         # Если для какого-то исследования из shortlist вообще нет допустимых опций,
@@ -1104,19 +1284,26 @@ class DistributionService:
             assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
-            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
             return assignment, details, float(solver_obj)
 
-        prob = pulp.LpProblem("Exact_weighted_tardiness", pulp.LpMinimize)
+        prob = pulp.LpProblem(f"Exact_{self.objective_code}", pulp.LpMinimize)
         x = {
             option.option_id: pulp.LpVariable(f"x_{option.option_id}", cat="Binary")
             for option in options
         }
 
-        # Целевая функция: сумма взвешенной просрочки по выбранным опциям старта.
-        prob += pulp.lpSum(
-            option.weighted_tardiness * x[option.option_id] for option in options
-        ), "Obj"
+        ctx = MIPModelContext(
+            studies=studies,
+            doctors=doctors,
+            options=options,
+            options_by_study=options_by_study,
+            options_by_doctor=options_by_doctor,
+            slot_boundaries_by_doctor=slot_boundaries_by_doctor,
+        )
+
+        # Целевая функция строится выбранной стратегией.
+        prob += self.objective.build_objective(prob, x, ctx, pulp), "Obj"
 
         # Каждое исследование из shortlist должно быть назначено ровно один раз.
         for study_idx, option_ids in options_by_study.items():
@@ -1151,6 +1338,8 @@ class DistributionService:
             if up_terms:
                 prob += pulp.lpSum(up_terms) <= d.max_up, f"UP_{doctor_idx}"
 
+        self.objective.add_extra_constraints(prob, x, ctx, pulp)
+
         try:
             solver = pulp.PULP_CBC_CMD(
                 timeLimit=MIP_TIME_LIMIT,
@@ -1167,7 +1356,7 @@ class DistributionService:
                 assignment, details = self.solve_greedy(
                     studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
                 )
-                solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+                solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
                 return assignment, details, float(solver_obj)
 
             chosen = [option for option in options if (pulp.value(x[option.option_id]) or 0) > 0.5]
@@ -1178,7 +1367,7 @@ class DistributionService:
                 assignment, details = self.solve_greedy(
                     studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
                 )
-                solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+                solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
                 return assignment, details, float(solver_obj)
 
             assignment: Dict[str, int] = {}
@@ -1187,14 +1376,7 @@ class DistributionService:
                 study = studies[option.study_idx]
                 doctor = doctors[option.doctor_idx]
                 assignment[study.research_number] = doctor.id
-                details[study.research_number] = {
-                    "doctor_id": doctor.id,
-                    "doctor_name": doctor.name,
-                    "start_dt": option.start_dt,
-                    "finish_dt": option.finish_dt,
-                    "tardiness_hours": option.tardiness_hours,
-                    "weighted_tardiness": option.weighted_tardiness,
-                }
+                details[study.research_number] = self.objective.assignment_payload(option, study, doctor)
 
             self._log(f"Exact MILP: назначено {len(assignment)} / {len(studies)}")
             return assignment, details, solver_obj
@@ -1204,7 +1386,7 @@ class DistributionService:
             assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
-            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
             return assignment, details, float(solver_obj)
 
     # ── Сохранение ───────────────────────────────────────────────────
@@ -1293,7 +1475,7 @@ class DistributionService:
             assignment, details, solver_obj = self.solve_exact_mip(daily_pool, doctors)
         else:
             assignment, details = self.solve_greedy(daily_pool, doctors)
-            solver_obj = sum(item["weighted_tardiness"] for item in details.values())
+            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
 
         study_map = {s.research_number: s for s in studies}
         doctor_map = {d.id: d for d in doctors}
@@ -1316,8 +1498,9 @@ class DistributionService:
         for sid, meta in details.items():
             s = study_map[sid]
             d = doctor_map[meta["doctor_id"]]
-            tardiness = float(meta["tardiness_hours"])
-            weighted_tardiness = float(meta["weighted_tardiness"])
+            tardiness = float(meta.get("tardiness_hours", 0.0))
+            weighted_tardiness = float(meta.get("weighted_tardiness", 0.0))
+            objective_value = float(meta.get("objective_value", weighted_tardiness))
 
             total_tardiness += tardiness
             total_weighted_tardiness += weighted_tardiness
@@ -1336,6 +1519,7 @@ class DistributionService:
                     "completion_time": meta["finish_dt"].isoformat(),
                     "tardiness_hours": round(tardiness, 2),
                     "weighted_tardiness": round(weighted_tardiness, 3),
+                    "objective_value": round(objective_value, 3),
                     "up_value": s.up_value,
                     "is_overdue": s.deadline < self.now,
                 }
@@ -1362,6 +1546,7 @@ class DistributionService:
                     "completion_time": None,
                     "tardiness_hours": None,
                     "weighted_tardiness": None,
+                    "objective_value": None,
                     "up_value": s.up_value,
                     "is_overdue": s.deadline < self.now,
                 }

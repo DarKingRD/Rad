@@ -35,21 +35,30 @@ export const ShiftPlanningView: React.FC = () => {
     planned_up: 0,
   });
 
+  const formatLocalDate = (d: Date) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
   const dates = useMemo(() => {
-    const result = [];
-    const startOfWeek = new Date(currentDate);
-    const day = startOfWeek.getDay();
-    const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
-    startOfWeek.setDate(diff);
-    startOfWeek.setHours(0, 0, 0, 0);
-    
-    for (let i = 0; i < 7; i++) {
-      const date = new Date(startOfWeek);
-      date.setDate(date.getDate() + i);
-      result.push(date.toISOString().split('T')[0]);
-    }
+  const result: string[] = [];
+  const startOfWeek = new Date(currentDate);
+  const day = startOfWeek.getDay();
+  const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
+
+  startOfWeek.setDate(diff);
+  startOfWeek.setHours(0, 0, 0, 0);
+
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(startOfWeek);
+    date.setDate(date.getDate() + i);
+    result.push(formatLocalDate(date));
+  }
+
     return result;
-  }, [currentDate]);
+}, [currentDate]);
 
   useEffect(() => {
     const loadDoctors = async () => {
