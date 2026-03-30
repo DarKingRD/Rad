@@ -7,7 +7,7 @@ from django.db.models import Max, Min
 from django.utils import timezone
 
 from ..models import Doctor, Schedule, Study
-from .distribution import DistributionService
+from .distribution.services import DistributionService
 
 PREVIEW_CACHE_TIMEOUT = 3600
 PREVIEW_CACHE_PREFIX = "distribution_preview_"
