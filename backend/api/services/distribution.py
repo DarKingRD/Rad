@@ -11,28 +11,33 @@
 
 Ключевая идея текущей версии
 ----------------------------
-Текущая реализация использует ДВУХЭТАПНУЮ схему:
+Текущая реализация использует ОДНОЭТАПНУЮ exact-постановку на candidate pool:
 
-1) Из всего backlog формируется дневной shortlist.
-   Это подмножество исследований, которое реально можно пытаться поставить
-   в расписание текущего дня.
+1) Из всего backlog формируется расширенный candidate pool.
+   Это не окончательный план дня, а более широкий набор кандидатов, из
+   которого exact-модель выбирает лучший вариант распределения.
 
-2) Для shortlist решается точная задача вида:
+2) Для candidate pool решается точная задача с явным выбором:
+   - назначить исследование в один из допустимых стартов;
+   - либо оставить его неназначенным в текущей смене.
 
-       MIN Z = Σ_i w_i * T_i,
-       T_i = max(0, C_i - d_i)
+   При этом минимизируется единая objective-функция, зависящая от выбранной
+   стратегии. Для взвешенной просрочки она имеет вид:
+
+       MIN Z = Σ(assign_cost(i,o) * x(i,o)) + Σ(unassigned_cost(i) * y(i))
 
    где:
-   - w_i — вес исследования в зависимости от приоритета;
-   - C_i — фактическое время завершения исследования;
-   - d_i — дедлайн исследования;
-   - T_i — просрочка в часах.
+   - x(i,o) = 1, если исследование i назначено в допустимый старт o;
+   - y(i) = 1, если исследование i не вошло в план текущей смены;
+   - assign_cost(i,o) — штраф назначения (например, w_i * T_i);
+   - unassigned_cost(i) — штраф переноса исследования за пределы текущей смены.
 
 Важно понимать ограничения модели
 ---------------------------------
-- Целевая функция Σ w_i T_i применяется ИМЕННО к shortlist текущего дня.
-- Исследования, которые не попали в shortlist, остаются в очереди backlog и
-  не штрафуются внутри objective текущего запуска.
+- Целевая функция применяется ко всему candidate pool текущего дня.
+- Неназначение исследования тоже участвует в objective через отдельный штраф,
+  поэтому objective действительно влияет на СОСТАВ выбранных исследований,
+  а не только на их внутренний порядок.
 - Для exact-модели используется time-indexed MILP: время дискретизируется
   слотами по 5 минут.
 - Смена врача и перерыв учитываются явно: нельзя ставить исследование в слот,
@@ -52,7 +57,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
 from django.utils import timezone
 
@@ -145,8 +150,11 @@ def parse_modalities(data) -> Set[str]:
 # Веса w_i в целевой функции Σ w_i T_i.
 PRIORITY_WEIGHTS = {"cito": 36.0, "asap": 3.0, "normal": 1.0}
 
+# Веса для этапа выбора исследований в exact MILP.
+SELECTION_PRIORITY_SCORES = {"cito": 100000.0, "asap": 1000.0, "normal": 1.0}
+
 # Дедлайны d_i в часах от created_at.
-DEADLINE_HOURS = {"cito": 2, "asap": 24, "normal": 72}
+DEADLINE_HOURS = {"cito": 2, "asap": 3, "normal": 72}
 
 # Грубая длительность исследования в минутах по модальности.
 # Используется как рабочая оценка для планирования времени врача.
@@ -170,6 +178,24 @@ TIME_SLOT_MINUTES = 5
 # Ограничения solver'а CBC.
 MIP_TIME_LIMIT = 300
 MIP_GAP_REL = 0.01
+
+# Параметры формирования candidate pool.
+# Идея: exact-модель не должна получать весь backlog, но и не должна работать
+# на слишком узком shortlist, который почти полностью предрешает результат.
+CANDIDATE_POOL_FACTOR = 3.0
+CANDIDATE_POOL_MIN_SIZE = 120
+CANDIDATE_POOL_MAX_SIZE = 600
+
+# Виртуальный сдвиг окончания для штрафа неназначения.
+# Интерпретация: если исследование не вошло в текущую смену, считаем, что оно
+# будет завершено не раньше чем через сутки после конца планируемого горизонта.
+UNASSIGNED_EXTRA_HOURS = 24.0
+
+# Базовый штраф неназначения в "часах критерия".
+# Нужен, чтобы модель не была безразлична между:
+# - ранним назначением с нулевой просрочкой;
+# - переносом исследования, которое ещё не просрочено.
+UNASSIGNED_BASE_HOURS = 4.0
 
 
 # ==============================================================================
@@ -268,19 +294,8 @@ class ScheduleOption:
     """
     Один допустимый вариант старта исследования в exact-модели.
 
-    В универсальной версии опция хранит не только время старта/завершения, но и
-    словарь вычисленных метрик. Это позволяет менять матмодель без переписывания
-    всего сервиса: новая objective-функция может использовать любые метрики,
-    посчитанные на уровне опции.
-
-    Поля:
-    - option_id: уникальный идентификатор бинарной переменной x_option_id;
-    - study_idx: индекс исследования в shortlist;
-    - doctor_idx: индекс врача в списке doctors;
-    - start_dt / finish_dt: реальное время начала и завершения;
-    - metrics: словарь производных характеристик опции;
-    - objective_value: вклад этой опции в текущую objective;
-    - occupied_slots: номера временных слотов врача, которые занимает опция.
+    Помимо базовых полей хранит metrics и objective_value, чтобы конкретную
+    objective-функцию можно было менять независимо от solver-а.
     """
 
     option_id: int
@@ -288,169 +303,294 @@ class ScheduleOption:
     doctor_idx: int
     start_dt: datetime
     finish_dt: datetime
+    tardiness_hours: float
+    weighted_tardiness: float
+    occupied_slots: List[int]
     metrics: Dict[str, float] = field(default_factory=dict)
     objective_value: float = 0.0
-    occupied_slots: List[int] = field(default_factory=list)
-
-    @property
-    def tardiness_hours(self) -> float:
-        """Просрочка опции в часах, если эта метрика рассчитана objective-стратегией."""
-        return float(self.metrics.get("tardiness_hours", 0.0))
-
-    @property
-    def weighted_tardiness(self) -> float:
-        """Взвешенная просрочка, если она присутствует среди метрик."""
-        return float(self.metrics.get("weighted_tardiness", 0.0))
-
-
-@dataclass
-class MIPModelContext:
-    """
-    Контекст сборки MILP-модели.
-
-    Мы передаём его в objective-стратегию, чтобы новая матмодель могла строить
-    не только другую целевую функцию, но и свои дополнительные переменные и
-    ограничения.
-    """
-
-    studies: List[StudyData]
-    doctors: List[DoctorData]
-    options: List[ScheduleOption]
-    options_by_study: Dict[int, List[int]]
-    options_by_doctor: Dict[int, List[int]]
-    slot_boundaries_by_doctor: Dict[int, List[datetime]]
 
 
 class ObjectiveStrategy(ABC):
-    """Базовый интерфейс objective-функции для exact MILP и greedy fallback."""
-
     code: str = "base"
     description: str = "Base objective"
 
+    def __init__(
+        self,
+        *,
+        priority_weights: Optional[Dict[str, float]] = None,
+        selection_scores: Optional[Dict[str, float]] = None,
+        **params: Any,
+    ) -> None:
+        self.priority_weights = {**PRIORITY_WEIGHTS, **(priority_weights or {})}
+        self.selection_scores = {**SELECTION_PRIORITY_SCORES, **(selection_scores or {})}
+        self.params = params
+
+    def selection_priority_score(self, study: "StudyData") -> float:
+        return float(self.selection_scores.get(study.priority, 1.0))
+
+    @abstractmethod
     def option_metrics(
         self,
-        study: StudyData,
-        doctor: DoctorData,
+        study: "StudyData",
+        doctor: "DoctorData",
         start_dt: datetime,
         finish_dt: datetime,
     ) -> Dict[str, float]:
-        """
-        Посчитать метрики конкретной опции старта.
-
-        Это место, где удобно вычислять всё, от чего потом может зависеть
-        objective: просрочку, weighted tardiness, completion time, отклонения от
-        дедлайна и т.д.
-        """
-        return {}
-
-    @abstractmethod
-    def build_objective(self, prob, x, ctx: MIPModelContext, pulp_module):
-        """Построить выражение objective для MILP."""
         raise NotImplementedError
 
-    def add_extra_constraints(self, prob, x, ctx: MIPModelContext, pulp_module) -> None:
-        """
-        Хук для дополнительных ограничений матмодели.
-
-        Благодаря этому новая objective может оказаться не только другой целевой
-        функцией, но и полноценной другой постановкой, если ей нужны свои
-        переменные/ограничения.
-        """
-        return None
-
-    def greedy_rank(
+    @abstractmethod
+    def unassigned_objective_value(
         self,
-        study: StudyData,
-        doctor: DoctorData,
-        start_dt: datetime,
-        finish_dt: datetime,
-        metrics: Dict[str, float],
-    ) -> Tuple:
-        """
-        Правило сравнения вариантов в greedy fallback.
+        study: "StudyData",
+        *,
+        tardiness_hours: float,
+        weighted_tardiness: float,
+        completion_hours: float,
+        base_hours: float,
+        weight: float,
+    ) -> float:
+        raise NotImplementedError
 
-        По умолчанию greedy старается минимизировать вклад в текущую objective.
-        Это не делает greedy оптимальным, но хотя бы синхронизирует его с выбранной
-        матмоделью.
+    def unassigned_metrics(
+        self,
+        study: "StudyData",
+        planning_horizon_end: datetime,
+    ) -> Dict[str, float | datetime]:
         """
-        return (float(metrics.get("objective_value", 0.0)), finish_dt, doctor.id)
+        Оценить штраф, если исследование НЕ вошло в текущую смену.
 
-    def assignment_payload(self, option: ScheduleOption, study: StudyData, doctor: DoctorData) -> Dict[str, Any]:
-        """Метаданные назначения, которые попадут в details и ответ API."""
+        Идея простая:
+        - считаем виртуальное завершение после конца планируемого горизонта;
+        - вычисляем метрики так, как будто исследование будет сделано позже;
+        - добавляем небольшой базовый штраф неназначения.
+
+        Благодаря этому objective влияет не только на порядок, но и на сам факт
+        включения исследования в план текущего дня.
+        """
+        extra_hours = float(self.params.get("unassigned_extra_hours", UNASSIGNED_EXTRA_HOURS))
+        base_hours = float(self.params.get("unassigned_base_hours", UNASSIGNED_BASE_HOURS))
+        weight = self.priority_weights.get(study.priority, 1.0)
+
+        virtual_finish_dt = planning_horizon_end + timedelta(hours=extra_hours)
+        tardiness_hours = max(
+            0.0,
+            (virtual_finish_dt - study.deadline).total_seconds() / 3600.0,
+        )
+        weighted_tardiness = tardiness_hours * weight
+        completion_hours = max(
+            0.0,
+            (virtual_finish_dt - study.created_at).total_seconds() / 3600.0,
+        )
+        objective_value = self.unassigned_objective_value(
+            study,
+            tardiness_hours=tardiness_hours,
+            weighted_tardiness=weighted_tardiness,
+            completion_hours=completion_hours,
+            base_hours=base_hours,
+            weight=weight,
+        )
         return {
-            "doctor_id": doctor.id,
-            "doctor_name": doctor.name,
-            "start_dt": option.start_dt,
-            "finish_dt": option.finish_dt,
-            "objective_value": option.objective_value,
-            **option.metrics,
+            "virtual_finish_dt": virtual_finish_dt,
+            "tardiness_hours": tardiness_hours,
+            "weighted_tardiness": weighted_tardiness,
+            "completion_hours_from_created": completion_hours,
+            "objective_value": float(objective_value),
         }
 
 
-class WeightedTardinessObjective(ObjectiveStrategy):
-    code = "weighted_tardiness"
-    description = "MIN Σ_i w_i * T_i"
+class WeightedTardinessLexicographicObjective(ObjectiveStrategy):
+    code = "weighted_tardiness_lexicographic"
+    description = (
+        "MIN Σ_i w_i*T_i по назначенным + штрафы за неназначение в текущей смене"
+    )
 
-    def option_metrics(self, study: StudyData, doctor: DoctorData, start_dt: datetime, finish_dt: datetime) -> Dict[str, float]:
+    def option_metrics(self, study, doctor, start_dt, finish_dt):
         tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
-        weighted_tardiness = tardiness_hours * study.weight
-        completion_hour = (finish_dt - study.created_at).total_seconds() / 3600.0
+        completion_hours = max(0.0, (finish_dt - study.created_at).total_seconds() / 3600.0)
+        weighted_tardiness = tardiness_hours * self.priority_weights.get(study.priority, 1.0)
         return {
             "tardiness_hours": tardiness_hours,
             "weighted_tardiness": weighted_tardiness,
-            "completion_hours_from_created": completion_hour,
+            "completion_hours_from_created": completion_hours,
             "objective_value": weighted_tardiness,
         }
 
-    def build_objective(self, prob, x, ctx: MIPModelContext, pulp_module):
-        return pulp_module.lpSum(
-            option.objective_value * x[option.option_id]
-            for option in ctx.options
-        )
+    def unassigned_objective_value(
+        self,
+        study,
+        *,
+        tardiness_hours,
+        weighted_tardiness,
+        completion_hours,
+        base_hours,
+        weight,
+    ) -> float:
+        return weighted_tardiness + weight * base_hours
 
 
-class MinCompletionTimeObjective(ObjectiveStrategy):
-    code = "min_completion_time"
-    description = "MIN Σ_i C_i (в часах от created_at)"
-
-    def option_metrics(self, study: StudyData, doctor: DoctorData, start_dt: datetime, finish_dt: datetime) -> Dict[str, float]:
-        tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
-        completion_hour = (finish_dt - study.created_at).total_seconds() / 3600.0
-        return {
-            "tardiness_hours": tardiness_hours,
-            "weighted_tardiness": tardiness_hours * study.weight,
-            "completion_hours_from_created": completion_hour,
-            "objective_value": completion_hour,
-        }
-
-    def build_objective(self, prob, x, ctx: MIPModelContext, pulp_module):
-        return pulp_module.lpSum(
-            option.objective_value * x[option.option_id]
-            for option in ctx.options
-        )
-
-class TardinessObjective(ObjectiveStrategy):
-    code = "tardiness"
-    description = "MIN Σ_i T_i, где T_i = max(0, C_i - d_i)"
+class TardinessLexicographicObjective(ObjectiveStrategy):
+    code = "tardiness_lexicographic"
+    description = (
+        "MIN Σ_i T_i по назначенным + штрафы за неназначение в текущей смене"
+    )
 
     def option_metrics(self, study, doctor, start_dt, finish_dt):
-        tardiness_hours = max(
-            0.0,
-            (finish_dt - study.deadline).total_seconds() / 3600.0
-        )
-        completion_hour = (finish_dt - study.created_at).total_seconds() / 3600.0
-
+        tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
+        completion_hours = max(0.0, (finish_dt - study.created_at).total_seconds() / 3600.0)
+        weighted_tardiness = tardiness_hours * self.priority_weights.get(study.priority, 1.0)
         return {
             "tardiness_hours": tardiness_hours,
-            "completion_hours_from_created": completion_hour,
+            "weighted_tardiness": weighted_tardiness,
+            "completion_hours_from_created": completion_hours,
             "objective_value": tardiness_hours,
         }
 
-    def build_objective(self, prob, x, ctx, pulp_module):
-        return pulp_module.lpSum(
-            option.objective_value * x[option.option_id]
-            for option in ctx.options
+    def unassigned_objective_value(
+        self,
+        study,
+        *,
+        tardiness_hours,
+        weighted_tardiness,
+        completion_hours,
+        base_hours,
+        weight,
+    ) -> float:
+        return tardiness_hours + base_hours
+
+class MaxAssignmentsObjective(ObjectiveStrategy):
+    code = "max_assignments"
+    description = (
+        "MAX числа назначений "
+        "(через большой штраф за неназначение) "
+        "+ слабый tie-break по просрочке"
+    )
+
+    def option_metrics(self, study, doctor, start_dt, finish_dt):
+        tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
+        completion_hours = max(0.0, (finish_dt - study.created_at).total_seconds() / 3600.0)
+        weight = self.priority_weights.get(study.priority, 1.0)
+        weighted_tardiness = tardiness_hours * weight
+
+        # Маленький коэффициент, чтобы:
+        # 1) сначала максимизировалось число назначений;
+        # 2) среди равных по числу назначений решений выбиралось
+        #    решение с меньшей просрочкой.
+        epsilon = float(self.params.get("epsilon", 1e-3))
+
+        return {
+            "tardiness_hours": tardiness_hours,
+            "weighted_tardiness": weighted_tardiness,
+            "completion_hours_from_created": completion_hours,
+            "objective_value": epsilon * tardiness_hours,
+        }
+
+    def unassigned_objective_value(
+        self,
+        study,
+        *,
+        tardiness_hours,
+        weighted_tardiness,
+        completion_hours,
+        base_hours,
+        weight,
+    ) -> float:
+        # Большой штраф за неназначение.
+        # Тогда модель будет брать максимум возможных исследований.
+        unassigned_penalty = float(self.params.get("unassigned_penalty", 1e6))
+        return unassigned_penalty
+
+
+class CitoFirstThenWeightedRestLexicographicObjective(ObjectiveStrategy):
+    code = "cito_first_then_weighted_rest_lexicographic"
+    description = (
+        "CITO приоритизируются сильнее; "
+        "для назначенных: MIN Σ T_i для CITO + Σ w_i*T_i для ASAP/NORMAL; "
+        "для неназначенных CITO используется более жёсткий штраф"
+    )
+
+    def option_metrics(self, study, doctor, start_dt, finish_dt):
+        tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
+        completion_hours = max(0.0, (finish_dt - study.created_at).total_seconds() / 3600.0)
+        weight = self.priority_weights.get(study.priority, 1.0)
+        weighted_tardiness = tardiness_hours * weight
+
+        # Для CITO — без весов.
+        # Для ASAP/NORMAL — по весам.
+        if study.priority == "cito":
+            objective_value = tardiness_hours
+        else:
+            objective_value = weighted_tardiness
+
+        return {
+            "tardiness_hours": tardiness_hours,
+            "weighted_tardiness": weighted_tardiness,
+            "completion_hours_from_created": completion_hours,
+            "objective_value": objective_value,
+        }
+
+    def unassigned_objective_value(
+        self,
+        study,
+        *,
+        tardiness_hours,
+        weighted_tardiness,
+        completion_hours,
+        base_hours,
+        weight,
+    ) -> float:
+        # В текущей одноэтапной модели именно тут задаётся,
+        # насколько "дорого" оставить исследование неназначенным.
+        #
+        # Делаем CITO заметно дороже, чем ASAP/NORMAL,
+        # чтобы solver сначала старался включить именно их.
+
+        cito_unassigned_multiplier = float(
+            self.params.get("cito_unassigned_multiplier", 10.0)
         )
+
+        if study.priority == "cito":
+            # Без весов, но с усиленным штрафом за неназначение CITO.
+            return cito_unassigned_multiplier * (tardiness_hours + base_hours)
+
+        # Для ASAP/NORMAL — стандартная взвешенная логика.
+        return weighted_tardiness + weight * base_hours
+
+class PriorityTierTardinessMultiPassObjective(ObjectiveStrategy):
+    code = "priority_tier_tardiness_multipass"
+    description = (
+        "Multi-pass: отдельно решаются CITO, затем ASAP, затем NORMAL; "
+        "внутри каждой категории минимизируется отставание без весов"
+    )
+
+    def option_metrics(self, study, doctor, start_dt, finish_dt):
+        tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
+        completion_hours = max(0.0, (finish_dt - study.created_at).total_seconds() / 3600.0)
+        weight = self.priority_weights.get(study.priority, 1.0)
+        weighted_tardiness = tardiness_hours * weight
+
+        return {
+            "tardiness_hours": tardiness_hours,
+            "weighted_tardiness": weighted_tardiness,
+            "completion_hours_from_created": completion_hours,
+            "objective_value": tardiness_hours,
+        }
+
+    def unassigned_objective_value(
+        self,
+        study,
+        *,
+        tardiness_hours,
+        weighted_tardiness,
+        completion_hours,
+        base_hours,
+        weight,
+    ) -> float:
+        return tardiness_hours + base_hours
+
+
+# ==============================================================================
+# СЕРВИС РАСПРЕДЕЛЕНИЯ
+# ==============================================================================
 
 
 class DistributionService:
@@ -471,6 +611,10 @@ class DistributionService:
         target_date: Optional[datetime] = None,
         preview_mode: bool = False,
         objective: Optional[str] = None,
+        priority_weights: Optional[Dict[str, float]] = None,
+        selection_scores: Optional[Dict[str, float]] = None,
+        deadline_hours: Optional[Dict[str, float]] = None,
+        objective_params: Optional[Dict[str, Any]] = None,
     ):
         """
         Инициализация сервиса.
@@ -478,42 +622,58 @@ class DistributionService:
         Параметры:
         - target_date: дата, на которую строится распределение;
         - preview_mode: если True, результат не записывается в БД;
-        - objective: код objective-стратегии.
-
-        ВАЖНО: теперь objective действительно влияет на построение модели.
-        Чтобы добавить совсем другую матмодель, достаточно зарегистрировать
-        новую стратегию в `_build_objective_registry`.
+        - objective: код objective-стратегии;
+        - priority_weights: пользовательские веса для objective;
+        - selection_scores: пользовательские веса этапа выбора исследований;
+        - deadline_hours: пользовательские SLA по приоритетам;
+        - objective_params: дополнительные параметры objective.
         """
         self.now = timezone.now()
         self.target_date = target_date or self.now.date()
         self.preview_mode = preview_mode
-        self._objective_registry = self._build_objective_registry()
-        self.objective: ObjectiveStrategy = self._objective_registry.get(
-            objective or "weighted_tardiness",
-            self._objective_registry["weighted_tardiness"],
-        )
-        self.objective_code = self.objective.code
-        self.objective_description = self.objective.description
+        self.priority_weights = {**PRIORITY_WEIGHTS, **(priority_weights or {})}
+        self.selection_scores = {**SELECTION_PRIORITY_SCORES, **(selection_scores or {})}
+        self.deadline_hours = {**DEADLINE_HOURS, **(deadline_hours or {})}
+        self.objective_params = dict(objective_params or {})
         self._debug: List[str] = []
+
+        self._objective_registry = self._build_objective_registry()
+        self.objective: ObjectiveStrategy
+        self.objective_code = ""
+        self.objective_description = ""
+        self.set_objective(objective or "weighted_tardiness_lexicographic")
 
     def set_preview_mode(self, preview: bool = True):
         """Включить или выключить режим предпросмотра."""
         self.preview_mode = preview
 
-    def _build_objective_registry(self) -> Dict[str, ObjectiveStrategy]:
-        """Реестр доступных objective-стратегий."""
-        strategies: List[ObjectiveStrategy] = [
-            WeightedTardinessObjective(),
-            MinCompletionTimeObjective(),
-            TardinessObjective(),
-        ]
-        return {strategy.code: strategy for strategy in strategies}
+    def _build_objective_registry(self) -> Dict[str, Type[ObjectiveStrategy]]:
+        return {
+            WeightedTardinessLexicographicObjective.code: WeightedTardinessLexicographicObjective,
+            TardinessLexicographicObjective.code: TardinessLexicographicObjective,
+            
+            MaxAssignmentsObjective.code: MaxAssignmentsObjective,
+            CitoFirstThenWeightedRestLexicographicObjective.code: CitoFirstThenWeightedRestLexicographicObjective,
+            PriorityTierTardinessMultiPassObjective.code: PriorityTierTardinessMultiPassObjective,
+        }
 
-    def _objective_meta(self) -> Dict[str, str]:
+    def _instantiate_objective(self, objective: str) -> ObjectiveStrategy:
+        cls = self._objective_registry.get(objective, WeightedTardinessLexicographicObjective)
+        return cls(
+            priority_weights=self.priority_weights,
+            selection_scores=self.selection_scores,
+            **self.objective_params,
+        )
+
+    def _objective_meta(self) -> Dict[str, Any]:
         """Вернуть краткое описание текущей objective-функции для ответа API."""
         return {
             "code": self.objective_code,
             "description": self.objective_description,
+            "priority_weights": self.priority_weights,
+            "selection_scores": self.selection_scores,
+            "deadline_hours": self.deadline_hours,
+            "objective_params": self.objective_params,
         }
 
     def _log(self, msg: str):
@@ -527,25 +687,36 @@ class DistributionService:
         self._debug.append(msg)
 
     def set_objective(self, objective: str) -> None:
-        """
-        Сменить objective-функцию на одну из зарегистрированных стратегий.
+        """Переключить objective-стратегию."""
+        self.objective = self._instantiate_objective(objective)
+        self.objective_code = self.objective.code
+        self.objective_description = self.objective.description
+        self._log(f"Objective переключена на {self.objective_code}")
 
-        Примеры:
-        - `weighted_tardiness`
-        - `min_completion_time`
-        - `tardiness`
-        """
-        strategy = self._objective_registry.get(objective)
-        if strategy is None:
-            available = ", ".join(sorted(self._objective_registry))
-            raise ValueError(
-                f"Неизвестная objective '{objective}'. Доступно: {available}"
-            )
-
-        self.objective = strategy
-        self.objective_code = strategy.code
-        self.objective_description = strategy.description
-        self._log(f"Целевая функция переключена на: {self.objective_code}")
+    def _build_assignment_payload(
+        self,
+        study: StudyData,
+        doctor: DoctorData,
+        start_dt: datetime,
+        finish_dt: datetime,
+        metrics: Dict[str, float],
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "doctor_id": doctor.id,
+            "doctor_name": doctor.name,
+            "start_dt": start_dt,
+            "finish_dt": finish_dt,
+            "selection_priority_score": self.objective.selection_priority_score(study),
+        }
+        for key, value in metrics.items():
+            payload[key] = float(value)
+        payload.setdefault("objective_value", float(metrics.get("objective_value", 0.0)))
+        payload.setdefault("tardiness_hours", 0.0)
+        payload.setdefault(
+            "weighted_tardiness",
+            float(payload["tardiness_hours"]) * self.priority_weights.get(study.priority, 1.0),
+        )
+        return payload
 
     def _make_aware(self, dt: Optional[datetime]) -> Optional[datetime]:
         """
@@ -631,6 +802,16 @@ class DistributionService:
         effective_start = self._effective_start_after_prebook(doctor, prebooked_minutes)
         available = self._work_minutes_between(doctor, effective_start, doctor.shift_end)
         return max(0.0, available)
+
+    def _planning_horizon_end(self, doctors: List[DoctorData]) -> datetime:
+        """
+        Конец планируемого горизонта для оценки штрафов неназначения.
+
+        Обычно это самый поздний конец смены среди доступных врачей.
+        """
+        if not doctors:
+            return self.now
+        return max(d.shift_end for d in doctors)
 
     def _add_work_minutes(
         self, doctor: DoctorData, start: datetime, minutes: float
@@ -873,8 +1054,8 @@ class DistributionService:
                 priority = "normal"
 
             created = self._make_aware(s.created_at) or self.now
-            deadline = created + timedelta(hours=DEADLINE_HOURS.get(priority, 72))
-            weight = PRIORITY_WEIGHTS.get(priority, 1.0)
+            deadline = created + timedelta(hours=self.deadline_hours.get(priority, 72))
+            weight = self.priority_weights.get(priority, 1.0)
 
             result.append(
                 StudyData(
@@ -974,11 +1155,11 @@ class DistributionService:
         self._log(f"Врачей загружено: {len(result)}")
         return result
 
-    # ── Shortlist на день ───────────────────────────────────────────
+    # ── Candidate pool на день ──────────────────────────────────────
 
-    def _shortlist_priority_key(self, study: StudyData) -> Tuple:
+    def _candidate_priority_key(self, study: StudyData) -> Tuple:
         """
-        Построить ключ сортировки исследования для формирования shortlist.
+        Построить ключ сортировки исследования для формирования candidate pool.
 
         Логика bucket'ов:
         0 - просроченные CITO;
@@ -1003,71 +1184,303 @@ class DistributionService:
             bucket = 4
         return (bucket, pr, study.deadline, study.created_at)
 
-    def build_daily_pool(
+    def _rough_daily_capacity_count(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
+    ) -> int:
+        """
+        Грубо оценить, сколько исследований в принципе может поместиться в день.
+
+        Эта оценка нужна только для выбора размера candidate pool.
+        Она НЕ является частью objective и НЕ определяет окончательный план.
+
+        Для каждого врача оцениваем мощность по совместимым исследованиям:
+        - по времени: available_minutes / avg_duration;
+        - по УП: max_up / avg_up.
+
+        Затем берём минимум из этих двух оценок и суммируем по врачам.
+        """
+        total_capacity = 0.0
+        prebooked = doc_prebooked_minutes or {}
+
+        for d in doctors:
+            compatible = [s for s in studies if self._modality_ok(s.modality, d.modality)]
+            if not compatible:
+                continue
+
+            available_minutes = self._remaining_work_minutes(d, prebooked.get(d.id, 0.0))
+            if available_minutes <= 1e-9 or d.max_up <= 1e-9:
+                continue
+
+            avg_duration = sum(s.duration_minutes for s in compatible) / len(compatible)
+            avg_up = sum(s.up_value for s in compatible) / len(compatible)
+
+            by_minutes = available_minutes / max(avg_duration, 1e-9)
+            by_up = d.max_up / max(avg_up, 1e-9)
+            total_capacity += max(0.0, min(by_minutes, by_up))
+
+        return max(1, int(round(total_capacity))) if studies and doctors else 0
+
+    def build_candidate_pool(
         self,
         studies: List[StudyData],
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> List[StudyData]:
         """
-        Построить shortlist исследований на текущий день.
+        Построить расширенный candidate pool исследований на текущий день.
 
-        Это НЕ окончательное расписание и НЕ точная оптимизация.
-        Здесь решается более грубая задача: выбрать из backlog такой пул
-        исследований, который вообще имеет шанс поместиться в доступную дневную
-        мощность врачей.
+        Это НЕ окончательное расписание и НЕ жёсткий shortlist по ресурсам.
+        Задача метода — передать в exact-модель достаточно широкий набор
+        кандидатов, чтобы именно objective-функция влияла на итоговое решение.
 
-        Логика:
-        - исследования сортируются по приоритетному ключу;
-        - для каждого исследования ищутся врачи, у которых хватает и УП, и минут;
-        - если кандидаты есть, исследование попадает в shortlist, а доступный
-          ресурс выбранного врача уменьшается.
+        Принцип работы:
+        - сначала отбрасываем исследования, которые вообще несовместимы со всеми
+          врачами или заведомо не помещаются ни одному врачу по УП/длительности;
+        - затем сортируем кандидатов по приоритету и дедлайну;
+        - после этого берём не ровно дневную мощность, а пул в 3 раза больше
+          грубой оценки дневной ёмкости (с ограничением сверху и снизу).
 
         Важно:
-        выбранный здесь врач не является окончательным назначением. Мы используем
-        его лишь как способ оценить, что shortlist в целом реалистичен по ресурсам.
+        этот метод больше НЕ расходует ресурсы врачей по ходу отбора. То есть он
+        не предрешает план дня, а только ограничивает размер входа для exact MILP.
         """
-        ordered = sorted(studies, key=self._shortlist_priority_key)
+        feasible: List[StudyData] = []
+        prebooked = doc_prebooked_minutes or {}
 
-        remaining_up = {d.id: d.max_up for d in doctors}
-        remaining_minutes = {
-            d.id: self._remaining_work_minutes(d, (doc_prebooked_minutes or {}).get(d.id, 0.0))
-            for d in doctors
-        }
-
-        selected: List[StudyData] = []
-
-        for s in ordered:
-            candidates = []
+        for s in studies:
+            fits_somewhere = False
             for d in doctors:
                 if not self._modality_ok(s.modality, d.modality):
                     continue
-                if remaining_up[d.id] + 1e-9 < s.up_value:
+                if s.up_value > d.max_up + 1e-9:
                     continue
-                if remaining_minutes[d.id] + 1e-9 < s.duration_minutes:
+                if s.duration_minutes > self._remaining_work_minutes(d, prebooked.get(d.id, 0.0)) + 1e-9:
                     continue
+                fits_somewhere = True
+                break
+            if fits_somewhere:
+                feasible.append(s)
 
-                # Чем больше запас по времени и УП после помещения исследования,
-                # тем предпочтительнее врач для грубой shortlist-оценки.
-                score = (
-                    remaining_minutes[d.id] - s.duration_minutes,
-                    remaining_up[d.id] - s.up_value,
-                )
-                candidates.append((score, d.id))
+        ordered = sorted(feasible, key=self._candidate_priority_key)
+        rough_capacity = self._rough_daily_capacity_count(
+            ordered, doctors, doc_prebooked_minutes=doc_prebooked_minutes
+        )
 
-            if not candidates:
-                continue
+        target_size = int(round(rough_capacity * CANDIDATE_POOL_FACTOR))
+        target_size = max(target_size, CANDIDATE_POOL_MIN_SIZE if ordered else 0)
+        target_size = min(target_size, CANDIDATE_POOL_MAX_SIZE if ordered else 0)
+        target_size = min(target_size, len(ordered))
 
-            candidates.sort(reverse=True)
-            chosen_doc_id = candidates[0][1]
-            remaining_up[chosen_doc_id] -= s.up_value
-            remaining_minutes[chosen_doc_id] -= s.duration_minutes
-            selected.append(s)
+        selected = ordered[:target_size]
+
+        n_cito = sum(1 for s in selected if s.priority == "cito")
+        n_asap = sum(1 for s in selected if s.priority == "asap")
+        n_normal = sum(1 for s in selected if s.priority == "normal")
 
         self._log(
-            f"Shortlist на текущий день: {len(selected)} из {len(studies)} исследований"
+            f"Candidate pool: feasible={len(feasible)} из {len(studies)}, "
+            f"rough_capacity≈{rough_capacity}, target={target_size}, "
+            f"CITO={n_cito}, ASAP={n_asap}, NORMAL={n_normal}"
         )
         return selected
+
+
+    def _make_pass_doctors(
+        self,
+        doctors: List[DoctorData],
+        used_up_by_doctor: Optional[Dict[int, float]] = None,
+    ) -> List[DoctorData]:
+        """
+        Построить временный список врачей для очередного прохода multi-pass.
+
+        Важно: exact- и greedy-решатели уже умеют учитывать заранее занятое
+        ВРЕМЯ через `doc_prebooked_minutes`, но не знают о ранее израсходованном
+        УП. Поэтому для очередного прохода мы создаём копии врачей с уменьшенным
+        `max_up`.
+
+        Это позволяет решать задачу по приоритетам последовательно:
+        - после CITO у врача остаётся меньше доступного УП;
+        - этот остаток затем используется на проходе ASAP;
+        - после него — на NORMAL.
+        """
+        used_up_by_doctor = used_up_by_doctor or {}
+        result: List[DoctorData] = []
+
+        for d in doctors:
+            remaining_up = max(0.0, d.max_up - float(used_up_by_doctor.get(d.id, 0.0)))
+            result.append(
+                DoctorData(
+                    id=d.id,
+                    name=d.name,
+                    modality=set(d.modality),
+                    max_up=remaining_up,
+                    shift_start=d.shift_start,
+                    shift_end=d.shift_end,
+                    break_start=d.break_start,
+                    break_end=d.break_end,
+                )
+            )
+        return result
+
+    def _build_multipass_candidate_pool(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        priority: str,
+        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
+    ) -> List[StudyData]:
+        """
+        Построить входной пул для конкретного прохода multi-pass.
+
+        Логика такая:
+        - для CITO и ASAP берём ВСЕ feasible-исследования данной категории,
+          чтобы проход действительно пытался распределить весь класс целиком;
+        - для NORMAL оставляем обычный расширенный candidate pool, чтобы не
+          раздувать MILP на всей плановой очереди.
+        """
+        if priority not in {"cito", "asap"}:
+            return self.build_candidate_pool(
+                studies,
+                doctors,
+                doc_prebooked_minutes=doc_prebooked_minutes,
+            )
+
+        feasible: List[StudyData] = []
+        prebooked = doc_prebooked_minutes or {}
+        ordered = sorted(studies, key=self._candidate_priority_key)
+
+        for s in ordered:
+            fits_somewhere = False
+            for d in doctors:
+                if not self._modality_ok(s.modality, d.modality):
+                    continue
+                if s.up_value > d.max_up + 1e-9:
+                    continue
+                if s.duration_minutes > self._remaining_work_minutes(d, prebooked.get(d.id, 0.0)) + 1e-9:
+                    continue
+                fits_somewhere = True
+                break
+            if fits_somewhere:
+                feasible.append(s)
+
+        self._log(
+            f"Multi-pass pool [{priority.upper()}]: feasible={len(feasible)} из {len(studies)} — берём весь feasible-набор"
+        )
+        return feasible
+
+    def solve_priority_tier_multipass(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        *,
+        use_mip: bool = True,
+    ) -> Tuple[
+        Dict[str, int],
+        Dict[str, Dict],
+        float,
+        Dict[str, Dict[str, float | datetime]],
+        List[StudyData],
+    ]:
+        """
+        Реальный multi-pass по приоритетам: CITO → ASAP → NORMAL.
+
+        На каждом проходе:
+        1. берутся только исследования текущего приоритета;
+        2. учитываются уже занятые минуты врачей;
+        3. учитывается уже израсходованный УП;
+        4. запускается exact MILP (или greedy fallback) только для этой группы;
+        5. выбранные назначения фиксируются и уменьшают доступные ресурсы для
+           следующего прохода.
+
+        Именно этого поведения раньше и не хватало классу
+        `priority_tier_tardiness_multipass`: objective была объявлена как
+        multi-pass, но реально решалась одной общей MILP-задачей.
+        """
+        priority_order = ["cito", "asap", "normal"]
+        study_map = {s.research_number: s for s in studies}
+
+        assignment: Dict[str, int] = {}
+        details: Dict[str, Dict] = {}
+        unassigned_meta: Dict[str, Dict[str, float | datetime]] = {}
+        total_solver_obj = 0.0
+        multipass_pool: List[StudyData] = []
+
+        doctor_prebooked_minutes: Dict[int, float] = {d.id: 0.0 for d in doctors}
+        doctor_used_up: Dict[int, float] = {d.id: 0.0 for d in doctors}
+
+        for priority in priority_order:
+            tier_studies = [s for s in studies if s.priority == priority]
+            if not tier_studies:
+                self._log(f"Multi-pass [{priority.upper()}]: исследований нет, проход пропущен")
+                continue
+
+            pass_doctors = self._make_pass_doctors(doctors, doctor_used_up)
+            tier_pool = self._build_multipass_candidate_pool(
+                tier_studies,
+                pass_doctors,
+                priority,
+                doc_prebooked_minutes=doctor_prebooked_minutes,
+            )
+            multipass_pool.extend(tier_pool)
+
+            if not tier_pool:
+                self._log(
+                    f"Multi-pass [{priority.upper()}]: candidate pool пуст, назначений на этом проходе не будет"
+                )
+                continue
+
+            self._log(
+                f"Multi-pass [{priority.upper()}]: старт прохода, pool={len(tier_pool)}, "
+                f"already_booked_minutes={sum(doctor_prebooked_minutes.values()):.1f}, "
+                f"already_used_up={sum(doctor_used_up.values()):.3f}"
+            )
+
+            if use_mip:
+                pass_assignment, pass_details, pass_solver_obj, pass_unassigned_meta = self.solve_exact_mip(
+                    tier_pool,
+                    pass_doctors,
+                    doc_prebooked_minutes=doctor_prebooked_minutes,
+                )
+            else:
+                pass_assignment, pass_details = self.solve_greedy(
+                    tier_pool,
+                    pass_doctors,
+                    doc_prebooked_minutes=doctor_prebooked_minutes,
+                )
+                planning_horizon_end = self._planning_horizon_end(pass_doctors)
+                pass_unassigned_meta = {
+                    s.research_number: self.objective.unassigned_metrics(s, planning_horizon_end)
+                    for s in tier_pool
+                    if s.research_number not in pass_assignment
+                }
+                pass_solver_obj = (
+                    sum(float(item.get("objective_value", 0.0)) for item in pass_details.values())
+                    + sum(float(item.get("objective_value", 0.0)) for item in pass_unassigned_meta.values())
+                )
+
+            total_solver_obj += float(pass_solver_obj)
+            assignment.update(pass_assignment)
+            details.update(pass_details)
+            unassigned_meta.update(pass_unassigned_meta)
+
+            for sid, did in pass_assignment.items():
+                study = study_map[sid]
+                doctor_prebooked_minutes[did] = doctor_prebooked_minutes.get(did, 0.0) + study.duration_minutes
+                doctor_used_up[did] = doctor_used_up.get(did, 0.0) + study.up_value
+
+            self._log(
+                f"Multi-pass [{priority.upper()}]: назначено {len(pass_assignment)} / {len(tier_pool)}, "
+                f"неназначено {len(pass_unassigned_meta)} / {len(tier_pool)}, obj={float(pass_solver_obj):.6f}"
+            )
+
+        self._log(
+            f"Multi-pass ИТОГО: назначено {len(assignment)} / {len(studies)}, "
+            f"pool={len(multipass_pool)}, obj_sum={float(total_solver_obj):.6f}"
+        )
+        return assignment, details, float(total_solver_obj), unassigned_meta, multipass_pool
 
     # ── Жадный fallback ─────────────────────────────────────────────
 
@@ -1078,26 +1491,16 @@ class DistributionService:
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> Tuple[Dict[str, int], Dict[str, Dict]]:
         """
-        Распределить shortlist жадным способом.
+        Распределить candidate pool жадным способом.
 
-        Это fallback-алгоритм, который используется, если exact MILP недоступен
-        или не дал пригодного решения.
-
-        Идея:
-        - исследования обрабатываются в порядке shortlist-приоритета;
-        - для каждого исследования ищется врач, у которого самый ранний finish_dt;
-        - если подходящий врач найден, исследование фиксируется за ним.
-
-        Возвращает:
-        - assignment: mapping research_number -> doctor_id;
-        - details: подробные метаданные по каждому назначенному исследованию.
+        Fallback теперь тоже учитывает текущую objective-стратегию: среди
+        допустимых врачей выбирается тот вариант, у которого меньше
+        objective_value, а при равенстве — более ранний finish_dt.
         """
-        self._log("Запуск: жадный fallback по shortlist...")
+        self._log(f"Запуск: жадный fallback по candidate pool (objective={self.objective_code})...")
 
-        ordered = sorted(studies, key=self._shortlist_priority_key)
+        ordered = sorted(studies, key=self._candidate_priority_key)
 
-        # Для каждого врача храним текущее положение "курсора времени" и уже
-        # использованный УП в рамках жадного распределения.
         doctor_state: Dict[int, Dict[str, float | datetime]] = {}
         for d in doctors:
             prebooked = (doc_prebooked_minutes or {}).get(d.id, 0.0)
@@ -1110,8 +1513,9 @@ class DistributionService:
         details: Dict[str, Dict] = {}
 
         for s in ordered:
-            best = None
-            best_finish = None
+            best_doctor: Optional[DoctorData] = None
+            best_finish: Optional[datetime] = None
+            best_metrics: Optional[Dict[str, float]] = None
 
             for d in doctors:
                 if not self._modality_ok(s.modality, d.modality):
@@ -1125,32 +1529,34 @@ class DistributionService:
                     continue
 
                 metrics = self.objective.option_metrics(s, d, start_dt, finish_dt)
-                rank = self.objective.greedy_rank(s, d, start_dt, finish_dt, metrics)
+                objective_value = float(metrics.get("objective_value", 0.0))
 
-                # Жадное правило теперь согласовано с выбранной objective.
-                if best is None or rank < best_finish:
-                    best = (d, metrics)
-                    best_finish = rank
+                candidate_key = (objective_value, finish_dt, start_dt, d.id)
+                best_key = None
+                if best_doctor is not None and best_finish is not None and best_metrics is not None:
+                    best_key = (
+                        float(best_metrics.get("objective_value", 0.0)),
+                        best_finish,
+                        self._align_to_work_time(best_doctor, doctor_state[best_doctor.id]["cursor"]),
+                        best_doctor.id,
+                    )
 
-            if best is None:
+                if best_key is None or candidate_key < best_key:
+                    best_doctor = d
+                    best_finish = finish_dt
+                    best_metrics = metrics
+
+            if best_doctor is None or best_finish is None or best_metrics is None:
                 continue
 
-            best_doctor, best_metrics = best
             start_dt = self._align_to_work_time(best_doctor, doctor_state[best_doctor.id]["cursor"])
             finish_dt = self._add_work_minutes(best_doctor, start_dt, s.duration_minutes)
-            option = ScheduleOption(
-                option_id=-1,
-                study_idx=-1,
-                doctor_idx=-1,
-                start_dt=start_dt,
-                finish_dt=finish_dt,
-                metrics=best_metrics,
-                objective_value=float(best_metrics.get("objective_value", 0.0)),
-                occupied_slots=[],
-            )
+            metrics = self.objective.option_metrics(s, best_doctor, start_dt, finish_dt)
 
             assignment[s.research_number] = best_doctor.id
-            details[s.research_number] = self.objective.assignment_payload(option, s, best_doctor)
+            details[s.research_number] = self._build_assignment_payload(
+                s, best_doctor, start_dt, finish_dt, metrics
+            )
 
             doctor_state[best_doctor.id]["cursor"] = finish_dt
             doctor_state[best_doctor.id]["used_up"] = float(doctor_state[best_doctor.id]["used_up"]) + s.up_value
@@ -1158,7 +1564,7 @@ class DistributionService:
         self._log(f"Жадный fallback: назначено {len(assignment)} / {len(studies)}")
         return assignment, details
 
-    # ── Exact MILP: MIN Σ w_i T_i ───────────────────────────────────
+    # ── Exact MILP ──────────────────────────────────────────────────
 
     def _build_exact_options(
         self,
@@ -1169,18 +1575,9 @@ class DistributionService:
         """
         Построить все допустимые опции старта для exact MILP.
 
-        Для каждой пары (исследование, врач) генерируются допустимые моменты
-        старта по сетке временных слотов. Для каждого такого старта рассчитываются:
-        - реальное время завершения finish_dt;
-        - просрочка tardiness_hours;
-        - вклад в objective weighted_tardiness;
-        - список занятых временных слотов occupied_slots.
-
-        Возвращаются:
-        - список всех опций;
-        - mapping study_idx -> список option_id;
-        - mapping doctor_idx -> список option_id;
-        - mapping doctor_idx -> границы слотов по времени.
+        Метрики каждой опции считает текущая objective-стратегия. Поэтому exact
+        solver остаётся универсальным: он минимизирует option.objective_value,
+        а сама формула objective задаётся отдельно.
         """
         options: List[ScheduleOption] = []
         options_by_study: Dict[int, List[int]] = {i: [] for i in range(len(studies))}
@@ -1213,6 +1610,15 @@ class DistributionService:
                         continue
 
                     metrics = self.objective.option_metrics(s, d, start_dt, finish_dt)
+                    tardiness_hours = float(metrics.get(
+                        "tardiness_hours",
+                        max(0.0, (finish_dt - s.deadline).total_seconds() / 3600.0),
+                    ))
+                    weighted_tardiness = float(metrics.get(
+                        "weighted_tardiness",
+                        tardiness_hours * self.priority_weights.get(s.priority, 1.0),
+                    ))
+                    objective_value = float(metrics.get("objective_value", weighted_tardiness))
 
                     option = ScheduleOption(
                         option_id=option_id,
@@ -1220,9 +1626,11 @@ class DistributionService:
                         doctor_idx=j,
                         start_dt=start_dt,
                         finish_dt=finish_dt,
-                        metrics=metrics,
-                        objective_value=float(metrics.get("objective_value", 0.0)),
+                        tardiness_hours=tardiness_hours,
+                        weighted_tardiness=weighted_tardiness,
                         occupied_slots=occupied_slots,
+                        metrics=metrics,
+                        objective_value=objective_value,
                     )
                     options.append(option)
                     options_by_study[i].append(option_id)
@@ -1236,111 +1644,110 @@ class DistributionService:
         studies: List[StudyData],
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> Tuple[Dict[str, int], Dict[str, Dict], float]:
+    ) -> Tuple[Dict[str, int], Dict[str, Dict], float, Dict[str, Dict[str, float | datetime]]]:
         """
-        Решить точную задачу распределения shortlist через MILP.
+        Одноэтапная exact-постановка.
 
-        В универсальной версии exact MILP сам по себе остаётся тем же по
-        структуре (assignment + временные слоты + ограничения по УП), но
-        целевая функция и её дополнительные ограничения делегируются выбранной
-        objective-стратегии.
+        Для каждого исследования exact-модель должна выбрать РОВНО ОДНО из двух:
+        1. один из допустимых вариантов назначения (конкретный врач + старт);
+        2. оставить исследование неназначенным в текущей смене.
 
-        Благодаря этому можно подставлять другие матмодели, не переписывая
-        базовый сервис распределения.
+        Благодаря этому текущая objective-функция влияет и на состав назначенных
+        исследований, и на их внутренний порядок. Это как раз убирает главную
+        проблему старой двухэтапной схемы, где stage 1 фактически предопределял
+        набор исследований ещё до применения основной objective.
         """
         try:
             import pulp
         except ImportError:
-            self._log("PuLP не установлен → используем жадный fallback")
+            self._log("PuLP не установлен → используем жадный fallback по candidate pool")
             assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
-            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
-            return assignment, details, float(solver_obj)
+            planning_horizon_end = self._planning_horizon_end(doctors)
+            unassigned_meta = {
+                s.research_number: self.objective.unassigned_metrics(s, planning_horizon_end)
+                for s in studies
+                if s.research_number not in assignment
+            }
+            solver_obj = (
+                sum(float(item.get("objective_value", 0.0)) for item in details.values())
+                + sum(float(item.get("objective_value", 0.0)) for item in unassigned_meta.values())
+            )
+            return assignment, details, float(solver_obj), unassigned_meta
 
-        self._log(f"Exact MILP: shortlist={len(studies)}, doctors={len(doctors)}")
+        self._log(
+            f"Exact MILP: candidate_pool={len(studies)}, doctors={len(doctors)}, objective={self.objective_code}"
+        )
 
-        options, options_by_study, options_by_doctor, slot_boundaries_by_doctor = self._build_exact_options(
+        options, options_by_study, _, slot_boundaries_by_doctor = self._build_exact_options(
             studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
         )
 
         self._log(f"  Кандидатных стартов: {len(options)}")
-        if not options:
-            self._log("  Нет допустимых стартов → жадный fallback")
-            assignment, details = self.solve_greedy(
-                studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
-            )
-            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
-            return assignment, details, float(solver_obj)
+        if not options and studies:
+            self._log("  Нет допустимых стартов → все исследования переходят в неназначенные")
 
-        # Если для какого-то исследования из shortlist вообще нет допустимых опций,
-        # exact-модель для всего shortlist становится неудобной/невыполнимой.
-        # В таком случае переходим на жадную схему.
-        infeasible_studies = [i for i, ids in options_by_study.items() if not ids]
-        if infeasible_studies:
-            self._log(
-                f"  В shortlist попали исследования без допустимых стартов: {len(infeasible_studies)} → жадный fallback"
-            )
-            assignment, details = self.solve_greedy(
-                studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
-            )
-            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
-            return assignment, details, float(solver_obj)
-
-        prob = pulp.LpProblem(f"Exact_{self.objective_code}", pulp.LpMinimize)
-        x = {
-            option.option_id: pulp.LpVariable(f"x_{option.option_id}", cat="Binary")
-            for option in options
+        options_by_id = {option.option_id: option for option in options}
+        planning_horizon_end = self._planning_horizon_end(doctors)
+        unassigned_meta_by_study = {
+            i: self.objective.unassigned_metrics(study, planning_horizon_end)
+            for i, study in enumerate(studies)
         }
 
-        ctx = MIPModelContext(
-            studies=studies,
-            doctors=doctors,
-            options=options,
-            options_by_study=options_by_study,
-            options_by_doctor=options_by_doctor,
-            slot_boundaries_by_doctor=slot_boundaries_by_doctor,
-        )
-
-        # Целевая функция строится выбранной стратегией.
-        prob += self.objective.build_objective(prob, x, ctx, pulp), "Obj"
-
-        # Каждое исследование из shortlist должно быть назначено ровно один раз.
-        for study_idx, option_ids in options_by_study.items():
-            prob += (
-                pulp.lpSum(x[oid] for oid in option_ids) == 1,
-                f"Study_{study_idx}",
-            )
-
-        # В один момент времени у врача не более одного исследования.
-        # Реализуется через ограничения по занятым временным слотам.
-        options_by_id = {option.option_id: option for option in options}
-        for doctor_idx, slot_boundaries in slot_boundaries_by_doctor.items():
-            for slot_idx, _ in enumerate(slot_boundaries):
-                occupying = [
-                    x[option.option_id]
-                    for option in options
-                    if option.doctor_idx == doctor_idx and slot_idx in option.occupied_slots
-                ]
-                if occupying:
+        def _add_common_constraints(prob, x_vars, y_vars):
+            for study_idx, option_ids in options_by_study.items():
+                if option_ids:
                     prob += (
-                        pulp.lpSum(occupying) <= 1,
-                        f"Cap_d{doctor_idx}_s{slot_idx}",
+                        pulp.lpSum(x_vars[oid] for oid in option_ids) + y_vars[study_idx] == 1,
+                        f"StudyChoice_{study_idx}",
                     )
+                else:
+                    prob += y_vars[study_idx] == 1, f"StudyForcedUnassigned_{study_idx}"
 
-        # Ограничение по дневному лимиту УП врача.
-        for doctor_idx, d in enumerate(doctors):
-            up_terms = [
-                studies[options_by_id[oid].study_idx].up_value * x[oid]
-                for oid in x
-                if options_by_id[oid].doctor_idx == doctor_idx
-            ]
-            if up_terms:
-                prob += pulp.lpSum(up_terms) <= d.max_up, f"UP_{doctor_idx}"
+            for doctor_idx, slot_boundaries in slot_boundaries_by_doctor.items():
+                for slot_idx, _ in enumerate(slot_boundaries):
+                    occupying = [
+                        x_vars[option.option_id]
+                        for option in options
+                        if option.doctor_idx == doctor_idx and slot_idx in option.occupied_slots
+                    ]
+                    if occupying:
+                        prob += (
+                            pulp.lpSum(occupying) <= 1,
+                            f"Cap_d{doctor_idx}_s{slot_idx}",
+                        )
 
-        self.objective.add_extra_constraints(prob, x, ctx, pulp)
+            for doctor_idx, d in enumerate(doctors):
+                up_terms = [
+                    studies[options_by_id[oid].study_idx].up_value * x_vars[oid]
+                    for oid in x_vars
+                    if options_by_id[oid].doctor_idx == doctor_idx
+                ]
+                if up_terms:
+                    prob += pulp.lpSum(up_terms) <= d.max_up, f"UP_{doctor_idx}"
 
         try:
+            prob = pulp.LpProblem(f"Exact_{self.objective_code}", pulp.LpMinimize)
+            x = {
+                option.option_id: pulp.LpVariable(f"x_{option.option_id}", cat="Binary")
+                for option in options
+            }
+            y = {
+                study_idx: pulp.LpVariable(f"y_{study_idx}", cat="Binary")
+                for study_idx in range(len(studies))
+            }
+            _add_common_constraints(prob, x, y)
+
+            prob += (
+                pulp.lpSum(option.objective_value * x[option.option_id] for option in options)
+                + pulp.lpSum(
+                    float(unassigned_meta_by_study[i]["objective_value"]) * y[i]
+                    for i in y
+                ),
+                "Obj",
+            )
+
             solver = pulp.PULP_CBC_CMD(
                 timeLimit=MIP_TIME_LIMIT,
                 msg=0,
@@ -1349,26 +1756,30 @@ class DistributionService:
             prob.solve(solver)
             status = pulp.LpStatus[prob.status]
             solver_obj = float(pulp.value(prob.objective) or 0.0)
-            self._log(f"CBC: статус={status}, obj={solver_obj:.3f}")
+            self._log(f"CBC: статус={status}, obj={solver_obj:.6f}")
 
-            if status not in {"Optimal", "Not Solved", "Undefined", "Infeasible", "Integer Feasible"}:
-                self._log("  Неожиданный статус решателя → жадный fallback")
+            if status not in {"Optimal", "Integer Feasible"}:
+                self._log("  Exact MILP не дал корректного решения → жадный fallback")
                 assignment, details = self.solve_greedy(
                     studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
                 )
-                solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
-                return assignment, details, float(solver_obj)
+                unassigned_meta = {
+                    s.research_number: self.objective.unassigned_metrics(s, planning_horizon_end)
+                    for s in studies
+                    if s.research_number not in assignment
+                }
+                solver_obj = (
+                    sum(float(item.get("objective_value", 0.0)) for item in details.values())
+                    + sum(float(item.get("objective_value", 0.0)) for item in unassigned_meta.values())
+                )
+                return assignment, details, float(solver_obj), unassigned_meta
 
-            chosen = [option for option in options if (pulp.value(x[option.option_id]) or 0) > 0.5]
-            if len(chosen) != len(studies):
-                self._log(
-                    f"  Exact MILP выбрал {len(chosen)} вместо {len(studies)} → жадный fallback"
-                )
-                assignment, details = self.solve_greedy(
-                    studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
-                )
-                solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
-                return assignment, details, float(solver_obj)
+            chosen = [
+                option for option in options if (pulp.value(x[option.option_id]) or 0) > 0.5
+            ]
+            unassigned_indices = [
+                i for i in y if (pulp.value(y[i]) or 0) > 0.5
+            ]
 
             assignment: Dict[str, int] = {}
             details: Dict[str, Dict] = {}
@@ -1376,18 +1787,36 @@ class DistributionService:
                 study = studies[option.study_idx]
                 doctor = doctors[option.doctor_idx]
                 assignment[study.research_number] = doctor.id
-                details[study.research_number] = self.objective.assignment_payload(option, study, doctor)
+                details[study.research_number] = self._build_assignment_payload(
+                    study, doctor, option.start_dt, option.finish_dt, option.metrics
+                )
 
-            self._log(f"Exact MILP: назначено {len(assignment)} / {len(studies)}")
-            return assignment, details, solver_obj
+            unassigned_meta = {
+                studies[i].research_number: dict(unassigned_meta_by_study[i])
+                for i in unassigned_indices
+            }
+
+            self._log(
+                f"Exact MILP: назначено {len(assignment)} / {len(studies)}, "
+                f"неназначено {len(unassigned_meta)} / {len(studies)}"
+            )
+            return assignment, details, float(solver_obj), unassigned_meta
 
         except Exception as e:
             self._log(f"CBC ошибка: {e} → жадный fallback")
             assignment, details = self.solve_greedy(
                 studies, doctors, doc_prebooked_minutes=doc_prebooked_minutes
             )
-            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
-            return assignment, details, float(solver_obj)
+            unassigned_meta = {
+                s.research_number: self.objective.unassigned_metrics(s, planning_horizon_end)
+                for s in studies
+                if s.research_number not in assignment
+            }
+            solver_obj = (
+                sum(float(item.get("objective_value", 0.0)) for item in details.values())
+                + sum(float(item.get("objective_value", 0.0)) for item in unassigned_meta.values())
+            )
+            return assignment, details, float(solver_obj), unassigned_meta
 
     # ── Сохранение ───────────────────────────────────────────────────
 
@@ -1426,7 +1855,7 @@ class DistributionService:
         Основные этапы метода:
         1. Логирование параметров запуска.
         2. Загрузка врачей и исследований.
-        3. Формирование shortlist текущего дня.
+        3. Формирование candidate pool текущего дня.
         4. Решение exact MILP или greedy fallback.
         5. Построение агрегированных метрик и структуры ответа для UI.
         6. Сохранение результата в БД, если это не preview.
@@ -1467,15 +1896,33 @@ class DistributionService:
         if not studies:
             return self._empty("Нет исследований без назначения", studies)
 
-        daily_pool = self.build_daily_pool(studies, doctors)
-        if not daily_pool:
-            return self._empty("Не удалось сформировать shortlist на текущий день", studies)
-
-        if use_mip:
-            assignment, details, solver_obj = self.solve_exact_mip(daily_pool, doctors)
+        if self.objective_code == PriorityTierTardinessMultiPassObjective.code:
+            assignment, details, solver_obj, unassigned_meta, candidate_pool = self.solve_priority_tier_multipass(
+                studies,
+                doctors,
+                use_mip=use_mip,
+            )
+            if not candidate_pool:
+                return self._empty("Не удалось сформировать candidate pool ни на одном проходе multi-pass", studies)
         else:
-            assignment, details = self.solve_greedy(daily_pool, doctors)
-            solver_obj = sum(float(item.get("objective_value", 0.0)) for item in details.values())
+            candidate_pool = self.build_candidate_pool(studies, doctors)
+            if not candidate_pool:
+                return self._empty("Не удалось сформировать candidate pool на текущий день", studies)
+
+            if use_mip:
+                assignment, details, solver_obj, unassigned_meta = self.solve_exact_mip(candidate_pool, doctors)
+            else:
+                assignment, details = self.solve_greedy(candidate_pool, doctors)
+                planning_horizon_end = self._planning_horizon_end(doctors)
+                unassigned_meta = {
+                    s.research_number: self.objective.unassigned_metrics(s, planning_horizon_end)
+                    for s in candidate_pool
+                    if s.research_number not in assignment
+                }
+                solver_obj = (
+                    sum(float(item.get("objective_value", 0.0)) for item in details.values())
+                    + sum(float(item.get("objective_value", 0.0)) for item in unassigned_meta.values())
+                )
 
         study_map = {s.research_number: s for s in studies}
         doctor_map = {d.id: d for d in doctors}
@@ -1492,18 +1939,21 @@ class DistributionService:
         all_assignments = []
         total_tardiness = 0.0
         total_weighted_tardiness = 0.0
+        total_objective_value = 0.0
+        total_unassigned_objective = 0.0
         pstats = {"cito": 0, "asap": 0, "normal": 0}
 
         # Сначала добавляем в итоговый список назначенные исследования.
         for sid, meta in details.items():
             s = study_map[sid]
             d = doctor_map[meta["doctor_id"]]
-            tardiness = float(meta.get("tardiness_hours", 0.0))
-            weighted_tardiness = float(meta.get("weighted_tardiness", 0.0))
+            tardiness = float(meta["tardiness_hours"])
+            weighted_tardiness = float(meta["weighted_tardiness"])
             objective_value = float(meta.get("objective_value", weighted_tardiness))
 
             total_tardiness += tardiness
             total_weighted_tardiness += weighted_tardiness
+            total_objective_value += objective_value
             pstats[s.priority] = pstats.get(s.priority, 0) + 1
 
             all_assignments.append(
@@ -1533,6 +1983,10 @@ class DistributionService:
             if s.research_number in assigned_ids:
                 continue
 
+            unassigned_item = unassigned_meta.get(s.research_number)
+            if unassigned_item:
+                total_unassigned_objective += float(unassigned_item.get("objective_value", 0.0))
+
             all_assignments.append(
                 {
                     "study_number": s.research_number,
@@ -1546,9 +2000,14 @@ class DistributionService:
                     "completion_time": None,
                     "tardiness_hours": None,
                     "weighted_tardiness": None,
-                    "objective_value": None,
+                    "objective_value": round(float(unassigned_item.get("objective_value", 0.0)), 3)
+                    if unassigned_item
+                    else None,
                     "up_value": s.up_value,
                     "is_overdue": s.deadline < self.now,
+                    "virtual_completion_time": unassigned_item.get("virtual_finish_dt").isoformat()
+                    if unassigned_item and unassigned_item.get("virtual_finish_dt")
+                    else None,
                 }
             )
 
@@ -1568,9 +2027,10 @@ class DistributionService:
 
         n_asgn = len(assignment)
         total_studies = len(studies)
-        pool_size = len(daily_pool)
+        pool_size = len(candidate_pool)
         backlog_outside_pool = max(0, total_studies - pool_size)
         z = round(total_weighted_tardiness, 3)
+        reported_objective_value = round(total_objective_value + total_unassigned_objective, 3)
 
         def _pct(value: float, total: float) -> float:
             """Безопасно посчитать процент `value / total * 100`."""
@@ -1683,12 +2143,12 @@ class DistributionService:
         tardiness_p99 = _percentile(tardiness_values, 0.99)
 
         self._log(
-            f"Итого: shortlist={pool_size}/{total_studies}, назначено={n_asgn}/{total_studies} "
+            f"Итого: candidate_pool={pool_size}/{total_studies}, назначено={n_asgn}/{total_studies} "
             f"({_pct(n_asgn, total_studies):.2f}%) | "
             f"CITO: {n_cito_assigned}/{n_cito_total} | "
             f"ASAP: {n_asap_assigned}/{n_asap_total} | "
             f"NORMAL: {n_normal_assigned}/{n_normal_total} | "
-            f"Backlog вне shortlist: {backlog_outside_pool} | Z={z}"
+            f"Backlog вне candidate_pool: {backlog_outside_pool} | Obj={reported_objective_value}"
         )
 
         if not self.preview_mode:
@@ -1701,6 +2161,7 @@ class DistributionService:
             "unassigned": total_studies - n_asgn,
             "assigment_rate_percent": _pct(n_asgn, total_studies),
             "scheduled_pool_size": pool_size,
+            "candidate_pool_size": pool_size,
             "backlog_outside_pool": backlog_outside_pool,
             "cito_assigned": n_cito_assigned,
             "cito_total": n_cito_total,
@@ -1734,10 +2195,12 @@ class DistributionService:
             "objective_function": self._objective_meta(),
             "solver_objective_value": round(float(solver_obj), 3),
             "reported_weighted_tardiness": z,
+            "total_unassigned_objective": round(total_unassigned_objective, 3),
+            "reported_objective_value": reported_objective_value,
             "message": (
-                f"Оффлайн: shortlist {pool_size} из {total_studies}, назначено {n_asgn} "
+                f"Оффлайн: candidate_pool {pool_size} из {total_studies}, назначено {n_asgn} "
                 f"({_pct(n_asgn, total_studies):.2f}%). "
-                f"CITO: {n_cito_assigned}/{n_cito_total}. objective={self.objective_code}, Z={z}"
+                f"CITO: {n_cito_assigned}/{n_cito_total}. objective={self.objective_code}, Obj={reported_objective_value}"
             ),
             "_debug": self._debug,
             "preview_mode": self.preview_mode,
@@ -1749,7 +2212,7 @@ class DistributionService:
         Сформировать пустой ответ сервиса.
 
         Используется в ситуациях, когда распределение невозможно начать или
-        продолжить: нет врачей, нет исследований, не сформировался shortlist и т.п.
+        продолжить: нет врачей, нет исследований, не сформировался candidate pool и т.п.
         """
         self._log(f"ПУСТО: {message}")
         return {
