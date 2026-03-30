@@ -26,7 +26,6 @@ from .serializers import (
     StudyWithDetailsSerializer,
     StudyTypeSerializer,
 )
-from .services.distribution import DistributionService
 from .services.doctor_queries import get_doctors_with_load_context
 from .services.study_queries import (
     get_pending_studies_queryset,
