@@ -1,13 +1,5 @@
 """
 Формирование candidate pool для текущего запуска распределения.
-
-Модуль содержит вспомогательные функции, которые:
-- отбирают исследования, потенциально совместимые с врачами;
-- оценивают грубую вместимость дня;
-- строят shortlist для обычного режима;
-- строят shortlist для multi-pass режима.
-
-Логика вынесена отдельно, чтобы сервис не был перегружен правилами отбора.
 """
 from __future__ import annotations
 
@@ -17,24 +9,17 @@ from .config import (
     CANDIDATE_POOL_FACTOR,
     CANDIDATE_POOL_MAX_SIZE,
     CANDIDATE_POOL_MIN_SIZE,
+    PRIORITY_ORDER,
 )
 from .entities import DoctorData, StudyData
 
+_PRIORITY_RANK = {priority: rank for rank, priority in enumerate(PRIORITY_ORDER)}
 
-def candidate_priority_key(study: StudyData, now, target_date) -> Tuple:
-    """
-    Построить ключ сортировки исследования для shortlist.
 
-    Ключ учитывает:
-    - просроченность;
-    - уровень приоритета;
-    - дедлайн;
-    - время создания.
-
-    Используется для упорядочивания backlog перед выбором candidate pool.
-    """
+def candidate_priority_key(study: StudyData, now, target_date) -> Tuple[int, int, object, object]:
+    """Построить ключ сортировки исследования для shortlist."""
     overdue = study.deadline < now
-    pr = {"cito": 0, "asap": 1, "normal": 2}.get(study.priority, 2)
+    priority_rank = _PRIORITY_RANK.get(study.priority, len(_PRIORITY_RANK))
 
     if overdue and study.priority == "cito":
         bucket = 0
@@ -47,7 +32,7 @@ def candidate_priority_key(study: StudyData, now, target_date) -> Tuple:
     else:
         bucket = 4
 
-    return (bucket, pr, study.deadline, study.created_at)
+    return (bucket, priority_rank, study.deadline, study.created_at)
 
 
 def filter_feasible_studies(
@@ -58,35 +43,21 @@ def filter_feasible_studies(
     remaining_work_minutes: Callable,
     doc_prebooked_minutes: Optional[Dict[int, float]] = None,
 ) -> List[StudyData]:
-    """
-    Построить ключ сортировки исследования для shortlist.
-
-    Ключ учитывает:
-    - просроченность;
-    - уровень приоритета;
-    - дедлайн;
-    - время создания.
-
-    Используется для упорядочивания backlog перед выбором candidate pool.
-    """
+    """Оставить только исследования, которые помещаются хотя бы к одному врачу."""
     feasible: List[StudyData] = []
     prebooked = doc_prebooked_minutes or {}
 
     for study in studies:
-        fits_somewhere = False
         for doctor in doctors:
             if not modality_ok(study.modality, doctor.modality):
                 continue
             if study.up_value > doctor.max_up + 1e-9:
                 continue
-            if study.duration_minutes > remaining_work_minutes(
-                doctor, prebooked.get(doctor.id, 0.0)) + 1e-9:
+            remaining_minutes = remaining_work_minutes(doctor, prebooked.get(doctor.id, 0.0))
+            if study.duration_minutes > remaining_minutes + 1e-9:
                 continue
-            fits_somewhere = True
-            break
-
-        if fits_somewhere:
             feasible.append(study)
+            break
 
     return feasible
 
@@ -99,18 +70,12 @@ def rough_daily_capacity_count(
     remaining_work_minutes: Callable,
     doc_prebooked_minutes: Optional[Dict[int, float]] = None,
 ) -> int:
-    """
-    Грубо оценить, сколько исследований система способна обработать за день.
-
-    Оценка строится по каждому врачу отдельно и использует средние значения
-    длительности и УП по совместимым исследованиям. Итог нужен не для точного
-    решения, а для определения разумного размера candidate pool.
-    """
+    """Грубо оценить, сколько исследований система способна обработать за день."""
     total_capacity = 0.0
     prebooked = doc_prebooked_minutes or {}
 
     for doctor in doctors:
-        compatible = [s for s in studies if modality_ok(s.modality, doctor.modality)]
+        compatible = [study for study in studies if modality_ok(study.modality, doctor.modality)]
         if not compatible:
             continue
 
@@ -118,9 +83,8 @@ def rough_daily_capacity_count(
         if available_minutes <= 1e-9 or doctor.max_up <= 1e-9:
             continue
 
-        avg_duration = sum(s.duration_minutes for s in compatible) / len(compatible)
-        avg_up = sum(s.up_value for s in compatible) / len(compatible)
-
+        avg_duration = sum(study.duration_minutes for study in compatible) / len(compatible)
+        avg_up = sum(study.up_value for study in compatible) / len(compatible)
         by_minutes = available_minutes / max(avg_duration, 1e-9)
         by_up = doctor.max_up / max(avg_up, 1e-9)
         total_capacity += max(0.0, min(by_minutes, by_up))
@@ -139,17 +103,7 @@ def build_candidate_pool(
     log: Callable[[str], None],
     doc_prebooked_minutes: Optional[Dict[int, float]] = None,
 ) -> List[StudyData]:
-    """
-    Построить shortlist исследований для обычного режима распределения.
-
-    Алгоритм:
-    1. отфильтровать feasible-исследования;
-    2. отсортировать их по приоритетному ключу;
-    3. оценить грубую вместимость дня;
-    4. ограничить размер shortlist по конфигурационным параметрам.
-
-    Возвращается список исследований, которые передаются в solver.
-    """
+    """Построить shortlist исследований для обычного режима распределения."""
     feasible = filter_feasible_studies(
         studies,
         doctors,
@@ -158,7 +112,7 @@ def build_candidate_pool(
         doc_prebooked_minutes=doc_prebooked_minutes,
     )
 
-    ordered = sorted(feasible, key=lambda s: candidate_priority_key(s, now, target_date))
+    ordered = sorted(feasible, key=lambda study: candidate_priority_key(study, now, target_date))
     rough_capacity = rough_daily_capacity_count(
         ordered,
         doctors,
@@ -168,20 +122,19 @@ def build_candidate_pool(
     )
 
     target_size = int(round(rough_capacity * CANDIDATE_POOL_FACTOR))
-    target_size = max(target_size, CANDIDATE_POOL_MIN_SIZE if ordered else 0)
-    target_size = min(target_size, CANDIDATE_POOL_MAX_SIZE if ordered else 0)
-    target_size = min(target_size, len(ordered))
+    if ordered:
+        target_size = max(target_size, CANDIDATE_POOL_MIN_SIZE)
+        target_size = min(target_size, CANDIDATE_POOL_MAX_SIZE, len(ordered))
+    else:
+        target_size = 0
 
     selected = ordered[:target_size]
 
-    n_cito = sum(1 for s in selected if s.priority == "cito")
-    n_asap = sum(1 for s in selected if s.priority == "asap")
-    n_normal = sum(1 for s in selected if s.priority == "normal")
-
+    counts = {priority: sum(1 for study in selected if study.priority == priority) for priority in PRIORITY_ORDER}
     log(
         f"Candidate pool: feasible={len(feasible)} из {len(studies)}, "
         f"rough_capacity≈{rough_capacity}, target={target_size}, "
-        f"CITO={n_cito}, ASAP={n_asap}, NORMAL={n_normal}"
+        f"CITO={counts['cito']}, ASAP={counts['asap']}, NORMAL={counts['normal']}"
     )
     return selected
 
@@ -198,13 +151,7 @@ def build_multipass_candidate_pool(
     log: Callable[[str], None],
     doc_prebooked_minutes: Optional[Dict[int, float]] = None,
 ) -> List[StudyData]:
-    """
-    Построить shortlist для очередного прохода multi-pass распределения.
-
-    Для CITO и ASAP берётся весь feasible-набор текущей группы, чтобы не
-    обрезать критически важные исследования. Для остальных приоритетов
-    используется обычная логика candidate pool.
-    """
+    """Построить shortlist для очередного прохода multi-pass."""
     if priority not in {"cito", "asap"}:
         return build_candidate_pool(
             studies,
@@ -224,7 +171,7 @@ def build_multipass_candidate_pool(
         remaining_work_minutes=remaining_work_minutes,
         doc_prebooked_minutes=doc_prebooked_minutes,
     )
-    feasible = sorted(feasible, key=lambda s: candidate_priority_key(s, now, target_date))
+    feasible = sorted(feasible, key=lambda study: candidate_priority_key(study, now, target_date))
 
     log(
         f"Multi-pass pool [{priority.upper()}]: feasible={len(feasible)} "

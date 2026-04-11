@@ -1,43 +1,34 @@
 """
 Главный orchestration-сервис оффлайн-распределения исследований.
-
-Модуль координирует работу остальных компонентов:
-- загрузчиков данных;
-- candidate pool builder;
-- objective-стратегий;
-- жадного и exact-решателей;
-- builder-а итогового ответа.
-
-Сам сервис не содержит всей вычислительной логики внутри себя, а
-управляет последовательностью шагов и передаёт данные между модулями.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from django.utils import timezone
 from api.models import Study
 
-from .config import (
-    DEADLINE_HOURS,
-    MIP_GAP_REL,
-    MIP_TIME_LIMIT,
-    PRIORITY_WEIGHTS,
-    SELECTION_PRIORITY_SCORES,
-)
+from .config import DEADLINE_HOURS, MIP_GAP_REL, MIP_TIME_LIMIT, PRIORITY_WEIGHTS
 from .entities import DoctorData, StudyData
+from .exact_solver import solve_exact_mip as solve_exact_mip_external
+from .loaders import load_doctors as load_doctors_external
+from .loaders import load_studies as load_studies_external
 from .objectives import (
     OBJECTIVE_REGISTRY,
     ObjectiveStrategy,
     PriorityTierTardinessMultiPassObjective,
     WeightedTardinessLexicographicObjective,
+    MaxAssignmentsObjective,
+    TardinessLexicographicObjective
 )
 from .pool import (
     build_candidate_pool as build_candidate_pool_external,
     build_multipass_candidate_pool as build_multipass_candidate_pool_external,
+    candidate_priority_key,
 )
+from .result_builder import build_distribution_response, build_empty_distribution_response
 from .time_utils import (
     add_work_minutes,
     align_to_work_time,
@@ -48,58 +39,27 @@ from .time_utils import (
     remaining_work_minutes,
     slot_boundaries,
 )
-from .exact_solver import solve_exact_mip as solve_exact_mip_external
-from .result_builder import (
-    build_distribution_response,
-    build_empty_distribution_response,
-)
-from .loaders import (
-    load_doctors as load_doctors_external,
-    load_studies as load_studies_external,
-)
-
 
 logger = logging.getLogger(__name__)
 
+
 class DistributionService:
-    """
-    Сервисный слой оффлайн-распределения исследований.
+    """Сервисный слой оффлайн-распределения исследований."""
 
-    Экземпляр класса хранит настройки текущего запуска:
-    - целевую дату;
-    - режим preview;
-    - выбранную objective-стратегию;
-    - веса приоритетов;
-    - отладочный журнал.
-
-    Основная задача класса — организовать полный сценарий распределения
-    от загрузки данных до формирования финального ответа.
-    """
     def __init__(
         self,
-        target_date: Optional[datetime] = None,
+        target_date: Optional[date] = None,
         preview_mode: bool = False,
         objective: Optional[str] = None,
         priority_weights: Optional[Dict[str, float]] = None,
-        selection_scores: Optional[Dict[str, float]] = None,
         deadline_hours: Optional[Dict[str, float]] = None,
         objective_params: Optional[Dict[str, Any]] = None,
     ):
-        """
-        Инициализировать сервис распределения.
-
-        Параметры конструктора позволяют настроить:
-        - дату расчёта;
-        - preview-режим;
-        - objective-функцию;
-        - пользовательские веса и SLA;
-        - дополнительные параметры objective.
-        """
-        self.now = timezone.now()
-        self.target_date = target_date or self.now.date()
+        self.real_now = timezone.now()
+        self.now = self.real_now
+        self.target_date = target_date or self.real_now.date()
         self.preview_mode = preview_mode
         self.priority_weights = {**PRIORITY_WEIGHTS, **(priority_weights or {})}
-        self.selection_scores = {**SELECTION_PRIORITY_SCORES, **(selection_scores or {})}
         self.deadline_hours = {**DEADLINE_HOURS, **(deadline_hours or {})}
         self.objective_params = dict(objective_params or {})
         self._debug: List[str] = []
@@ -107,56 +67,39 @@ class DistributionService:
         self.objective: ObjectiveStrategy
         self.objective_code = ""
         self.objective_description = ""
-        # здесь можно поменять целевую функцию
-        self.set_objective(objective or "weighted_tardiness_lexicographic")
+        self.set_objective(objective or WeightedTardinessLexicographicObjective.code)
 
-    def set_preview_mode(self, preview: bool = True):
-        """
-        Включить или выключить режим предпросмотра.
-
-        В preview-режиме распределение выполняется полностью, но результат
-        не сохраняется в БД.
-        """
+    def set_preview_mode(self, preview: bool = True) -> None:
+        """Включить или выключить режим предпросмотра."""
         self.preview_mode = preview
 
-
-    def _instantiate_objective(self, objective: str) -> ObjectiveStrategy:
-        """
-        Создать экземпляр objective-стратегии по её коду.
-
-        Если код не найден в реестре, используется стратегия по умолчанию.
-        """
-        cls = OBJECTIVE_REGISTRY.get(objective, WeightedTardinessLexicographicObjective)
-        return cls(
+    def _instantiate_objective(self, objective_code: str) -> ObjectiveStrategy:
+        """Создать экземпляр objective-стратегии по её коду."""
+        objective_cls = OBJECTIVE_REGISTRY.get(
+            objective_code,
+            WeightedTardinessLexicographicObjective,
+        )
+        return objective_cls(
             priority_weights=self.priority_weights,
-            selection_scores=self.selection_scores,
             **self.objective_params,
         )
 
     def _objective_meta(self) -> Dict[str, Any]:
-        """Вернуть краткое описание текущей objective-функции для ответа API."""
         return {
             "code": self.objective_code,
             "description": self.objective_description,
             "priority_weights": self.priority_weights,
-            "selection_scores": self.selection_scores,
             "deadline_hours": self.deadline_hours,
             "objective_params": self.objective_params,
         }
 
-    def _log(self, msg: str):
-        """
-        Записать сообщение в системный лог и во внутренний debug-список.
+    def _log(self, message: str) -> None:
+        logger.info(message)
+        self._debug.append(message)
 
-        `_debug` затем отдаётся на фронт, чтобы можно было понимать, что именно
-        происходило во время распределения.
-        """
-        logger.info(msg)
-        self._debug.append(msg)
-
-    def set_objective(self, objective: str) -> None:
+    def set_objective(self, objective_code: str) -> None:
         """Переключить objective-стратегию."""
-        self.objective = self._instantiate_objective(objective)
+        self.objective = self._instantiate_objective(objective_code)
         self.objective_code = self.objective.code
         self.objective_description = self.objective.description
         self._log(f"Objective переключена на {self.objective_code}")
@@ -169,23 +112,11 @@ class DistributionService:
         finish_dt: datetime,
         metrics: Dict[str, float],
     ) -> Dict[str, Any]:
-        """
-        Сформировать унифицированный payload назначения исследования.
-
-        В payload включаются:
-        - врач;
-        - время старта и окончания;
-        - selection score;
-        - все рассчитанные solver-метрики.
-
-        Используется как промежуточный формат между solver-слоем и builder-ом ответа.
-        """
         payload: Dict[str, Any] = {
             "doctor_id": doctor.id,
             "doctor_name": doctor.name,
             "start_dt": start_dt,
             "finish_dt": finish_dt,
-            "selection_priority_score": self.objective.selection_priority_score(study),
         }
         for key, value in metrics.items():
             payload[key] = float(value)
@@ -197,63 +128,30 @@ class DistributionService:
         )
         return payload
 
-    def _modality_ok(self, study_mods: Set[str], doc_mods: Set[str]) -> bool:
-        """
-        Проверить совместимость модальностей исследования и врача.
-
-        Правило:
-        - если у врача нет модальностей, он не подходит;
-        - если у исследования модальность не указана, считаем его совместимым с
-          любым врачом;
-        - иначе нужен непустой intersection множеств модальностей.
-        """
-        if not doc_mods:
+    def _modality_ok(self, study_mods: Set[str], doctor_mods: Set[str]) -> bool:
+        if not doctor_mods:
             return False
         if not study_mods:
             return True
-        return bool(study_mods & doc_mods)
+        return bool(study_mods & doctor_mods)
 
     def _align_to_work_time(self, doctor: DoctorData, dt: datetime) -> datetime:
-        """
-        Wrapper над time_utils.align_to_work_time.
-
-        Нужен для единообразного доступа к временной логике из сервиса.
-        """
         return align_to_work_time(doctor, dt)
 
     def _remaining_work_minutes(self, doctor: DoctorData, prebooked_minutes: float = 0.0) -> float:
-        """
-        Wrapper над time_utils.remaining_work_minutes.
-
-        Возвращает остаток доступного рабочего времени врача на момент текущего расчёта.
-        """
         return remaining_work_minutes(doctor, self.now, prebooked_minutes)
 
     def _planning_horizon_end(self, doctors: List[DoctorData]) -> datetime:
-        """
-        Wrapper над time_utils.planning_horizon_end.
-
-        Используется для расчёта штрафов неназначенных исследований.
-        """
         return planning_horizon_end(doctors, self.now)
 
     def _add_work_minutes(self, doctor: DoctorData, start: datetime, minutes: float) -> datetime:
-        """
-        Wrapper над time_utils.add_work_minutes.
-
-        Используется при расчёте фактического времени завершения исследования.
-        """
         return add_work_minutes(doctor, start, minutes)
 
-    def _effective_start_after_prebook(self,
-                                       doctor: DoctorData,
-                                       prebooked_minutes: float = 0.0
-                                    ) -> datetime:
-        """
-        Wrapper над time_utils.effective_start_after_prebook.
-
-        Возвращает допустимый старт врача с учётом уже занятых минут.
-        """
+    def _effective_start_after_prebook(
+        self,
+        doctor: DoctorData,
+        prebooked_minutes: float = 0.0,
+    ) -> datetime:
         return effective_start_after_prebook(doctor, self.now, prebooked_minutes)
 
     def _execution_segments(
@@ -262,11 +160,6 @@ class DistributionService:
         start: datetime,
         minutes: float,
     ) -> List[Tuple[datetime, datetime]]:
-        """
-        Wrapper над time_utils.execution_segments.
-
-        Используется exact-решателем для построения занятых временных сегментов.
-        """
         return execution_segments(doctor, start, minutes)
 
     def _slot_boundaries(
@@ -274,78 +167,56 @@ class DistributionService:
         doctor: DoctorData,
         prebooked_minutes: float = 0.0,
     ) -> List[datetime]:
-        """
-        Wrapper над time_utils.slot_boundaries.
-
-        Возвращает допустимые стартовые слоты врача для exact MILP.
-        """
         return slot_boundaries(doctor, self.now, prebooked_minutes)
 
-    def _occupied_slot_indices(
-        self,
-        doctor: DoctorData,
-        segments,
-        slot_boundaries_list,
-    ):
-        """
-        Wrapper над time_utils.occupied_slot_indices.
-
-        Параметр врача сохраняется в сигнатуре для совместимости с exact solver,
-        хотя в самом расчёте индексов слотов он напрямую не используется.
-        """
+    def _occupied_slot_indices(self, doctor: DoctorData, segments, slot_boundaries_list):
         return occupied_slot_indices(segments, slot_boundaries_list)
 
-    def load_studies(
-        self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None
-    ) -> List[StudyData]:
-        """
-        Загрузить и нормализовать backlog исследований через внешний loader.
+    def _sync_planning_now(self, doctors: List[DoctorData]) -> None:
+        """Выбрать момент времени, относительно которого строится планирование.
 
-        Метод оставлен в сервисе как thin-wrapper, чтобы orchestration-слой
-        не зависел от деталей ORM-преобразования.
+        Для исторических и будущих дат расчёт идёт от начала смены. Для текущего
+        дня сохраняется реальное текущее время, чтобы не планировать исследования
+        в прошлое.
         """
+        self.now = self.real_now
+        if not doctors:
+            return
+
+        min_shift_start = min(doctor.shift_start for doctor in doctors)
+        if self.target_date != self.real_now.date():
+            self.now = min_shift_start
+            self._log(
+                f"Целевая дата {self.target_date} не равна сегодняшней; "
+                f"планирование начинается от {self.now}"
+            )
+            return
+
+        if self.real_now < min_shift_start:
+            self.now = min_shift_start
+            self._log(
+                f"Текущее время раньше начала смены; используем {self.now} как начало планирования"
+            )
+            return
+
+        self._log(f"Планирование выполняется от реального текущего времени {self.now}")
+
+    def load_studies(
+        self,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> List[StudyData]:
         return load_studies_external(
             now=self.now,
             deadline_hours=self.deadline_hours,
+            priority_weights=self.priority_weights,
             log=self._log,
             date_from=date_from,
             date_to=date_to,
         )
 
     def load_doctors(self) -> List[DoctorData]:
-        """
-        Загрузить врачей с расписанием на целевую дату через внешний loader.
-
-        Метод возвращает уже нормализованный список DoctorData.
-        """
-        return load_doctors_external(
-            target_date=self.target_date,
-            log=self._log,
-        )
-
-    def _candidate_priority_key(
-        self,
-        study: StudyData,
-    ) -> Tuple[int, int, datetime, datetime]:
-        """
-        Построить ключ сортировки исследования для жадного fallback-режима.
-
-        Ключ учитывает просроченность, приоритет, дедлайн и время создания.
-        """
-        overdue = study.deadline < self.now
-        pr = {"cito": 0, "asap": 1, "normal": 2}.get(study.priority, 2)
-        if overdue and study.priority == "cito":
-            bucket = 0
-        elif overdue and study.priority == "asap":
-            bucket = 1
-        elif overdue and study.priority == "normal":
-            bucket = 2
-        elif study.deadline.date() <= self.target_date:
-            bucket = 3
-        else:
-            bucket = 4
-        return (bucket, pr, study.deadline, study.created_at)
-
+        return load_doctors_external(target_date=self.target_date, log=self._log)
 
     def build_candidate_pool(
         self,
@@ -353,12 +224,6 @@ class DistributionService:
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> List[StudyData]:
-        """
-        Построить shortlist исследований для обычного режима распределения.
-
-        Метод делегирует основную работу модулю pool.py, передавая туда
-        сервисные callback-и и параметры текущего запуска.
-        """
         return build_candidate_pool_external(
             studies,
             doctors,
@@ -370,43 +235,16 @@ class DistributionService:
             doc_prebooked_minutes=doc_prebooked_minutes,
         )
 
-
     def _make_pass_doctors(
         self,
         doctors: List[DoctorData],
         used_up_by_doctor: Optional[Dict[int, float]] = None,
     ) -> List[DoctorData]:
-        """
-        Построить временный список врачей для очередного прохода multi-pass.
-
-        Важно: exact- и greedy-решатели уже умеют учитывать заранее занятое
-        ВРЕМЯ через `doc_prebooked_minutes`, но не знают о ранее израсходованном
-        УП. Поэтому для очередного прохода мы создаём копии врачей с уменьшенным
-        `max_up`.
-
-        Это позволяет решать задачу по приоритетам последовательно:
-        - после CITO у врача остаётся меньше доступного УП;
-        - этот остаток затем используется на проходе ASAP;
-        - после него — на NORMAL.
-        """
         used_up_by_doctor = used_up_by_doctor or {}
-        result: List[DoctorData] = []
-
-        for d in doctors:
-            remaining_up = max(0.0, d.max_up - float(used_up_by_doctor.get(d.id, 0.0)))
-            result.append(
-                DoctorData(
-                    id=d.id,
-                    name=d.name,
-                    modality=set(d.modality),
-                    max_up=remaining_up,
-                    shift_start=d.shift_start,
-                    shift_end=d.shift_end,
-                    break_start=d.break_start,
-                    break_end=d.break_end,
-                )
-            )
-        return result
+        return [
+            doctor.clone_with_remaining_up(doctor.max_up - float(used_up_by_doctor.get(doctor.id, 0.0)))
+            for doctor in doctors
+        ]
 
     def _build_multipass_candidate_pool(
         self,
@@ -415,11 +253,6 @@ class DistributionService:
         priority: str,
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> List[StudyData]:
-        """
-        Построить candidate pool для одного приоритетного слоя multi-pass.
-
-        Метод делегирует выбор shortlist внешнему модулю pool.py.
-        """
         return build_multipass_candidate_pool_external(
             studies,
             doctors,
@@ -431,6 +264,25 @@ class DistributionService:
             log=self._log,
             doc_prebooked_minutes=doc_prebooked_minutes,
         )
+
+    def _complete_unassigned_meta(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        assignment: Dict[str, int],
+        partial_unassigned_meta: Dict[str, Dict[str, float | datetime]],
+    ) -> Dict[str, Dict[str, float | datetime]]:
+        horizon_end = self._planning_horizon_end(doctors)
+        full_unassigned_meta = dict(partial_unassigned_meta)
+        for study in studies:
+            if study.research_number in assignment:
+                continue
+            if study.research_number not in full_unassigned_meta:
+                full_unassigned_meta[study.research_number] = self.objective.unassigned_metrics(
+                    study,
+                    horizon_end,
+                )
+        return full_unassigned_meta
 
     def solve_priority_tier_multipass(
         self,
@@ -445,35 +297,18 @@ class DistributionService:
         Dict[str, Dict[str, float | datetime]],
         List[StudyData],
     ]:
-        """
-        Реальный multi-pass по приоритетам: CITO → ASAP → NORMAL.
-
-        На каждом проходе:
-        1. берутся только исследования текущего приоритета;
-        2. учитываются уже занятые минуты врачей;
-        3. учитывается уже израсходованный УП;
-        4. запускается exact MILP (или greedy fallback) только для этой группы;
-        5. выбранные назначения фиксируются и уменьшают доступные ресурсы для
-           следующего прохода.
-
-        Именно этого поведения раньше и не хватало классу
-        `priority_tier_tardiness_multipass`: objective была объявлена как
-        multi-pass, но реально решалась одной общей MILP-задачей.
-        """
         priority_order = ["cito", "asap", "normal"]
-        study_map = {s.research_number: s for s in studies}
-
+        study_map = {study.research_number: study for study in studies}
         assignment: Dict[str, int] = {}
         details: Dict[str, Dict] = {}
         unassigned_meta: Dict[str, Dict[str, float | datetime]] = {}
         total_solver_obj = 0.0
         multipass_pool: List[StudyData] = []
-
-        doctor_prebooked_minutes: Dict[int, float] = {d.id: 0.0 for d in doctors}
-        doctor_used_up: Dict[int, float] = {d.id: 0.0 for d in doctors}
+        doctor_prebooked_minutes: Dict[int, float] = {doctor.id: 0.0 for doctor in doctors}
+        doctor_used_up: Dict[int, float] = {doctor.id: 0.0 for doctor in doctors}
 
         for priority in priority_order:
-            tier_studies = [s for s in studies if s.priority == priority]
+            tier_studies = [study for study in studies if study.priority == priority]
             if not tier_studies:
                 self._log(f"Multi-pass [{priority.upper()}]: исследований нет, проход пропущен")
                 continue
@@ -488,10 +323,7 @@ class DistributionService:
             multipass_pool.extend(tier_pool)
 
             if not tier_pool:
-                self._log(
-                    f"Multi-pass [{priority.upper()}]: " +
-                    "candidate pool пуст, назначений на этом проходе не будет"
-                )
+                self._log(f"Multi-pass [{priority.upper()}]: candidate pool пуст")
                 continue
 
             self._log(
@@ -512,16 +344,18 @@ class DistributionService:
                     pass_doctors,
                     doc_prebooked_minutes=doctor_prebooked_minutes,
                 )
-                planning_horizon_end = self._planning_horizon_end(pass_doctors)
+                horizon_end = self._planning_horizon_end(pass_doctors)
                 pass_unassigned_meta = {
-                    s.research_number: self.objective.unassigned_metrics(s, planning_horizon_end)
-                    for s in tier_pool
-                    if s.research_number not in pass_assignment
+                    study.research_number: self.objective.unassigned_metrics(study, horizon_end)
+                    for study in tier_pool
+                    if study.research_number not in pass_assignment
                 }
                 pass_solver_obj = (
                     sum(float(item.get("objective_value", 0.0)) for item in pass_details.values())
-                    + sum(float(item.get(
-                        "objective_value", 0.0)) for item in pass_unassigned_meta.values())
+                    + sum(
+                        float(item.get("objective_value", 0.0))
+                        for item in pass_unassigned_meta.values()
+                    )
                 )
 
             total_solver_obj += float(pass_solver_obj)
@@ -529,18 +363,17 @@ class DistributionService:
             details.update(pass_details)
             unassigned_meta.update(pass_unassigned_meta)
 
-            for sid, did in pass_assignment.items():
-                study = study_map[sid]
-                doctor_prebooked_minutes[
-                    did
-                ] = doctor_prebooked_minutes.get(did, 0.0) + study.duration_minutes
-                doctor_used_up[did] = doctor_used_up.get(did, 0.0) + study.up_value
+            for study_id, doctor_id in pass_assignment.items():
+                study = study_map[study_id]
+                doctor_prebooked_minutes[doctor_id] = (
+                    doctor_prebooked_minutes.get(doctor_id, 0.0) + study.duration_minutes
+                )
+                doctor_used_up[doctor_id] = doctor_used_up.get(doctor_id, 0.0) + study.up_value
 
             self._log(
-                f"Multi-pass [{priority.upper()}]: назначено {
-                    len(pass_assignment)} / {len(tier_pool)}, "
-                f"неназначено {len(pass_unassigned_meta)} / {
-                    len(tier_pool)}, obj={float(pass_solver_obj):.6f}"
+                f"Multi-pass [{priority.upper()}]: назначено {len(pass_assignment)} / {len(tier_pool)}, "
+                f"неназначено {len(pass_unassigned_meta)} / {len(tier_pool)}, "
+                f"obj={float(pass_solver_obj):.6f}"
             )
 
         self._log(
@@ -555,99 +388,73 @@ class DistributionService:
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> Tuple[Dict[str, int], Dict[str, Dict]]:
-        """
-        Распределить candidate pool жадным способом.
-
-        Fallback теперь тоже учитывает текущую objective-стратегию: среди
-        допустимых врачей выбирается тот вариант, у которого меньше
-        objective_value, а при равенстве — более ранний finish_dt.
-        """
         self._log(f"Запуск: жадный fallback по candidate pool (objective={self.objective_code})...")
-
-        ordered = sorted(studies, key=self._candidate_priority_key)
+        ordered = sorted(
+            studies,
+            key=lambda study: candidate_priority_key(study, self.now, self.target_date),
+        )
 
         doctor_state: Dict[int, Dict[str, float | datetime]] = {}
-        for d in doctors:
-            prebooked = (doc_prebooked_minutes or {}).get(d.id, 0.0)
-            doctor_state[d.id] = {
-                "cursor": self._effective_start_after_prebook(d, prebooked),
+        for doctor in doctors:
+            prebooked = (doc_prebooked_minutes or {}).get(doctor.id, 0.0)
+            doctor_state[doctor.id] = {
+                "cursor": self._effective_start_after_prebook(doctor, prebooked),
                 "used_up": 0.0,
             }
 
         assignment: Dict[str, int] = {}
         details: Dict[str, Dict] = {}
 
-        for s in ordered:
-            best_doctor: Optional[DoctorData] = None
-            best_finish: Optional[datetime] = None
-            best_metrics: Optional[Dict[str, float]] = None
+        for study in ordered:
+            best_choice: Optional[Tuple[Tuple[Any, ...], DoctorData, datetime, datetime, Dict[str, float]]] = None
 
-            for d in doctors:
-                if not self._modality_ok(s.modality, d.modality):
+            for doctor in doctors:
+                state = doctor_state[doctor.id]
+                if not self._modality_ok(study.modality, doctor.modality):
                     continue
-                if float(doctor_state[d.id]["used_up"]) + s.up_value > d.max_up + 1e-9:
-                    continue
-
-                start_dt = self._align_to_work_time(d, doctor_state[d.id]["cursor"])
-                finish_dt = self._add_work_minutes(d, start_dt, s.duration_minutes)
-                if finish_dt > d.shift_end:
+                if float(state["used_up"]) + study.up_value > doctor.max_up + 1e-9:
                     continue
 
-                metrics = self.objective.option_metrics(s, d, start_dt, finish_dt)
-                objective_value = float(metrics.get("objective_value", 0.0))
+                start_dt = self._align_to_work_time(doctor, state["cursor"])
+                finish_dt = self._add_work_minutes(doctor, start_dt, study.duration_minutes)
+                if finish_dt > doctor.shift_end:
+                    continue
 
-                candidate_key = (objective_value, finish_dt, start_dt, d.id)
-                best_key = None
-                if best_doctor is not None and best_finish is not None and best_metrics is not None:
-                    best_key = (
-                        float(best_metrics.get("objective_value", 0.0)),
-                        best_finish,
-                        self._align_to_work_time(
-                            best_doctor,
-                            doctor_state[best_doctor.id]["cursor"]
-                        ),
-                        best_doctor.id,
-                    )
+                metrics = self.objective.option_metrics(study, doctor, start_dt, finish_dt)
+                choice_key = (
+                    float(metrics.get("objective_value", 0.0)),
+                    finish_dt,
+                    start_dt,
+                    doctor.id,
+                )
+                choice = (choice_key, doctor, start_dt, finish_dt, metrics)
+                if best_choice is None or choice_key < best_choice[0]:
+                    best_choice = choice
 
-                if best_key is None or candidate_key < best_key:
-                    best_doctor = d
-                    best_finish = finish_dt
-                    best_metrics = metrics
-
-            if best_doctor is None or best_finish is None or best_metrics is None:
+            if best_choice is None:
                 continue
 
-            start_dt = self._align_to_work_time(best_doctor, doctor_state[best_doctor.id]["cursor"])
-            finish_dt = self._add_work_minutes(best_doctor, start_dt, s.duration_minutes)
-            metrics = self.objective.option_metrics(s, best_doctor, start_dt, finish_dt)
-
-            assignment[s.research_number] = best_doctor.id
-            details[s.research_number] = self._build_assignment_payload(
-                s, best_doctor, start_dt, finish_dt, metrics
+            _, best_doctor, start_dt, finish_dt, metrics = best_choice
+            assignment[study.research_number] = best_doctor.id
+            details[study.research_number] = self._build_assignment_payload(
+                study,
+                best_doctor,
+                start_dt,
+                finish_dt,
+                metrics,
             )
-
             doctor_state[best_doctor.id]["cursor"] = finish_dt
-            doctor_state[best_doctor.id]["used_up"] = float(
-                doctor_state[best_doctor.id]["used_up"]
-                ) + s.up_value
+            doctor_state[best_doctor.id]["used_up"] = float(doctor_state[best_doctor.id]["used_up"]) + study.up_value
 
         self._log(f"Жадный fallback: назначено {len(assignment)} / {len(studies)}")
         return assignment, details
 
     def solve_exact_mip(
-    self,
-    studies: List[StudyData],
-    doctors: List[DoctorData],
-    doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-) -> Tuple[Dict[str, int], Dict[str, Dict], float, Dict[str, Dict[str, float | datetime]]]:
-        """
-        Выполнить exact-распределение через внешний MILP-решатель.
-
-        Метод является thin-wrapper’ом:
-        - вызывает exact_solver;
-        - преобразует его выход в формат assignment payload;
-        - возвращает унифицированный результат для сервисного слоя.
-        """
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
+    ) -> Tuple[Dict[str, int], Dict[str, Dict], float, Dict[str, Dict[str, float | datetime]]]:
         assignment, raw_details, solver_obj, unassigned_meta = solve_exact_mip_external(
             studies=studies,
             doctors=doctors,
@@ -668,18 +475,18 @@ class DistributionService:
         )
 
         details: Dict[str, Dict] = {}
-        study_map = {s.research_number: s for s in studies}
-        doctor_map = {d.id: d for d in doctors}
+        study_map = {study.research_number: study for study in studies}
+        doctor_map = {doctor.id: doctor for doctor in doctors}
 
-        for sid, meta in raw_details.items():
-            study = study_map[sid]
+        for study_id, meta in raw_details.items():
+            study = study_map[study_id]
             doctor = doctor_map[meta["doctor_id"]]
             metrics = {
-                k: v
-                for k, v in meta.items()
-                if k not in {"doctor_id", "doctor_name", "start_dt", "finish_dt"}
+                key: value
+                for key, value in meta.items()
+                if key not in {"doctor_id", "doctor_name", "start_dt", "finish_dt"}
             }
-            details[sid] = self._build_assignment_payload(
+            details[study_id] = self._build_assignment_payload(
                 study=study,
                 doctor=doctor,
                 start_dt=meta["start_dt"],
@@ -690,76 +497,48 @@ class DistributionService:
         return assignment, details, solver_obj, unassigned_meta
 
     def save_to_db(self, assignment: Dict[str, int]) -> None:
-        """
-        Сохранить результат распределения в БД.
-
-        Если сервис запущен в preview-режиме, изменения не сохраняются.
-        Иначе для каждого исследования выставляются:
-        - diagnostician_id;
-        - статус `confirmed`;
-        - planned_at = self.now.
-        """
         if self.preview_mode:
             self._log("Режим предпросмотра - сохранение пропущено")
             return
+        if not assignment:
+            self._log("Нет назначений для сохранения")
+            return
 
-        for study_id, doc_id in assignment.items():
-            Study.objects.filter(research_number=study_id).update(
-                diagnostician_id=doc_id,
-                status="confirmed",
-                planned_at=self.now,
+        studies_by_number = Study.objects.in_bulk(list(assignment.keys()), field_name="research_number")
+        to_update = []
+        for research_number, doctor_id in assignment.items():
+            study = studies_by_number.get(research_number)
+            if study is None:
+                continue
+            study.diagnostician_id = doctor_id
+            study.status = "confirmed"
+            study.planned_at = self.now
+            to_update.append(study)
+
+        if to_update:
+            Study.objects.bulk_update(
+                to_update,
+                ["diagnostician_id", "status", "planned_at"],
+                batch_size=500,
             )
-
-    # ── Главный метод ────────────────────────────────────────────────
 
     def distribute(
         self,
         use_mip: bool = True,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
-    ) -> Dict:
-        """
-        Выполнить полный цикл распределения и вернуть подробный результат.
-
-        Основные этапы метода:
-        1. Логирование параметров запуска.
-        2. Загрузка врачей и исследований.
-        3. Формирование candidate pool текущего дня.
-        4. Решение exact MILP или greedy fallback.
-        5. Построение агрегированных метрик и структуры ответа для UI.
-        6. Сохранение результата в БД, если это не preview.
-
-        Параметры:
-        - use_mip: если False, exact MILP принудительно не используется,
-          даже если доступен PuLP.
-        - date_from / date_to: окно отбора исследований по created_at.
-        """
+    ) -> Dict[str, Any]:
         self._log("=" * 60)
         self._log("OFFLINE DISTRIBUTION SERVICE")
-        self._log(f"Время: {self.now}")
+        self._log(f"Время запроса: {self.real_now}")
         self._log(f"Целевая дата: {self.target_date}")
         self._log(f"Режим предпросмотра: {self.preview_mode}")
-        self._log(
-            f"Целевая функция: {self.objective_code} | {self.objective_description}"
-        )
+        self._log(f"Целевая функция: {self.objective_code} | {self.objective_description}")
         self._log("=" * 60)
 
         doctors = self.load_doctors()
-
-        # Если сервис запущен позже начала смены, в симуляции "сегодняшнего" дня
-        # текущее время сдвигается к min_start. Это позволяет избежать ситуации,
-        # когда весь утренний интервал автоматически считается потерянным просто
-        # из-за времени запуска сервиса.
-        if doctors:
-            min_start = min(d.shift_start for d in doctors)
-            if self.now > min_start:
-                self._log(
-                    f"Текущее время {self.now} после начала смены {min_start}, " +
-                    "используем min_start как единое now для симуляции"
-                )
-                self.now = min_start
-
-        studies = self.load_studies(date_from, date_to)
+        self._sync_planning_now(doctors)
+        studies = self.load_studies(date_from=date_from, date_to=date_to)
 
         if not doctors:
             return self._empty("Нет врачей с расписанием на сегодня", studies)
@@ -775,39 +554,44 @@ class DistributionService:
             if not candidate_pool:
                 return self._empty(
                     "Не удалось сформировать candidate pool ни на одном проходе multi-pass",
-                    studies
+                    studies,
                 )
         else:
             candidate_pool = self.build_candidate_pool(studies, doctors)
             if not candidate_pool:
-                return self._empty(
-                    "Не удалось сформировать candidate pool на текущий день", studies)
+                return self._empty("Не удалось сформировать candidate pool на текущий день", studies)
 
             if use_mip:
                 assignment, details, solver_obj, unassigned_meta = self.solve_exact_mip(
                     candidate_pool,
-                    doctors
+                    doctors,
                 )
             else:
                 assignment, details = self.solve_greedy(candidate_pool, doctors)
-                planning_horizon_end = self._planning_horizon_end(doctors)
+                horizon_end = self._planning_horizon_end(doctors)
                 unassigned_meta = {
-                    s.research_number: self.objective.unassigned_metrics(s, planning_horizon_end)
-                    for s in candidate_pool
-                    if s.research_number not in assignment
+                    study.research_number: self.objective.unassigned_metrics(study, horizon_end)
+                    for study in candidate_pool
+                    if study.research_number not in assignment
                 }
                 solver_obj = (
                     sum(float(item.get("objective_value", 0.0)) for item in details.values())
-                    + sum(float(
-                        item.get("objective_value", 0.0)) for item in unassigned_meta.values())
+                    + sum(float(item.get("objective_value", 0.0)) for item in unassigned_meta.values())
                 )
+
+        full_unassigned_meta = self._complete_unassigned_meta(
+            studies,
+            doctors,
+            assignment,
+            unassigned_meta,
+        )
 
         result = build_distribution_response(
             studies=studies,
             doctors=doctors,
             assignment=assignment,
             details=details,
-            unassigned_meta=unassigned_meta,
+            unassigned_meta=full_unassigned_meta,
             candidate_pool=candidate_pool,
             solver_obj=solver_obj,
             now=self.now,
@@ -819,37 +603,24 @@ class DistributionService:
         )
 
         self.save_to_db(assignment)
-
         self._log(
             f"Итого: candidate_pool={result['candidate_pool_size']}/{len(studies)}, "
-            f"назначено={result['assigned']}/{len(studies)} "
-            f"({result['assignment_rate_percent']:.2f}%) | "
-            f"CITO: {
-                result['cito_assigned']}/{result['cito_total']} | "
-            f"ASAP: {
-                result['priority_breakdown']['asap']['assigned']}/{
-                    result['priority_breakdown']['asap']['total']} | "
-            f"NORMAL: {
-                result['priority_breakdown']['plan']['assigned']}/{
-                    result['priority_breakdown']['plan']['total']} | "
+            f"назначено={result['assigned']}/{len(studies)} ({result['assignment_rate_percent']:.2f}%) | "
+            f"CITO: {result['cito_assigned']}/{result['cito_total']} | "
+            f"ASAP: {result['priority_breakdown']['asap']['assigned']}/{result['priority_breakdown']['asap']['total']} | "
+            f"NORMAL: {result['priority_breakdown']['plan']['assigned']}/{result['priority_breakdown']['plan']['total']} | "
             f"Backlog вне candidate_pool: {result['backlog_outside_pool']} | "
             f"Obj={result['reported_objective_value']}"
         )
 
-        if not self.preview_mode:
-            self._log("Данные сохранены в БД")
-        else:
+        if self.preview_mode:
             self._log("Данные НЕ сохранены в БД (режим предпросмотра)")
+        else:
+            self._log("Данные сохранены в БД")
 
         return result
 
-    def _empty(self, message: str, studies: List = None) -> Dict:
-        """
-        Сформировать пустой ответ сервиса.
-
-        Используется в случаях, когда дальнейшее распределение невозможно:
-        например, при отсутствии врачей, исследований или candidate pool.
-        """
+    def _empty(self, message: str, studies: Optional[List[StudyData]] = None) -> Dict[str, Any]:
         self._log(f"ПУСТО: {message}")
         return build_empty_distribution_response(
             message=message,

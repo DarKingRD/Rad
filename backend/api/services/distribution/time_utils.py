@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import List, Tuple
-
+from bisect import bisect_left, bisect_right
 from .entities import DoctorData
 from .config import TIME_SLOT_MINUTES
 
@@ -238,23 +238,27 @@ def slot_boundaries(
 
 
 def occupied_slot_indices(
-    segments: List[Tuple[datetime, datetime]],
-    slot_boundaries_list: List[datetime],
-) -> List[int]:
-    """
-    Определить индексы слотов, которые пересекаются с выполнением исследования.
+    segments,
+    slot_boundaries_list,
+):
+    if not segments or not slot_boundaries_list:
+        return []
 
-    Возвращаемый список используется exact MILP для задания ограничений
-    непересечения по времени у одного врача.
-    """
-    occupied: List[int] = []
+    slot_delta = timedelta(minutes=TIME_SLOT_MINUTES)
+    slot_ends = [slot_start + slot_delta for slot_start in slot_boundaries_list]
 
-    for idx, slot_start in enumerate(slot_boundaries_list):
-        slot_end = slot_start + timedelta(minutes=TIME_SLOT_MINUTES)
-        if any(
-            seg_start < slot_end and slot_start < seg_end
-            for seg_start, seg_end in segments
-        ):
-            occupied.append(idx)
+    occupied = []
+    last_added = -1
+
+    for seg_start, seg_end in segments:
+        # Первый слот, чей конец строго позже seg_start
+        left = bisect_right(slot_ends, seg_start)
+        # Первый слот, чей старт >= seg_end
+        right = bisect_left(slot_boundaries_list, seg_end)
+
+        if left < right:
+            start_idx = max(left, last_added + 1)
+            occupied.extend(range(start_idx, right))
+            last_added = right - 1
 
     return occupied
