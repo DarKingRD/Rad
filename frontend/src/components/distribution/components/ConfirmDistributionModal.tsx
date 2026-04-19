@@ -56,8 +56,12 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
   }, [isOpen, distResult?.distribution_id]);
 
   const assignments = distResult?.assignments || [];
-  const assigned = assignments.filter((item) => item.doctor_id);
-  const unassignedAssignments = assignments.filter((item) => !item.doctor_id);
+  const assigned = assignments.filter(
+  (item) => item.doctor_id !== null && item.doctor_id !== undefined
+);
+  const unassignedAssignments = assignments.filter(
+  (item) => item.doctor_id === null || item.doctor_id === undefined
+);
   const doctorSummary = distResult?.doctor_stats || [];
 
   const filteredAssigned = useMemo(() => {
@@ -105,6 +109,15 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
       doctorSummary.length
     );
   }, [doctorSummary]);
+
+  const priorityBreakdownRows = useMemo(
+    () => [
+      { key: 'plan', label: 'Плановые', data: distResult?.priority_breakdown?.plan },
+      { key: 'asap', label: 'ASAP', data: distResult?.priority_breakdown?.asap },
+      { key: 'cito', label: 'CITO', data: distResult?.priority_breakdown?.cito },
+    ],
+    [distResult?.priority_breakdown]
+  );
 
   const handleReassignChange = (assignment: Assignment, value: string) => {
     const doctorId = Number(value);
@@ -266,10 +279,71 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                     <div>
                       Без назначения: <strong>{unassignedAssignments.length}</strong>
                     </div>
+                     <div>
+                      Доля назначений: <strong>{(distResult.assignment_rate_percent ?? 0).toFixed(2)}%</strong>
+                    </div>
+                    <div>
+                      Просрочка (все):{' '}
+                      <strong>
+                        {distResult.overdue_total ?? 0} ({(distResult.overdue_rate_percent ?? 0).toFixed(2)}%)
+                      </strong>
+                    </div>
+                    <div>
+                      P50/P95/P99 просрочки:{' '}
+                      <strong>
+                        {(distResult.tardiness_p50 ?? 0).toFixed(2)}ч / {(distResult.tardiness_p95 ?? 0).toFixed(2)}ч / {(distResult.tardiness_p99 ?? 0).toFixed(2)}ч
+                      </strong>
+                    </div>
                   </div>
                 </div>
               </div>
+              
+            <div className="border rounded-xl p-4">
+                <div className="flex items-center gap-2 text-slate-800 font-medium mb-3">
+                  <BarChart3 size={18} />
+                  Детализация по срочности
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[980px] text-sm">
+                    <thead>
+                      <tr className="text-left text-slate-500 border-b border-slate-200">
+                        <th className="py-2 pr-2">Тип</th>
+                        <th className="py-2 pr-2">Всего</th>
+                        <th className="py-2 pr-2">Доля</th>
+                        <th className="py-2 pr-2">Назначено</th>
+                        <th className="py-2 pr-2">Просрочка</th>
+                        <th className="py-2 pr-2">Просрочка %</th>
+                        <th className="py-2 pr-2">Часы просрочки</th>
+                        <th className="py-2">P50/P95/P99 (ч)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {priorityBreakdownRows.map((row) => (
+                        <tr key={row.key} className="border-b border-slate-100 text-slate-700">
+                          <td className="py-2 pr-2 font-medium">{row.label}</td>
+                          <td className="py-2 pr-2">{row.data?.total ?? 0}</td>
+                          <td className="py-2 pr-2">{(row.data?.share_percent ?? 0).toFixed(2)}%</td>
+                          <td className="py-2 pr-2">
+                            {row.data?.assigned ?? 0} ({(row.data?.assigned_rate_percent ?? 0).toFixed(2)}%)
+                          </td>
+                          <td className="py-2 pr-2">
+                            {row.data?.overdue_total ?? 0} / {row.data?.total ?? 0}
+                          </td>
+                          <td className="py-2 pr-2">{(row.data?.overdue_rate_percent ?? 0).toFixed(2)}%</td>
+                          <td className="py-2 pr-2">
+                            {(row.data?.overdue_hours_total ?? 0).toFixed(2)} (avg {(row.data?.overdue_hours_avg ?? 0).toFixed(2)})
+                          </td>
+                          <td className="py-2">
+                            {(row.data?.tardiness_p50 ?? 0).toFixed(2)} / {(row.data?.tardiness_p95 ?? 0).toFixed(2)} / {(row.data?.tardiness_p99 ?? 0).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
+
           )}
 
           {activeTab === 'assigned' && (
@@ -333,6 +407,9 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                           Исследование
                         </th>
                         <th className="px-3 py-3 text-left font-medium text-slate-600">
+                          Модальность
+                        </th>
+                        <th className="px-3 py-3 text-left font-medium text-slate-600">
                           Приоритет
                         </th>
                         <th className="px-3 py-3 text-left font-medium text-slate-600">
@@ -349,7 +426,7 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                     <tbody>
                       {assignedPageItems.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
+                          <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
                             Нет назначенных исследований
                           </td>
                         </tr>
@@ -361,6 +438,9 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                           >
                             <td className="px-3 py-3 font-medium text-slate-800">
                               {assignment.study_number}
+                            </td>
+                            <td className="px-3 py-3 text-slate-700">
+                              {assignment.study_modality}
                             </td>
                             <td className="px-3 py-3">
                               <span
@@ -420,6 +500,9 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                         Исследование
                       </th>
                       <th className="px-3 py-3 text-left font-medium text-slate-600">
+                        Модальность
+                      </th>
+                      <th className="px-3 py-3 text-left font-medium text-slate-600">
                         Приоритет
                       </th>
                       <th className="px-3 py-3 text-left font-medium text-slate-600">
@@ -430,7 +513,7 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                   <tbody>
                     {unassignedAssignments.length === 0 ? (
                       <tr>
-                        <td colSpan={3} className="px-4 py-8 text-center text-slate-500">
+                        <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
                           Все исследования распределены
                         </td>
                       </tr>
@@ -442,6 +525,9 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                         >
                           <td className="px-3 py-3 font-medium text-slate-800">
                             {assignment.study_number}
+                          </td>
+                          <td className="px-3 py-3 text-slate-700">
+                            {assignment.study_modality}
                           </td>
                           <td className="px-3 py-3">
                             <span
