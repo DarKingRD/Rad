@@ -8,6 +8,7 @@ import type {
   StudyType,
   DashboardStats,
   ChartPoint,
+  ShiftForecastResponse,
 } from '../types';
 
 type ApiListResponse<T> = T[] | { results: T[] };
@@ -29,6 +30,11 @@ type DoctorPayload = {
   max_up_per_day: number;
   is_active: boolean;
   modality: string[];
+};
+
+type ShiftForecastParams = {
+  date_from?: string;
+  date_to?: string;
 };
 
 type StudyAssignResponse = Study;
@@ -213,6 +219,8 @@ export const schedulesApi = {
     getList<Schedule>('/schedules/', params),
   getByDate: (date: string) => getList<Schedule>('/schedules/by_date/', { date }),
   getById: (id: number) => getOne<Schedule>(`/schedules/${id}/`),
+  getForecast: (params?: ShiftForecastParams) =>
+    getOne<ShiftForecastResponse>('/schedules/forecast/', params),
   create: (data: SchedulePayload) => postOne<Schedule, SchedulePayload>('/schedules/', data),
   update: (id: number, data: SchedulePayload) =>
     putOne<Schedule, SchedulePayload>(`/schedules/${id}/`, data),

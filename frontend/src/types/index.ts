@@ -72,11 +72,60 @@ export interface ChartData {
   actual: string | number;
 }
 
+export type ChartPoint = ChartData;
+
 export interface KPICardProps {
   title: string;
   value: string | number;
   subtext: string;
   trend?: number;
+}
+
+// === ПРОГНОЗ СМЕН ===
+
+export interface ForecastModalityItem {
+  modality: string;
+  expected_studies: number;
+  expected_up: number;
+  recommended_doctors: number;
+}
+
+export interface ForecastChartPoint {
+  date: string;
+  label: string;
+  expected_studies_total: number;
+  min_doctors: number;
+}
+
+export interface ForecastDay {
+  date: string;
+  label: string;
+  weekday: string;
+  scheduled_doctors: number;
+  expected_studies_total: number;
+  expected_up_total: number;
+  min_doctors: number;
+  gap_to_schedule: number;
+  required_modalities: ForecastModalityItem[];
+}
+
+export interface ShiftForecastSummary {
+  total_expected_studies: number;
+  total_expected_up: number;
+  max_min_doctors_per_shift: number;
+  modalities: string[];
+}
+
+export interface ShiftForecastResponse {
+  date_from: string;
+  date_to: string;
+  history_start_date: string | null;
+  history_end_date: string | null;
+  generated_at: string;
+  summary: ShiftForecastSummary;
+  chart: ForecastChartPoint[];
+  days: ForecastDay[];
+  message: string;
 }
 
 // === РАСПРЕДЕЛЕНИЕ ===
@@ -132,7 +181,7 @@ export interface DistResult {
   total_tardiness: number;
   total_weighted_tardiness: number;
   avg_tardiness: number;
- assignment_rate_percent?: number;
+  assignment_rate_percent?: number;
   tardiness_p50?: number;
   tardiness_p95?: number;
   tardiness_p99?: number;

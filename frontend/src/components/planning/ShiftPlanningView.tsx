@@ -1,7 +1,19 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { schedulesApi, doctorsApi, studiesApi } from '../../services/api';
-import { ChevronLeft, ChevronRight, X, CheckCircle2, AlertTriangle, AlertCircle, Copy, Printer, RefreshCw, Search, Download } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  X,
+  CheckCircle2,
+  AlertTriangle,
+  AlertCircle,
+  Copy,
+  Printer,
+  RefreshCw,
+  Search,
+} from 'lucide-react';
 import { Schedule, Doctor, Study } from '../../types';
+import { ShiftForecastPanel } from './ShiftForecastPanel';
 
 interface ScheduleFormData {
   doctor_id: number;
@@ -14,14 +26,29 @@ interface ScheduleFormData {
   planned_up: number;
 }
 
+const formatLocalDate = (d: Date) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+
+
+
+
+
+
 export const ShiftPlanningView: React.FC = () => {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [studies, setStudies] = useState<Study[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [selectedDoctor, setSelectedDoctor] = useState<number | 'all'>('all');
+  const [forecastRefreshKey, setForecastRefreshKey] = useState(0);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [formData, setFormData] = useState<ScheduleFormData>({
@@ -35,86 +62,78 @@ export const ShiftPlanningView: React.FC = () => {
     planned_up: 0,
   });
 
-  const formatLocalDate = (d: Date) => {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
   const dates = useMemo(() => {
-  const result: string[] = [];
-  const startOfWeek = new Date(currentDate);
-  const day = startOfWeek.getDay();
-  const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
+    const result: string[] = [];
+    const startOfWeek = new Date(currentDate);
+    const day = startOfWeek.getDay();
+    const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
 
-  startOfWeek.setDate(diff);
-  startOfWeek.setHours(0, 0, 0, 0);
+    startOfWeek.setDate(diff);
+    startOfWeek.setHours(0, 0, 0, 0);
 
-  for (let i = 0; i < 7; i++) {
-    const date = new Date(startOfWeek);
-    date.setDate(date.getDate() + i);
-    result.push(formatLocalDate(date));
-  }
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(startOfWeek);
+      date.setDate(date.getDate() + i);
+      result.push(formatLocalDate(date));
+    }
 
     return result;
-}, [currentDate]);
+  }, [currentDate]);
+
+
+  const getDoctorIdFromSchedule = (schedule: Schedule, fallback: number): number => {
+    if (typeof schedule.doctor === 'object' && schedule.doctor?.id) {
+      return schedule.doctor.id;
+    }
+    return schedule.doctor_id || (typeof schedule.doctor === 'number' ? schedule.doctor : fallback);
+  };
+
+  const loadDoctors = useCallback(async () => {
+    try {
+      const doctorsData = await doctorsApi.getAll();
+      setDoctors(doctorsData);
+    } catch (err) {
+      console.error('Error loading doctors:', err);
+    }
+  }, []);
+
+  const loadSchedulesData = useCallback(async () => {
+    const [schedulesData, studiesData] = await Promise.all([
+      schedulesApi.getAll({
+        date_from: dates[0],
+        date_to: dates[6],
+        ...(selectedDoctor !== 'all' && { doctor_id: Number(selectedDoctor) }),
+      }),
+      studiesApi.getAll({
+        date_from: dates[0],
+        date_to: dates[6],
+      }),
+    ]);
+    setSchedules(schedulesData);
+    setStudies(studiesData);
+  }, [dates, selectedDoctor]);
+
 
   useEffect(() => {
-    const loadDoctors = async () => {
-      try {
-        const doctorsData = await doctorsApi.getAll();
-        setDoctors(doctorsData);
-      } catch (err) {
-        console.error('Error loading doctors:', err);
-      }
-    };
-    
     loadDoctors();
-  }, []);
+  }, [loadDoctors]);
 
   useEffect(() => {
     const loadData = async () => {
       try {
         setLoading(true);
-        const [schedulesData, studiesData] = await Promise.all([
-          schedulesApi.getAll({
-            date_from: dates[0],
-            date_to: dates[6],
-            ...(selectedDoctor !== 'all' && { doctor_id: Number(selectedDoctor) })
-          }),
-          studiesApi.getAll({
-            date_from: dates[0],
-            date_to: dates[6],
-          })
-        ]);
-        setSchedules(schedulesData);
-        setStudies(studiesData);
+        await loadSchedulesData();
       } catch (err) {
         console.error('Error loading data:', err);
       } finally {
         setLoading(false);
       }
     };
-    
-    loadData();
-  }, [dates, selectedDoctor]);
 
-  const loadSchedulesData = async () => {
-    const [schedulesData, studiesData] = await Promise.all([
-      schedulesApi.getAll({
-        date_from: dates[0],
-        date_to: dates[6],
-        ...(selectedDoctor !== 'all' && { doctor_id: Number(selectedDoctor) })
-      }),
-      studiesApi.getAll({
-        date_from: dates[0],
-        date_to: dates[6],
-      })
-    ]);
-      setSchedules(schedulesData);
-      setStudies(studiesData);
-  };
+    loadData();
+  }, [loadSchedulesData]);
+
+
 
   const handlePrevWeek = () => {
     setCurrentDate(prev => {
@@ -134,13 +153,6 @@ export const ShiftPlanningView: React.FC = () => {
 
   const handleToday = () => {
     setCurrentDate(new Date());
-  };
-
-  const getDoctorIdFromSchedule = (schedule: Schedule, fallback: number): number => {
-    if (typeof schedule.doctor === 'object' && schedule.doctor?.id) {
-      return schedule.doctor.id;
-    }
-    return schedule.doctor_id || (typeof schedule.doctor === 'number' ? schedule.doctor : fallback);
   };
 
   const handleOpenModal = (doctorId: number, date: string, schedule?: Schedule) => {
@@ -190,14 +202,15 @@ export const ShiftPlanningView: React.FC = () => {
         is_day_off: formData.is_day_off,
         planned_up: formData.planned_up,
       };
-      
+
       if (editingSchedule) {
         await schedulesApi.update(editingSchedule.id, submitData);
       } else {
         await schedulesApi.create(submitData);
       }
-      
+
       await loadSchedulesData();
+      setForecastRefreshKey((prev) => prev + 1);
       handleCloseModal();
     } catch (error: any) {
       console.error('Error saving schedule:', error);
@@ -208,10 +221,11 @@ export const ShiftPlanningView: React.FC = () => {
   const handleDelete = async () => {
     if (!editingSchedule) return;
     if (!confirm('Вы уверены, что хотите удалить эту смену?')) return;
-    
+
     try {
       await schedulesApi.delete(editingSchedule.id);
       await loadSchedulesData();
+      setForecastRefreshKey((prev) => prev + 1);
       handleCloseModal();
     } catch (error: any) {
       console.error('Error deleting schedule:', error);
@@ -221,8 +235,8 @@ export const ShiftPlanningView: React.FC = () => {
 
   const getScheduleForDoctor = useCallback((doctorId: number, date: string) => {
     return schedules.find(s => {
-      const scheduleDoctorId = typeof s.doctor === 'object' && s.doctor?.id 
-        ? s.doctor.id 
+      const scheduleDoctorId = typeof s.doctor === 'object' && s.doctor?.id
+        ? s.doctor.id
         : (s.doctor_id || (typeof s.doctor === 'number' ? s.doctor : null));
       if (scheduleDoctorId !== doctorId) return false;
       const scheduleDate = s.work_date?.split('T')[0];
@@ -247,19 +261,14 @@ export const ShiftPlanningView: React.FC = () => {
 
   const getStudiesCountForSchedule = useCallback((schedule: Schedule | undefined, doctorId: number, date: string): number => {
     if (!schedule) return 0;
-    
+
     const scheduleDoctorId = getDoctorIdFromSchedule(schedule, doctorId);
     const scheduleDate = schedule.work_date?.split('T')[0] || date;
-    
+
     return studies.filter(study => {
-      // Получаем ID врача из исследования
-      const studyDoctorId = study.diagnostician_id || 
+      const studyDoctorId = study.diagnostician_id ||
         (typeof study.diagnostician === 'object' && study.diagnostician?.id ? study.diagnostician.id : null);
-      
-      // Получаем дату создания исследования (только дата, без времени)
       const studyDate = study.created_at ? study.created_at.split('T')[0] : null;
-      
-      // Сравниваем врача и дату
       return studyDoctorId === scheduleDoctorId && studyDate === scheduleDate;
     }).length;
   }, [studies]);
@@ -267,9 +276,9 @@ export const ShiftPlanningView: React.FC = () => {
   const getStatusColor = (schedule: Schedule | undefined, doctor: Doctor): string => {
     if (!schedule) return 'bg-slate-100 text-slate-400';
     if (schedule.is_day_off !== 0) return 'bg-slate-100 text-slate-400';
-    
+
     const percentage = getLoadPercentage(schedule, doctor);
-    
+
     if (percentage > 95) return 'bg-red-100 text-red-700 border border-red-300';
     if (percentage >= 80) return 'bg-amber-100 text-amber-700 border border-amber-300';
     return 'bg-green-100 text-green-700 border border-green-300';
@@ -301,7 +310,8 @@ export const ShiftPlanningView: React.FC = () => {
       warningShifts,
       overloadShifts,
     };
-  }, [doctors, schedules, dates]);
+  }, [doctors, dates, getScheduleForDoctor]);
+
 
   if (loading && schedules.length === 0) {
     return (
@@ -313,7 +323,6 @@ export const ShiftPlanningView: React.FC = () => {
 
   return (
     <div className="space-y-4 md:space-y-6">
-      {/* Заголовок + контролы */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <h2 className="text-xl md:text-2xl font-bold text-slate-900">Планирование смен</h2>
         <div className="flex items-center gap-2 flex-wrap">
@@ -342,7 +351,6 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      {/* Карточки статистики: 2 колонки на мобиле, 4 на десктопе */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
           <div className="text-xs md:text-sm text-slate-600 mb-1">Всего врачей</div>
@@ -373,7 +381,8 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      {/* Кнопки действий — скрыть на мобиле лишние */}
+      <ShiftForecastPanel refreshKey={forecastRefreshKey} />
+
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
@@ -400,7 +409,6 @@ export const ShiftPlanningView: React.FC = () => {
         <span className="font-medium">Неделя:</span> {new Date(dates[0]).toLocaleDateString('ru-RU')} — {new Date(dates[6]).toLocaleDateString('ru-RU')}
       </div>
 
-      {/* Легенда */}
       <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
         <div className="text-xs md:text-sm font-semibold text-slate-700 mb-2">Индикаторы нагрузки</div>
         <div className="flex items-center flex-wrap gap-3 md:gap-6 text-xs">
@@ -419,7 +427,6 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      {/* Таблица недели — горизонтальный скролл на мобиле */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm" style={{ minWidth: '640px' }}>
@@ -450,8 +457,8 @@ export const ShiftPlanningView: React.FC = () => {
                     const schedule = getScheduleForDoctor(doc.id, date);
                     const studiesCount = getStudiesCountForSchedule(schedule, doc.id, date);
                     return (
-                      <td 
-                        key={date} 
+                      <td
+                        key={date}
                         className="px-6 py-4 text-center cursor-pointer hover:bg-blue-50 transition-colors"
                         onClick={() => handleOpenModal(doc.id, date, schedule)}
                       >
@@ -491,13 +498,13 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      {/* Информационная панель */}
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-        <div className="text-sm font-semibold text-red-900 mb-2">Как работает планирование</div>
-        <ul className="text-xs text-red-800 space-y-1">
-          <li>• Кликните на ячейку со сменой, чтобы отредактировать время и план по УП.</li>
-          <li>• Кнопка «Сгенерировать план» автоматически распределит смены с учётом максимальной нагрузки врачей и выходных дней.</li>
-          <li>• Красным выделяются перегрузки (&gt;95% от максимума УП), жёлтым — близкие к лимиту (80-95%).</li>
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="text-sm font-semibold text-blue-900 mb-2">Как работает прогноз</div>
+        <ul className="text-xs text-blue-800 space-y-1">
+          <li>• Прогноз строится по всем доступным исследованиям в БД с усреднением по дням недели.</li>
+          <li>• Пользователь сам задаёт диапазон дат, на который нужно построить прогноз.</li>
+          <li>• Рекомендуемое количество врачей считается по ожидаемому объёму УП на каждый день.</li>
+          <li>• В строке «Модальности» показано, какие направления должны быть покрыты на смене.</li>
         </ul>
       </div>
 
@@ -515,7 +522,7 @@ export const ShiftPlanningView: React.FC = () => {
                 <X size={24} />
               </button>
             </div>
-            
+
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
