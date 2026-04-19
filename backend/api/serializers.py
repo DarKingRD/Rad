@@ -222,6 +222,7 @@ class StudyWithDetailsSerializer(serializers.ModelSerializer):
         model = Study
         fields = "__all__"
 
+
 class StudyAssignSerializer(serializers.Serializer):
     doctor_id = serializers.IntegerField(required=True, min_value=1)
 
@@ -236,6 +237,7 @@ class StudyStatusUpdateSerializer(serializers.Serializer):
         choices=["pending", "confirmed", "signed"],
         required=True,
     )
+
 
 class DashboardStatsSerializer(serializers.Serializer):
     total_studies = serializers.IntegerField()
@@ -298,3 +300,62 @@ class DistributionConfirmSerializer(serializers.Serializer):
         if not value.strip():
             raise serializers.ValidationError("distribution_id обязателен")
         return value.strip()
+
+
+class ShiftForecastQuerySerializer(serializers.Serializer):
+    date_from = serializers.DateField(required=False, allow_null=True)
+    date_to = serializers.DateField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        date_from = attrs.get("date_from")
+        date_to = attrs.get("date_to")
+        if date_from and date_to and date_from > date_to:
+            raise serializers.ValidationError(
+                {"date_to": "date_to не может быть раньше date_from"}
+            )
+        return attrs
+
+
+class ForecastModalitySerializer(serializers.Serializer):
+    modality = serializers.CharField()
+    expected_studies = serializers.FloatField()
+    expected_up = serializers.FloatField()
+    recommended_doctors = serializers.IntegerField()
+
+
+class ForecastChartPointSerializer(serializers.Serializer):
+    date = serializers.CharField()
+    label = serializers.CharField()
+    expected_studies_total = serializers.FloatField()
+    min_doctors = serializers.IntegerField()
+
+
+class ForecastDaySerializer(serializers.Serializer):
+    date = serializers.CharField()
+    label = serializers.CharField()
+    weekday = serializers.CharField()
+    scheduled_doctors = serializers.IntegerField()
+    expected_studies_total = serializers.FloatField()
+    expected_up_total = serializers.FloatField()
+    min_doctors = serializers.IntegerField()
+    gap_to_schedule = serializers.IntegerField()
+    required_modalities = ForecastModalitySerializer(many=True)
+
+
+class ShiftForecastSummarySerializer(serializers.Serializer):
+    total_expected_studies = serializers.FloatField()
+    total_expected_up = serializers.FloatField()
+    max_min_doctors_per_shift = serializers.IntegerField()
+    modalities = serializers.ListField(child=serializers.CharField())
+
+
+class ShiftForecastResponseSerializer(serializers.Serializer):
+    date_from = serializers.CharField()
+    date_to = serializers.CharField()
+    history_start_date = serializers.CharField(allow_null=True)
+    history_end_date = serializers.CharField(allow_null=True)
+    generated_at = serializers.CharField()
+    summary = ShiftForecastSummarySerializer()
+    chart = ForecastChartPointSerializer(many=True)
+    days = ForecastDaySerializer(many=True)
+    message = serializers.CharField()
