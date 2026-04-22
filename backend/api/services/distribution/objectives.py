@@ -239,51 +239,6 @@ class MaxAssignmentsObjective(ObjectiveStrategy):
         return float(self.params.get("unassigned_penalty", 1e6))
 
 
-class CitoFirstThenWeightedRestLexicographicObjective(ObjectiveStrategy):
-    """
-    Смешанная стратегия:
-    - для CITO используется обычная просрочка;
-    - для ASAP/NORMAL — взвешенная просрочка.
-
-    Всё считается по всей очереди на горизонте планирования:
-    назначенные — по finish_dt, неназначенные — по planning_horizon_end.
-    """
-
-    code = "cito_first_then_weighted_rest_lexicographic"
-    description = (
-        "CITO приоритизируются сильнее; "
-        "для всей очереди: MIN Σ T_i для CITO + Σ w_i*T_i для ASAP/NORMAL "
-        "на текущем горизонте планирования"
-    )
-
-    def option_metrics(self, study, doctor, start_dt, finish_dt):
-        tardiness_hours = max(0.0, (finish_dt - study.deadline).total_seconds() / 3600.0)
-        completion_hours = max(0.0, (finish_dt - study.created_at).total_seconds() / 3600.0)
-        weight = self.priority_weights.get(study.priority, 1.0)
-        weighted_tardiness = tardiness_hours * weight
-
-        objective_value = tardiness_hours if study.priority == "cito" else weighted_tardiness
-
-        return {
-            "tardiness_hours": tardiness_hours,
-            "weighted_tardiness": weighted_tardiness,
-            "completion_hours_from_created": completion_hours,
-            "objective_value": objective_value,
-        }
-
-    def unassigned_objective_value(
-        self,
-        study,
-        *,
-        tardiness_hours,
-        weighted_tardiness,
-        completion_hours,
-        base_hours,
-        weight,
-    ) -> float:
-        return tardiness_hours if study.priority == "cito" else weighted_tardiness
-
-
 class PriorityTierTardinessMultiPassObjective(ObjectiveStrategy):
     """
     Multi-pass: сначала CITO, затем ASAP, затем NORMAL.
@@ -329,6 +284,5 @@ OBJECTIVE_REGISTRY: Dict[str, Type[ObjectiveStrategy]] = {
     WeightedTardinessLexicographicObjective.code: WeightedTardinessLexicographicObjective,
     TardinessLexicographicObjective.code: TardinessLexicographicObjective,
     MaxAssignmentsObjective.code: MaxAssignmentsObjective,
-    CitoFirstThenWeightedRestLexicographicObjective.code: CitoFirstThenWeightedRestLexicographicObjective,
     PriorityTierTardinessMultiPassObjective.code: PriorityTierTardinessMultiPassObjective,
 }

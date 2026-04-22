@@ -82,15 +82,15 @@ def load_studies(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
 ) -> List[StudyData]:
-    """Загрузить backlog исследований и преобразовать его в StudyData."""
+    date_from = make_aware(date_from)
+    date_to = make_aware(date_to)
+
     qs = Study.objects.filter(diagnostician__isnull=True).select_related("study_type")
 
     if date_from is not None:
         qs = qs.filter(created_at__gte=date_from)
     if date_to is not None:
         qs = qs.filter(created_at__lt=date_to)
-
-    qs = qs.order_by("created_at", "research_number")
 
     result: List[StudyData] = []
     for study in qs.iterator():

@@ -12,21 +12,10 @@ from django.utils import timezone
 
 from ..models import Doctor, Schedule, Study
 from .doctor_queries import get_daily_limit
+from .modality_catalog import MODALITY_ORDER, OTHER_MODALITY, normalize_modality_name
 
 DEFAULT_FORECAST_DAYS = 7
 MAX_FORECAST_DAYS = 366
-
-MODALITY_ORDER = {
-    "FLG": 1,
-    "XRAY": 2,
-    "CT": 3,
-    "MRI": 4,
-    "MMG": 5,
-    "US": 6,
-    "ECG": 7,
-    "HOLTER": 8,
-    "OTHER": 99,
-}
 
 
 def _as_float(value) -> float:
@@ -63,9 +52,9 @@ def _sort_modalities(items: list[dict]) -> list[dict]:
     return sorted(
         items,
         key=lambda item: (
-            MODALITY_ORDER.get(item.get("modality") or "OTHER", 500),
+            MODALITY_ORDER.get(normalize_modality_name(item.get("modality")), 999),
             -(item.get("expected_up") or 0),
-            item.get("modality") or "",
+            normalize_modality_name(item.get("modality")),
         ),
     )
 
@@ -118,7 +107,10 @@ def _get_capacity_context():
     for doctor in doctors:
         doctor_capacity = float(get_daily_limit(doctor))
         for modality in doctor.modality or []:
-            modality_capacities[(modality or "OTHER").upper()].append(doctor_capacity)
+            normalized = normalize_modality_name(modality)
+            if normalized == OTHER_MODALITY:
+                continue
+            modality_capacities[normalized].append(doctor_capacity)
 
     capacity_by_modality = {
         modality: (mean(values) if values else avg_daily_capacity)
@@ -156,8 +148,8 @@ def _build_profiles(history_start: date, history_end: date):
             studies_count=Count("research_number"),
             total_up=Coalesce(
                 Sum("study_type__up_value"),
-                Value(Decimal("0.00")),
-                output_field=DecimalField(max_digits=12, decimal_places=2),
+                Value(Decimal("0.000")),
+                output_field=DecimalField(max_digits=12, decimal_places=3),
             ),
         )
     )
@@ -166,10 +158,15 @@ def _build_profiles(history_start: date, history_end: date):
         day = row["created_at__date"]
         if day is None:
             continue
-        modality = (row["study_type__modality"] or "OTHER").upper()
+
+        modality = normalize_modality_name(row["study_type__modality"])
+        if modality == OTHER_MODALITY:
+            continue
+
         weekday_bucket = weekday_totals[day.weekday()][modality]
         weekday_bucket["studies_count"] += float(row["studies_count"] or 0)
         weekday_bucket["total_up"] += _as_float(row["total_up"])
+
         overall_totals[modality]["studies_count"] += float(row["studies_count"] or 0)
         overall_totals[modality]["total_up"] += _as_float(row["total_up"])
 
@@ -227,7 +224,14 @@ def _get_scheduled_doctors_map(date_from: date, date_to: date) -> dict[date, int
     }
 
 
-def _build_day_forecast(*, day: date, weekday_profiles: dict[int, list[dict]], overall_profile: list[dict], capacity_context: dict, scheduled_doctors_map: dict[date, int]):
+def _build_day_forecast(
+    *,
+    day: date,
+    weekday_profiles: dict[int, list[dict]],
+    overall_profile: list[dict],
+    capacity_context: dict,
+    scheduled_doctors_map: dict[date, int],
+):
     avg_daily_capacity = float(capacity_context["avg_daily_capacity"] or 8.0)
     capacity_by_modality = capacity_context["capacity_by_modality"]
 
@@ -238,7 +242,10 @@ def _build_day_forecast(*, day: date, weekday_profiles: dict[int, list[dict]], o
     expected_up_total = 0.0
 
     for item in profile_items:
-        modality = (item.get("modality") or "OTHER").upper()
+        modality = normalize_modality_name(item.get("modality"))
+        if modality == OTHER_MODALITY:
+            continue
+
         expected_studies = float(item.get("expected_studies") or 0.0)
         expected_up = float(item.get("expected_up") or 0.0)
         expected_studies_total += expected_studies

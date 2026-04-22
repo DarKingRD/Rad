@@ -20,7 +20,8 @@ type SchedulePayload = {
   time_end: string | null;
   break_start?: string | null;
   break_end?: string | null;
-  is_day_off: number;
+  is_day_off?: number;
+  day_status?: number;
   planned_up: number;
 };
 
@@ -76,7 +77,7 @@ type DistributionConfirmResponse = {
   message: string;
 };
 
-const API_BASE_URL = 'http://localhost:8000/api'; // Здесь потом нужно этот хардкод убрать
+const API_BASE_URL = 'http://localhost:8000/api';
 
 export class ApiClientError extends Error {
   status?: number;
@@ -188,11 +189,6 @@ async function postOne<TResponse, TPayload>(url: string, payload: TPayload): Pro
 
 async function putOne<TResponse, TPayload>(url: string, payload: TPayload): Promise<TResponse> {
   const response = await api.put<TResponse>(url, payload);
-  return response.data;
-}
-
-async function patchOne<TResponse, TPayload>(url: string, payload: TPayload): Promise<TResponse> {
-  const response = await api.patch<TResponse>(url, payload);
   return response.data;
 }
 

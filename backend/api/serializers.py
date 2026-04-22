@@ -1,14 +1,24 @@
-from datetime import datetime, date as d
-
 from rest_framework import serializers
 
-from .models import Doctor, StudyType, Schedule, Study
+from .models import Doctor, Schedule, Study, StudyType
 from .services.doctor_queries import (
     MONTHLY_NORM,
     format_time_hhmm,
     get_break_duration_minutes,
     get_daily_limit,
     get_doctor_specialty,
+)
+from .services.modality_catalog import (
+    DISPLAY_MODALITIES,
+    OTHER_MODALITY,
+    normalize_modality_name,
+    sort_modalities,
+)
+from .services.schedule_status import (
+    DAY_STATUS_LABELS,
+    get_day_status_label,
+    is_day_off_by_status,
+    normalize_day_status,
 )
 
 
@@ -41,6 +51,38 @@ class DoctorSerializer(serializers.ModelSerializer):
                 "ФИО должно содержать минимум 2 символа"
             )
         return value.strip() if value else None
+
+    def validate_modality(self, value):
+        if value in (None, ""):
+            return []
+
+        if not isinstance(value, (list, tuple)):
+            raise serializers.ValidationError(
+                "Модальности должны передаваться массивом строк"
+            )
+
+        normalized = []
+        seen = set()
+        invalid = []
+
+        for item in value:
+            modality = normalize_modality_name(item)
+            if modality == OTHER_MODALITY:
+                invalid.append(str(item))
+                continue
+            if modality not in seen:
+                seen.add(modality)
+                normalized.append(modality)
+
+        if invalid:
+            allowed = ", ".join(DISPLAY_MODALITIES)
+            invalid_values = ", ".join(invalid)
+            raise serializers.ValidationError(
+                f"Неизвестные модальности: {invalid_values}. "
+                f"Допустимые значения: {allowed}"
+            )
+
+        return sort_modalities(normalized)
 
     def get_specialty(self, obj):
         return get_doctor_specialty(obj)
@@ -114,7 +156,7 @@ class DoctorWithLoadSerializer(DoctorSerializer):
         data["is_active"] = (
             instance.is_active if instance.is_active is not None else True
         )
-        data["modality"] = instance.modality or []
+        data["modality"] = sort_modalities(instance.modality or [])
         return data
 
 
@@ -125,14 +167,22 @@ class StudyTypeSerializer(serializers.ModelSerializer):
 
 
 class ScheduleSerializer(serializers.ModelSerializer):
+    doctor_id = serializers.PrimaryKeyRelatedField(
+        source="doctor",
+        queryset=Doctor.objects.all(),
+        write_only=True,
+        required=False,
+    )
     doctor_name = serializers.CharField(source="doctor.fio_alias", read_only=True)
     break_duration_minutes = serializers.SerializerMethodField(read_only=True)
+    day_status_label = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Schedule
         fields = [
             "id",
             "doctor",
+            "doctor_id",
             "doctor_name",
             "work_date",
             "time_start",
@@ -141,12 +191,17 @@ class ScheduleSerializer(serializers.ModelSerializer):
             "break_end",
             "break_duration_minutes",
             "is_day_off",
+            "day_status",
+            "day_status_label",
             "planned_up",
         ]
-        read_only_fields = ["id", "doctor_name", "break_duration_minutes"]
+        read_only_fields = ["id", "doctor_name", "break_duration_minutes", "day_status_label"]
 
     def get_break_duration_minutes(self, obj) -> int:
         return get_break_duration_minutes(obj)
+
+    def get_day_status_label(self, obj) -> str:
+        return get_day_status_label(getattr(obj, "day_status", 0))
 
     def validate_planned_up(self, value):
         if value is not None and value < 0:
@@ -155,7 +210,25 @@ class ScheduleSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_day_status(self, value):
+        status = normalize_day_status(value)
+        if status not in DAY_STATUS_LABELS:
+            raise serializers.ValidationError("Недопустимое значение day_status")
+        return status
+
     def validate(self, attrs):
+        day_status = attrs.get("day_status")
+        if day_status is None:
+            if "is_day_off" in attrs:
+                day_status = 1 if attrs.get("is_day_off") else 0
+            elif self.instance is not None:
+                day_status = getattr(self.instance, "day_status", 0)
+            else:
+                day_status = 0
+        day_status = normalize_day_status(day_status)
+        attrs["day_status"] = day_status
+        attrs["is_day_off"] = 1 if is_day_off_by_status(day_status) else 0
+
         time_start = attrs.get("time_start")
         time_end = attrs.get("time_end")
         break_start = attrs.get("break_start")
@@ -177,12 +250,16 @@ class ScheduleSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "Перерыв не может заканчиваться позже окончания смены"
             )
+
+        if attrs["is_day_off"]:
+            attrs["planned_up"] = 0
         return attrs
 
 
 class ScheduleWithDoctorSerializer(serializers.ModelSerializer):
     doctor = DoctorSerializer(read_only=True)
     break_duration_minutes = serializers.SerializerMethodField(read_only=True)
+    day_status_label = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Schedule
@@ -196,11 +273,16 @@ class ScheduleWithDoctorSerializer(serializers.ModelSerializer):
             "break_end",
             "break_duration_minutes",
             "is_day_off",
+            "day_status",
+            "day_status_label",
             "planned_up",
         ]
 
     def get_break_duration_minutes(self, obj) -> int:
         return get_break_duration_minutes(obj)
+
+    def get_day_status_label(self, obj) -> str:
+        return get_day_status_label(getattr(obj, "day_status", 0))
 
 
 class StudySerializer(serializers.ModelSerializer):

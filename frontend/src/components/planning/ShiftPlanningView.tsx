@@ -22,9 +22,19 @@ interface ScheduleFormData {
   time_end: string;
   break_start: string;
   break_end: string;
-  is_day_off: number;
+  day_status: number;
   planned_up: number;
 }
+
+const DAY_STATUS_OPTIONS = [
+  { value: 0, label: 'Рабочий день' },
+  { value: 1, label: 'Выходной' },
+  { value: 2, label: 'Отпуск / плановое отсутствие' },
+  { value: 3, label: 'Больничный / иное отсутствие' },
+  { value: 4, label: 'Неизвестный статус' },
+  { value: 5, label: 'До начала работы' },
+  { value: 6, label: 'После окончания работы' },
+];
 
 const formatLocalDate = (d: Date) => {
   const year = d.getFullYear();
@@ -33,11 +43,10 @@ const formatLocalDate = (d: Date) => {
   return `${year}-${month}-${day}`;
 };
 
-
-
-
-
-
+const getDayStatusLabel = (schedule?: Schedule | null) => {
+  if (!schedule) return '—';
+  return schedule.day_status_label || DAY_STATUS_OPTIONS.find((item) => item.value === schedule.day_status)?.label || '—';
+};
 
 export const ShiftPlanningView: React.FC = () => {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -58,7 +67,7 @@ export const ShiftPlanningView: React.FC = () => {
     time_end: '18:00',
     break_start: '12:00',
     break_end: '13:00',
-    is_day_off: 0,
+    day_status: 0,
     planned_up: 0,
   });
 
@@ -80,13 +89,14 @@ export const ShiftPlanningView: React.FC = () => {
     return result;
   }, [currentDate]);
 
-
   const getDoctorIdFromSchedule = (schedule: Schedule, fallback: number): number => {
     if (typeof schedule.doctor === 'object' && schedule.doctor?.id) {
       return schedule.doctor.id;
     }
     return schedule.doctor_id || (typeof schedule.doctor === 'number' ? schedule.doctor : fallback);
   };
+
+  const isWorkingSchedule = (schedule?: Schedule | null) => !!schedule && schedule.day_status === 0;
 
   const loadDoctors = useCallback(async () => {
     try {
@@ -113,7 +123,6 @@ export const ShiftPlanningView: React.FC = () => {
     setStudies(studiesData);
   }, [dates, selectedDoctor]);
 
-
   useEffect(() => {
     loadDoctors();
   }, [loadDoctors]);
@@ -133,10 +142,8 @@ export const ShiftPlanningView: React.FC = () => {
     loadData();
   }, [loadSchedulesData]);
 
-
-
   const handlePrevWeek = () => {
-    setCurrentDate(prev => {
+    setCurrentDate((prev) => {
       const newDate = new Date(prev);
       newDate.setDate(newDate.getDate() - 7);
       return newDate;
@@ -144,7 +151,7 @@ export const ShiftPlanningView: React.FC = () => {
   };
 
   const handleNextWeek = () => {
-    setCurrentDate(prev => {
+    setCurrentDate((prev) => {
       const newDate = new Date(prev);
       newDate.setDate(newDate.getDate() + 7);
       return newDate;
@@ -165,7 +172,7 @@ export const ShiftPlanningView: React.FC = () => {
         time_end: schedule.time_end?.substring(0, 5) || '18:00',
         break_start: schedule.break_start?.substring(0, 5) || '12:00',
         break_end: schedule.break_end?.substring(0, 5) || '13:00',
-        is_day_off: schedule.is_day_off || 0,
+        day_status: typeof schedule.day_status === 'number' ? schedule.day_status : (schedule.is_day_off ? 1 : 0),
         planned_up: schedule.planned_up || 0,
       });
     } else {
@@ -177,7 +184,7 @@ export const ShiftPlanningView: React.FC = () => {
         time_end: '18:00',
         break_start: '12:00',
         break_end: '13:00',
-        is_day_off: 0,
+        day_status: 0,
         planned_up: 0,
       });
     }
@@ -192,15 +199,16 @@ export const ShiftPlanningView: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const isWorking = formData.day_status === 0;
       const submitData = {
         doctor_id: formData.doctor_id,
         work_date: formData.work_date,
-        time_start: formData.time_start,
-        time_end: formData.time_end,
-        break_start: formData.break_start || null,
-        break_end: formData.break_end || null,
-        is_day_off: formData.is_day_off,
-        planned_up: formData.planned_up,
+        time_start: isWorking ? formData.time_start : null,
+        time_end: isWorking ? formData.time_end : null,
+        break_start: isWorking ? (formData.break_start || null) : null,
+        break_end: isWorking ? (formData.break_end || null) : null,
+        day_status: formData.day_status,
+        planned_up: isWorking ? formData.planned_up : 0,
       };
 
       if (editingSchedule) {
@@ -234,7 +242,7 @@ export const ShiftPlanningView: React.FC = () => {
   };
 
   const getScheduleForDoctor = useCallback((doctorId: number, date: string) => {
-    return schedules.find(s => {
+    return schedules.find((s) => {
       const scheduleDoctorId = typeof s.doctor === 'object' && s.doctor?.id
         ? s.doctor.id
         : (s.doctor_id || (typeof s.doctor === 'number' ? s.doctor : null));
@@ -245,14 +253,14 @@ export const ShiftPlanningView: React.FC = () => {
   }, [schedules]);
 
   const getLoadPercentage = (schedule: Schedule | undefined, doctor: Doctor): number => {
-    if (!schedule || schedule.is_day_off !== 0) return 0;
-    const maxUp = doctor.max_up_per_day || 120;
-    const plannedUp = schedule.planned_up || 0;
+    if (!isWorkingSchedule(schedule)) return 0;
+    const maxUp = doctor.max_up_per_day || 8;
+    const plannedUp = schedule?.planned_up || 0;
     return maxUp > 0 ? (plannedUp / maxUp) * 100 : 0;
   };
 
   const getLoadStatus = (schedule: Schedule | undefined, doctor: Doctor): 'normal' | 'warning' | 'overload' | 'empty' => {
-    if (!schedule || schedule.is_day_off !== 0) return 'empty';
+    if (!isWorkingSchedule(schedule)) return 'empty';
     const percentage = getLoadPercentage(schedule, doctor);
     if (percentage > 95) return 'overload';
     if (percentage >= 80) return 'warning';
@@ -260,12 +268,12 @@ export const ShiftPlanningView: React.FC = () => {
   };
 
   const getStudiesCountForSchedule = useCallback((schedule: Schedule | undefined, doctorId: number, date: string): number => {
-    if (!schedule) return 0;
+    if (!isWorkingSchedule(schedule)) return 0;
 
-    const scheduleDoctorId = getDoctorIdFromSchedule(schedule, doctorId);
-    const scheduleDate = schedule.work_date?.split('T')[0] || date;
+    const scheduleDoctorId = getDoctorIdFromSchedule(schedule!, doctorId);
+    const scheduleDate = schedule!.work_date?.split('T')[0] || date;
 
-    return studies.filter(study => {
+    return studies.filter((study) => {
       const studyDoctorId = study.diagnostician_id ||
         (typeof study.diagnostician === 'object' && study.diagnostician?.id ? study.diagnostician.id : null);
       const studyDate = study.created_at ? study.created_at.split('T')[0] : null;
@@ -275,7 +283,7 @@ export const ShiftPlanningView: React.FC = () => {
 
   const getStatusColor = (schedule: Schedule | undefined, doctor: Doctor): string => {
     if (!schedule) return 'bg-slate-100 text-slate-400';
-    if (schedule.is_day_off !== 0) return 'bg-slate-100 text-slate-400';
+    if (!isWorkingSchedule(schedule)) return 'bg-slate-100 text-slate-700 border border-slate-300';
 
     const percentage = getLoadPercentage(schedule, doctor);
 
@@ -291,10 +299,10 @@ export const ShiftPlanningView: React.FC = () => {
     let overloadShifts = 0;
     const totalPossibleShifts = totalDoctors * 7;
 
-    doctors.forEach(doctor => {
-      dates.forEach(date => {
+    doctors.forEach((doctor) => {
+      dates.forEach((date) => {
         const schedule = getScheduleForDoctor(doctor.id, date);
-        if (schedule && schedule.is_day_off === 0) {
+        if (isWorkingSchedule(schedule)) {
           filledShifts++;
           const status = getLoadStatus(schedule, doctor);
           if (status === 'warning') warningShifts++;
@@ -311,7 +319,6 @@ export const ShiftPlanningView: React.FC = () => {
       overloadShifts,
     };
   }, [doctors, dates, getScheduleForDoctor]);
-
 
   if (loading && schedules.length === 0) {
     return (
@@ -358,7 +365,7 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
         <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-xs md:text-sm text-slate-600">Смен заполнено</div>
+            <div className="text-xs md:text-sm text-slate-600">Рабочих смен</div>
             <CheckCircle2 size={14} className="text-green-600" />
           </div>
           <div className="text-xl md:text-2xl font-bold text-slate-900">
@@ -409,31 +416,13 @@ export const ShiftPlanningView: React.FC = () => {
         <span className="font-medium">Неделя:</span> {new Date(dates[0]).toLocaleDateString('ru-RU')} — {new Date(dates[6]).toLocaleDateString('ru-RU')}
       </div>
 
-      <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
-        <div className="text-xs md:text-sm font-semibold text-slate-700 mb-2">Индикаторы нагрузки</div>
-        <div className="flex items-center flex-wrap gap-3 md:gap-6 text-xs">
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 md:w-4 md:h-4 rounded bg-green-100 border border-green-300 shrink-0"></div>
-            <span className="text-slate-600">Норма (&lt;80%)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 md:w-4 md:h-4 rounded bg-amber-100 border border-amber-300 shrink-0"></div>
-            <span className="text-slate-600">Близко к лимиту (80-95%)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 md:w-4 md:h-4 rounded bg-red-100 border border-red-300 shrink-0"></div>
-            <span className="text-slate-600">Перегруз (&gt;95%)</span>
-          </div>
-        </div>
-      </div>
-
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm" style={{ minWidth: '640px' }}>
+          <table className="w-full text-left text-sm" style={{ minWidth: '760px' }}>
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-4 md:px-6 py-4 font-semibold text-slate-700 sticky left-0 bg-slate-50 z-10">Врач</th>
-                {dates.map(date => {
+                {dates.map((date) => {
                   const d = new Date(date);
                   const dayName = d.toLocaleDateString('ru-RU', { weekday: 'short' });
                   const dayNum = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
@@ -453,7 +442,7 @@ export const ShiftPlanningView: React.FC = () => {
                     <div className="text-sm">{doc.fio_alias}</div>
                     <div className="text-xs text-slate-500">{doc.specialty}</div>
                   </td>
-                  {dates.map(date => {
+                  {dates.map((date) => {
                     const schedule = getScheduleForDoctor(doc.id, date);
                     const studiesCount = getStudiesCountForSchedule(schedule, doc.id, date);
                     return (
@@ -464,24 +453,32 @@ export const ShiftPlanningView: React.FC = () => {
                       >
                         {schedule ? (
                           <div className="space-y-1">
-                            <div className={`inline-flex flex-col items-center px-3 py-2 rounded-lg text-xs font-medium ${getStatusColor(schedule, doc)}`}>
-                              <div className="font-semibold">
-                                {schedule.time_start?.substring(0, 5) || '—'}–{schedule.time_end?.substring(0, 5) || '—'}
-                              </div>
-                              {schedule.break_start && schedule.break_end && (
-                                <div className="mt-0.5 text-[10px] opacity-75">
-                                  ☕ {schedule.break_start.substring(0, 5)}–{schedule.break_end.substring(0, 5)}
+                            {isWorkingSchedule(schedule) ? (
+                              <>
+                                <div className={`inline-flex flex-col items-center px-3 py-2 rounded-lg text-xs font-medium ${getStatusColor(schedule, doc)}`}>
+                                  <div className="font-semibold">
+                                    {schedule.time_start?.substring(0, 5) || '—'}–{schedule.time_end?.substring(0, 5) || '—'}
+                                  </div>
+                                  {schedule.break_start && schedule.break_end && (
+                                    <div className="mt-0.5 text-[10px] opacity-75">
+                                      ☕ {schedule.break_start.substring(0, 5)}–{schedule.break_end.substring(0, 5)}
+                                    </div>
+                                  )}
+                                  {schedule.planned_up > 0 && (
+                                    <div className="mt-1 font-bold">
+                                      {schedule.planned_up} УП
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                              {schedule.planned_up > 0 && (
-                                <div className="mt-1 font-bold">
-                                  {schedule.planned_up} УП
-                                </div>
-                              )}
-                            </div>
-                            {studiesCount > 0 && (
-                              <div className="text-xs text-slate-600 mt-1">
-                                Исследований: {studiesCount}
+                                {studiesCount > 0 && (
+                                  <div className="text-xs text-slate-600 mt-1">
+                                    Исследований: {studiesCount}
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <div className={`inline-flex flex-col items-center px-3 py-2 rounded-lg text-xs font-medium ${getStatusColor(schedule, doc)}`}>
+                                <div className="font-semibold">{getDayStatusLabel(schedule)}</div>
                               </div>
                             )}
                           </div>
@@ -499,12 +496,13 @@ export const ShiftPlanningView: React.FC = () => {
       </div>
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <div className="text-sm font-semibold text-blue-900 mb-2">Как работает прогноз</div>
+        <div className="text-sm font-semibold text-blue-900 mb-2">Как теперь трактуется day_status</div>
         <ul className="text-xs text-blue-800 space-y-1">
-          <li>• Прогноз строится по всем доступным исследованиям в БД с усреднением по дням недели.</li>
-          <li>• Пользователь сам задаёт диапазон дат, на который нужно построить прогноз.</li>
-          <li>• Рекомендуемое количество врачей считается по ожидаемому объёму УП на каждый день.</li>
-          <li>• В строке «Модальности» показано, какие направления должны быть покрыты на смене.</li>
+          <li>• 0 — рабочий день.</li>
+          <li>• 1 — выходной.</li>
+          <li>• 2 — отпуск / плановое отсутствие.</li>
+          <li>• 3 — больничный / иное отсутствие.</li>
+          <li>• 5 — до начала работы, 6 — после окончания работы.</li>
         </ul>
       </div>
 
@@ -555,94 +553,96 @@ export const ShiftPlanningView: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Время начала
-                  </label>
-                  <input
-                    type="time"
-                    value={formData.time_start}
-                    onChange={(e) => setFormData({ ...formData, time_start: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Время окончания
-                  </label>
-                  <input
-                    type="time"
-                    value={formData.time_end}
-                    onChange={(e) => setFormData({ ...formData, time_end: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  />
-                </div>
-              </div>
-
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  ☕ Перерыв (обед)
+                  Статус дня
                 </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">Начало</label>
-                    <input
-                      type="time"
-                      value={formData.break_start}
-                      onChange={(e) => setFormData({ ...formData, break_start: e.target.value })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">Конец</label>
-                    <input
-                      type="time"
-                      value={formData.break_end}
-                      onChange={(e) => setFormData({ ...formData, break_end: e.target.value })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-                </div>
-                {formData.break_start && formData.break_end && (
-                  <p className="text-xs text-slate-500 mt-1">
-                    Длительность: {(() => {
-                      const [bsh, bsm] = formData.break_start.split(':').map(Number);
-                      const [beh, bem] = formData.break_end.split(':').map(Number);
-                      const mins = (beh * 60 + bem) - (bsh * 60 + bsm);
-                      return mins > 0 ? `${mins} мин` : '—';
-                    })()}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Планируемые УП
-                </label>
-                <input
-                  type="number"
-                  value={formData.planned_up}
-                  onChange={(e) => setFormData({ ...formData, planned_up: parseInt(e.target.value) || 0 })}
+                <select
+                  value={formData.day_status}
+                  onChange={(e) => setFormData({ ...formData, day_status: Number(e.target.value) })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  min="0"
-                />
+                >
+                  {DAY_STATUS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
               </div>
 
-              <div className="flex items-center">
-                <input
-                  type="checkbox"
-                  id="is_day_off"
-                  checked={formData.is_day_off === 1}
-                  onChange={(e) => setFormData({ ...formData, is_day_off: e.target.checked ? 1 : 0 })}
-                  className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
-                />
-                <label htmlFor="is_day_off" className="ml-2 text-sm font-medium text-slate-700">
-                  Выходной день
-                </label>
-              </div>
+              {formData.day_status === 0 && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        Время начала
+                      </label>
+                      <input
+                        type="time"
+                        value={formData.time_start}
+                        onChange={(e) => setFormData({ ...formData, time_start: e.target.value })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        Время окончания
+                      </label>
+                      <input
+                        type="time"
+                        value={formData.time_end}
+                        onChange={(e) => setFormData({ ...formData, time_end: e.target.value })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      ☕ Перерыв (обед)
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">Начало</label>
+                        <input
+                          type="time"
+                          value={formData.break_start}
+                          onChange={(e) => setFormData({ ...formData, break_start: e.target.value })}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">Конец</label>
+                        <input
+                          type="time"
+                          value={formData.break_end}
+                          onChange={(e) => setFormData({ ...formData, break_end: e.target.value })}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Планируемые УП
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.planned_up}
+                      onChange={(e) => setFormData({ ...formData, planned_up: parseInt(e.target.value) || 0 })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      min="0"
+                    />
+                  </div>
+                </>
+              )}
+
+              {formData.day_status !== 0 && (
+                <div className="rounded-md bg-slate-50 border border-slate-200 p-3 text-sm text-slate-600">
+                  Для нерабочих статусов время смены и УП при сохранении будут сброшены.
+                </div>
+              )}
 
               <div className="flex space-x-3 pt-4">
                 <button
