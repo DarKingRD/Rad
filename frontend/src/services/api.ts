@@ -8,6 +8,7 @@ import type {
   StudyType,
   DashboardStats,
   ChartPoint,
+  ShiftForecastResponse,
 } from '../types';
 
 type ApiListResponse<T> = T[] | { results: T[] };
@@ -19,7 +20,8 @@ type SchedulePayload = {
   time_end: string | null;
   break_start?: string | null;
   break_end?: string | null;
-  is_day_off: number;
+  is_day_off?: number;
+  day_status?: number;
   planned_up: number;
 };
 
@@ -29,6 +31,11 @@ type DoctorPayload = {
   max_up_per_day: number;
   is_active: boolean;
   modality: string[];
+};
+
+type ShiftForecastParams = {
+  date_from?: string;
+  date_to?: string;
 };
 
 type StudyAssignResponse = Study;
@@ -70,7 +77,7 @@ type DistributionConfirmResponse = {
   message: string;
 };
 
-const API_BASE_URL = 'http://localhost:8000/api'; // Здесь потом нужно этот хардкод убрать
+const API_BASE_URL = 'http://localhost:8000/api';
 
 export class ApiClientError extends Error {
   status?: number;
@@ -185,11 +192,6 @@ async function putOne<TResponse, TPayload>(url: string, payload: TPayload): Prom
   return response.data;
 }
 
-async function patchOne<TResponse, TPayload>(url: string, payload: TPayload): Promise<TResponse> {
-  const response = await api.patch<TResponse>(url, payload);
-  return response.data;
-}
-
 async function deleteOne(url: string): Promise<void> {
   await api.delete(url);
 }
@@ -213,6 +215,8 @@ export const schedulesApi = {
     getList<Schedule>('/schedules/', params),
   getByDate: (date: string) => getList<Schedule>('/schedules/by_date/', { date }),
   getById: (id: number) => getOne<Schedule>(`/schedules/${id}/`),
+  getForecast: (params?: ShiftForecastParams) =>
+    getOne<ShiftForecastResponse>('/schedules/forecast/', params),
   create: (data: SchedulePayload) => postOne<Schedule, SchedulePayload>('/schedules/', data),
   update: (id: number, data: SchedulePayload) =>
     putOne<Schedule, SchedulePayload>(`/schedules/${id}/`, data),

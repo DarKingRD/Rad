@@ -20,6 +20,8 @@ from .serializers import (
     DoctorWithLoadSerializer,
     ScheduleSerializer,
     ScheduleWithDoctorSerializer,
+    ShiftForecastQuerySerializer,
+    ShiftForecastResponseSerializer,
     StudyAssignSerializer,
     StudySerializer,
     StudyStatusUpdateSerializer,
@@ -45,6 +47,8 @@ from .services.distribution_api import (
     parse_distribution_datetime_start,
     run_distribution,
 )
+from .services.shift_forecast import build_shift_forecast
+
 
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.all()
@@ -110,6 +114,22 @@ class ScheduleViewSet(viewsets.ModelViewSet):
             work_date=date, is_day_off=0
         ).select_related("doctor")
         serializer = ScheduleWithDoctorSerializer(schedules, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def forecast(self, request):
+        """
+        Прогноз входящего потока исследований и потребности во врачах по выбранному диапазону дат.
+        """
+        query_serializer = ShiftForecastQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+
+        validated = query_serializer.validated_data
+        result = build_shift_forecast(
+            date_from=validated.get("date_from"),
+            date_to=validated.get("date_to"),
+        )
+        serializer = ShiftForecastResponseSerializer(result)
         return Response(serializer.data)
 
 
@@ -377,4 +397,3 @@ def distribution_preview(request):
     data = get_distribution_preview_info(target_date)
     serializer = DistributionPreviewInfoSerializer(data)
     return Response(serializer.data)
-

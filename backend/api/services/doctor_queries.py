@@ -1,4 +1,4 @@
-from datetime import datetime, date as date_class
+from datetime import date as date_class, datetime
 from decimal import Decimal
 
 from django.db.models import Count, DecimalField, Q, Sum, Value
@@ -8,6 +8,7 @@ from django.utils import timezone
 from ..models import Doctor, Schedule
 
 MONTHLY_NORM = 50
+DAILY_NORM = 8
 
 
 def format_time_hhmm(value):
@@ -26,9 +27,13 @@ def get_break_duration_minutes(schedule) -> int:
 
 
 def get_daily_limit(doctor: Doctor) -> int:
+    """
+    Дневной лимит УП.
+    По текущей бизнес-логике проекта оставляем 8 УП в день.
+    """
     if doctor.max_up_per_day:
-        return doctor.max_up_per_day
-    return 6 if doctor.position_type == "head" else 8
+        return int(doctor.max_up_per_day)
+    return DAILY_NORM
 
 
 def get_doctor_specialty(doctor: Doctor) -> str:
@@ -61,8 +66,8 @@ def get_doctors_with_load_context():
                         studies__status__in=["confirmed", "pending", "signed"],
                     ),
                 ),
-                Value(Decimal("0.00")),
-                output_field=DecimalField(max_digits=10, decimal_places=2),
+                Value(Decimal("0.000")),
+                output_field=DecimalField(max_digits=10, decimal_places=3),
             ),
             active_studies=Count(
                 "studies",
