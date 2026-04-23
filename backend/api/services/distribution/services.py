@@ -10,7 +10,15 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from django.utils import timezone
 from api.models import Study
 
-from .config import DEADLINE_HOURS, MIP_GAP_REL, MIP_TIME_LIMIT, PRIORITY_WEIGHTS, CBC_THREADS
+from .config import (
+    CBC_THREADS,
+    DEADLINE_HOURS,
+    DEFAULT_SOLVER_BACKEND,
+    MIP_GAP_REL,
+    MIP_TIME_LIMIT,
+    PRIORITY_WEIGHTS,
+    SOLVER_BACKEND_CHOICES,
+)
 from .entities import DoctorData, StudyData
 from .exact_solver import solve_exact_mip as solve_exact_mip_external
 from .loaders import load_doctors as load_doctors_external
@@ -20,6 +28,8 @@ from .objectives import (
     ObjectiveStrategy,
     PriorityTierTardinessMultiPassObjective,
     WeightedTardinessLexicographicObjective,
+    TardinessLexicographicObjective,
+    MaxAssignmentsObjective,
 )
 from .result_builder import build_distribution_response, build_empty_distribution_response
 from .time_utils import (
@@ -65,6 +75,7 @@ class DistributionService:
         priority_weights: Optional[Dict[str, float]] = None,
         deadline_hours: Optional[Dict[str, float]] = None,
         objective_params: Optional[Dict[str, Any]] = None,
+        solver_backend: Optional[str] = None,
     ):
         self.real_now = timezone.now()
         self.now = self.real_now
@@ -73,6 +84,7 @@ class DistributionService:
         self.priority_weights = {**PRIORITY_WEIGHTS, **(priority_weights or {})}
         self.deadline_hours = {**DEADLINE_HOURS, **(deadline_hours or {})}
         self.objective_params = dict(objective_params or {})
+        self.solver_backend = self._normalize_solver_backend(solver_backend)
         self._debug: List[str] = []
 
         self.objective: ObjectiveStrategy
@@ -97,7 +109,15 @@ class DistributionService:
             "priority_weights": self.priority_weights,
             "deadline_hours": self.deadline_hours,
             "objective_params": self.objective_params,
+            "solver_backend": self.solver_backend,
         }
+
+    def _normalize_solver_backend(self, solver_backend: Optional[str]) -> str:
+        backend = (solver_backend or DEFAULT_SOLVER_BACKEND).lower()
+        return backend if backend in SOLVER_BACKEND_CHOICES else DEFAULT_SOLVER_BACKEND
+
+    def _mip_threads(self) -> int:
+        return CBC_THREADS
 
     def _log(self, message: str) -> None:
         logger.info(message)
@@ -210,6 +230,17 @@ class DistributionService:
             if study.research_number not in assignment and study.research_number not in full_unassigned_meta:
                 full_unassigned_meta[study.research_number] = self.objective.unassigned_metrics(study, horizon_end)
         return full_unassigned_meta
+
+    def _baseline_unassigned_meta(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+    ) -> Dict[str, Dict[str, float | datetime]]:
+        horizon_end = self._planning_horizon_end(doctors)
+        return {
+            study.research_number: self.objective.unassigned_metrics(study, horizon_end)
+            for study in studies
+        }
 
     def _make_pass_doctors(
         self,
@@ -371,7 +402,8 @@ class DistributionService:
             priority_weights=self.priority_weights,
             mip_time_limit=MIP_TIME_LIMIT,
             mip_gap_rel=MIP_GAP_REL,
-            mip_threads=CBC_THREADS,
+            mip_threads=self._mip_threads(),
+            solver_backend=self.solver_backend,
             planning_now=self.now,
             solve_greedy_fn=self.solve_greedy,
             planning_horizon_end_fn=self._planning_horizon_end,
@@ -435,7 +467,10 @@ class DistributionService:
         self._log(f"Целевая дата: {self.target_date}")
         self._log(f"Режим предпросмотра: {self.preview_mode}")
         self._log(f"Целевая функция: {self.objective_code} | {self.objective_description}")
-        self._log(f"Параллельность CBC: threads={CBC_THREADS}")
+        self._log(
+            f"Exact solver backend: {self.solver_backend}; "
+            f"CBC threads={CBC_THREADS}"
+        )
         self._log("=" * 60)
 
         doctors = self.load_doctors()
@@ -469,6 +504,7 @@ class DistributionService:
             )
 
         full_unassigned_meta = self._complete_unassigned_meta(studies, doctors, assignment, unassigned_meta)
+        baseline_unassigned_meta = self._baseline_unassigned_meta(studies, doctors)
 
         result = build_distribution_response(
             studies=studies,
@@ -476,6 +512,7 @@ class DistributionService:
             assignment=assignment,
             details=details,
             unassigned_meta=full_unassigned_meta,
+            baseline_unassigned_meta=baseline_unassigned_meta,
             solver_obj=solver_obj,
             now=self.now,
             preview_mode=self.preview_mode,

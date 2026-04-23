@@ -22,6 +22,7 @@ from .serializers import (
     ScheduleWithDoctorSerializer,
     ShiftForecastQuerySerializer,
     ShiftForecastResponseSerializer,
+    ForecastCompareQuerySerializer,
     StudyAssignSerializer,
     StudySerializer,
     StudyStatusUpdateSerializer,
@@ -47,7 +48,12 @@ from .services.distribution_api import (
     parse_distribution_datetime_start,
     run_distribution,
 )
-from .services.shift_forecast import build_shift_forecast
+from .services.shift_forecast_multi_method import (
+    FORECAST_COMPARE_METHODS,
+    FORECAST_METHODS,
+    build_shift_forecast,
+    evaluate_forecast_methods,
+)
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -128,6 +134,9 @@ class ScheduleViewSet(viewsets.ModelViewSet):
         result = build_shift_forecast(
             date_from=validated.get("date_from"),
             date_to=validated.get("date_to"),
+            method=validated.get("method", "weekday_mean"),
+            recent_weeks=validated.get("recent_weeks", 4),
+            moving_window_days=validated.get("moving_window_days", 14),
         )
         serializer = ShiftForecastResponseSerializer(result)
         return Response(serializer.data)
@@ -324,6 +333,8 @@ def distribute_studies_view(request):
     date_from = validated.get("date_from")
     date_to = validated.get("date_to")
     use_mip = validated.get("use_mip", True)
+    objective = validated.get("objective", "weighted_tardiness_lexicographic")
+    solver_backend = validated.get("solver_backend", "cbc")
 
     date_from_dt = parse_distribution_datetime_start(
         date_from.isoformat() if date_from else None
@@ -339,6 +350,8 @@ def distribute_studies_view(request):
             date_from=date_from_dt,
             date_to=date_to_dt,
             use_mip=use_mip,
+            objective=objective,
+            solver_backend=solver_backend,
         )
         return Response(result, status=status.HTTP_200_OK)
     except Exception as e:
@@ -397,3 +410,54 @@ def distribution_preview(request):
     data = get_distribution_preview_info(target_date)
     serializer = DistributionPreviewInfoSerializer(data)
     return Response(serializer.data)
+
+
+@api_view(["GET"])
+def forecast_compare_methods(request):
+    """
+    Сравнение методов прогнозирования на последних днях истории (backtest).
+    """
+    query_serializer = ForecastCompareQuerySerializer(data=request.query_params)
+    query_serializer.is_valid(raise_exception=True)
+
+    validated = query_serializer.validated_data
+    methods = validated.get("methods") or None
+
+    try:
+        result = evaluate_forecast_methods(
+            methods=methods,
+            evaluation_start_date=validated.get("evaluation_start_date"),
+            evaluation_end_date=validated.get("evaluation_end_date"),
+            evaluation_days=validated.get("evaluation_days", 7),
+            recent_weeks=validated.get("recent_weeks", 4),
+            moving_window_days=validated.get("moving_window_days", 14),
+            min_train_days=validated.get("min_train_days", 21),
+        )
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    response_payload = {
+        **result,
+        "available_methods": [
+            {"key": key, "label": FORECAST_METHODS[key]}
+            for key in FORECAST_COMPARE_METHODS
+        ],
+        "params": {
+            "methods": methods or list(FORECAST_COMPARE_METHODS),
+            "evaluation_start_date": (
+                validated["evaluation_start_date"].isoformat()
+                if validated.get("evaluation_start_date")
+                else None
+            ),
+            "evaluation_end_date": (
+                validated["evaluation_end_date"].isoformat()
+                if validated.get("evaluation_end_date")
+                else None
+            ),
+            "evaluation_days": validated.get("evaluation_days", 7),
+            "recent_weeks": validated.get("recent_weeks", 4),
+            "moving_window_days": validated.get("moving_window_days", 14),
+            "min_train_days": validated.get("min_train_days", 21),
+        },
+    }
+    return Response(response_payload)

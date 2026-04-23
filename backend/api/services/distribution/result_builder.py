@@ -39,9 +39,28 @@ def build_empty_distribution_response(
         "overdue_total": 0,
         "overdue_assigned": 0,
         "overdue_unassigned": 0,
+        "overdue_cleared": 0,
+        "overdue_remaining": 0,
         "overdue_rate_percent": 0.0,
+        "overdue_cleared_percent": 0.0,
+        "queue_overdue_hours_total": 0.0,
+        "queue_overdue_hours_assigned": 0.0,
+        "queue_overdue_hours_remaining": 0.0,
+        "queue_overdue_hours_cleared_percent": 0.0,
+        "scheduled_overdue_total": 0,
+        "scheduled_overdue_assigned": 0,
+        "scheduled_overdue_unassigned": 0,
+        "scheduled_overdue_hours_total": 0.0,
+        "scheduled_overdue_hours_assigned": 0.0,
+        "scheduled_overdue_hours_unassigned": 0.0,
         "total_tardiness": 0.0,
         "total_weighted_tardiness": 0.0,
+        "baseline_total_tardiness": 0.0,
+        "baseline_total_weighted_tardiness": 0.0,
+        "tardiness_reduction": 0.0,
+        "weighted_tardiness_reduction": 0.0,
+        "tardiness_reduction_percent": 0.0,
+        "weighted_tardiness_reduction_percent": 0.0,
         "avg_tardiness": 0.0,
         "tardiness_p50": 0.0,
         "tardiness_p95": 0.0,
@@ -50,14 +69,35 @@ def build_empty_distribution_response(
     zero_priority = {
         "priority": "",
         "total": 0,
+        "share_percent": 0.0,
         "assigned": 0,
         "unassigned": 0,
         "assigned_rate_percent": 0.0,
         "overdue_total": 0,
         "overdue_assigned": 0,
         "overdue_unassigned": 0,
+        "overdue_rate_percent": 0.0,
+        "overdue_cleared": 0,
+        "overdue_remaining": 0,
+        "overdue_cleared_percent": 0.0,
+        "queue_overdue_hours_total": 0.0,
+        "queue_overdue_hours_assigned": 0.0,
+        "queue_overdue_hours_remaining": 0.0,
+        "queue_overdue_hours_cleared_percent": 0.0,
+        "scheduled_overdue_total": 0,
+        "scheduled_overdue_assigned": 0,
+        "scheduled_overdue_unassigned": 0,
+        "scheduled_overdue_hours_total": 0.0,
+        "scheduled_overdue_hours_assigned": 0.0,
+        "scheduled_overdue_hours_unassigned": 0.0,
         "projected_tardiness_total": 0.0,
         "projected_weighted_tardiness_total": 0.0,
+        "baseline_tardiness_total": 0.0,
+        "baseline_weighted_tardiness_total": 0.0,
+        "tardiness_reduction": 0.0,
+        "weighted_tardiness_reduction": 0.0,
+        "tardiness_reduction_percent": 0.0,
+        "weighted_tardiness_reduction_percent": 0.0,
         "tardiness_p50": 0.0,
         "tardiness_p95": 0.0,
         "tardiness_p99": 0.0,
@@ -89,6 +129,7 @@ def build_distribution_response(
     assignment: Mapping[str, int],
     details: Mapping[str, Dict[str, Any]],
     unassigned_meta: Mapping[str, Dict[str, Any]],
+    baseline_unassigned_meta: Mapping[str, Dict[str, Any]],
     solver_obj: float,
     now: datetime,
     preview_mode: bool,
@@ -125,6 +166,20 @@ def build_distribution_response(
     assigned_weighted_tardiness_by_study: Dict[str, float] = {}
     unassigned_tardiness_by_study: Dict[str, float] = {}
     unassigned_weighted_tardiness_by_study: Dict[str, float] = {}
+    final_tardiness_by_study: Dict[str, float] = {}
+    queue_overdue_hours_by_study: Dict[str, float] = {
+        study.research_number: max(0.0, (now - study.deadline).total_seconds() / 3600.0)
+        for study in studies
+    }
+    baseline_tardiness_by_study: Dict[str, float] = {}
+    baseline_weighted_tardiness_by_study: Dict[str, float] = {}
+
+    for study in studies:
+        meta = baseline_unassigned_meta.get(study.research_number, {})
+        baseline_tardiness_by_study[study.research_number] = float(meta.get("tardiness_hours", 0.0))
+        baseline_weighted_tardiness_by_study[study.research_number] = float(
+            meta.get("weighted_tardiness", 0.0)
+        )
 
     for study_id, meta in details.items():
         study = study_map[study_id]
@@ -132,12 +187,15 @@ def build_distribution_response(
         tardiness = float(meta["tardiness_hours"])
         weighted_tardiness = float(meta["weighted_tardiness"])
         objective_value = float(meta.get("objective_value", weighted_tardiness))
+        baseline_tardiness = baseline_tardiness_by_study.get(study_id, 0.0)
+        baseline_weighted_tardiness = baseline_weighted_tardiness_by_study.get(study_id, 0.0)
 
         assigned_completion_tardiness += tardiness
         assigned_completion_weighted_tardiness += weighted_tardiness
         total_assigned_objective += objective_value
         assigned_tardiness_by_study[study_id] = tardiness
         assigned_weighted_tardiness_by_study[study_id] = weighted_tardiness
+        final_tardiness_by_study[study_id] = tardiness
 
         all_assignments.append(
             {
@@ -151,6 +209,13 @@ def build_distribution_response(
                 "completion_time": meta["finish_dt"].isoformat(),
                 "tardiness_hours": round(tardiness, 2),
                 "weighted_tardiness": round(weighted_tardiness, 3),
+                "baseline_tardiness_hours": round(baseline_tardiness, 2),
+                "baseline_weighted_tardiness": round(baseline_weighted_tardiness, 3),
+                "tardiness_reduction": round(max(0.0, baseline_tardiness - tardiness), 2),
+                "weighted_tardiness_reduction": round(
+                    max(0.0, baseline_weighted_tardiness - weighted_tardiness),
+                    3,
+                ),
                 "objective_value": round(objective_value, 3),
                 "up_value": study.up_value,
                 "is_overdue": study.deadline < now,
@@ -166,12 +231,15 @@ def build_distribution_response(
         weighted_tardiness = float(meta.get("weighted_tardiness", 0.0))
         objective_value = float(meta.get("objective_value", 0.0))
         virtual_finish_dt = meta.get("virtual_finish_dt")
+        baseline_tardiness = baseline_tardiness_by_study.get(study.research_number, 0.0)
+        baseline_weighted_tardiness = baseline_weighted_tardiness_by_study.get(study.research_number, 0.0)
 
         projected_unassigned_tardiness += tardiness
         projected_unassigned_weighted_tardiness += weighted_tardiness
         total_unassigned_objective += objective_value
         unassigned_tardiness_by_study[study.research_number] = tardiness
         unassigned_weighted_tardiness_by_study[study.research_number] = weighted_tardiness
+        final_tardiness_by_study[study.research_number] = tardiness
 
         all_assignments.append(
             {
@@ -186,6 +254,13 @@ def build_distribution_response(
                 "virtual_completion_time": virtual_finish_dt.isoformat() if virtual_finish_dt else None,
                 "tardiness_hours": round(tardiness, 2),
                 "weighted_tardiness": round(weighted_tardiness, 3),
+                "baseline_tardiness_hours": round(baseline_tardiness, 2),
+                "baseline_weighted_tardiness": round(baseline_weighted_tardiness, 3),
+                "tardiness_reduction": round(max(0.0, baseline_tardiness - tardiness), 2),
+                "weighted_tardiness_reduction": round(
+                    max(0.0, baseline_weighted_tardiness - weighted_tardiness),
+                    3,
+                ),
                 "objective_value": round(objective_value, 3),
                 "up_value": study.up_value,
                 "is_overdue": study.deadline < now,
@@ -196,9 +271,36 @@ def build_distribution_response(
     assigned_count = len(assignment)
     overdue_total = sum(1 for study in studies if study.deadline < now)
     overdue_assigned = sum(1 for study in studies if study.deadline < now and study.research_number in assigned_ids)
+    queue_overdue_hours_total = sum(queue_overdue_hours_by_study.values())
+    queue_overdue_hours_assigned = sum(
+        queue_overdue_hours_by_study.get(study_id, 0.0)
+        for study_id in assigned_ids
+    )
+    queue_overdue_hours_remaining = max(
+        0.0,
+        queue_overdue_hours_total - queue_overdue_hours_assigned,
+    )
 
     projected_total_tardiness = assigned_completion_tardiness + projected_unassigned_tardiness
     projected_total_weighted_tardiness = assigned_completion_weighted_tardiness + projected_unassigned_weighted_tardiness
+    scheduled_overdue_assigned = sum(
+        1
+        for study_id in assigned_ids
+        if assigned_tardiness_by_study.get(study_id, 0.0) > 1e-9
+    )
+    scheduled_overdue_unassigned = sum(
+        1
+        for study_id, tardiness in unassigned_tardiness_by_study.items()
+        if tardiness > 1e-9
+    )
+    scheduled_overdue_total = scheduled_overdue_assigned + scheduled_overdue_unassigned
+    baseline_total_tardiness = sum(baseline_tardiness_by_study.values())
+    baseline_total_weighted_tardiness = sum(baseline_weighted_tardiness_by_study.values())
+    tardiness_reduction = max(0.0, baseline_total_tardiness - projected_total_tardiness)
+    weighted_tardiness_reduction = max(
+        0.0,
+        baseline_total_weighted_tardiness - projected_total_weighted_tardiness,
+    )
 
     all_tardiness_values: List[float] = []
     priority_breakdown: Dict[str, Dict[str, Any]] = {}
@@ -212,17 +314,48 @@ def build_distribution_response(
         priority_overdue_assigned = sum(
             1 for study in priority_studies if study.deadline < now and study.research_number in assigned_ids
         )
+        priority_queue_overdue_hours_total = sum(
+            queue_overdue_hours_by_study.get(study.research_number, 0.0)
+            for study in priority_studies
+        )
+        priority_queue_overdue_hours_assigned = sum(
+            queue_overdue_hours_by_study.get(study.research_number, 0.0)
+            for study in priority_studies
+            if study.research_number in assigned_ids
+        )
+        priority_queue_overdue_hours_remaining = max(
+            0.0,
+            priority_queue_overdue_hours_total - priority_queue_overdue_hours_assigned,
+        )
 
         priority_tardiness_values: List[float] = []
         priority_weighted_values: List[float] = []
+        priority_baseline_tardiness = 0.0
+        priority_baseline_weighted_tardiness = 0.0
+        priority_scheduled_overdue_assigned = 0
+        priority_scheduled_overdue_unassigned = 0
+        priority_scheduled_overdue_hours_assigned = 0.0
+        priority_scheduled_overdue_hours_unassigned = 0.0
 
         for study in priority_studies:
+            priority_baseline_tardiness += baseline_tardiness_by_study.get(study.research_number, 0.0)
+            priority_baseline_weighted_tardiness += baseline_weighted_tardiness_by_study.get(
+                study.research_number,
+                0.0,
+            )
+
             if study.research_number in assigned_ids:
                 tardiness = assigned_tardiness_by_study.get(study.research_number, 0.0)
                 weighted = assigned_weighted_tardiness_by_study.get(study.research_number, 0.0)
+                if tardiness > 1e-9:
+                    priority_scheduled_overdue_assigned += 1
+                    priority_scheduled_overdue_hours_assigned += tardiness
             else:
                 tardiness = unassigned_tardiness_by_study.get(study.research_number, 0.0)
                 weighted = unassigned_weighted_tardiness_by_study.get(study.research_number, 0.0)
+                if tardiness > 1e-9:
+                    priority_scheduled_overdue_unassigned += 1
+                    priority_scheduled_overdue_hours_unassigned += tardiness
 
             priority_tardiness_values.append(tardiness)
             priority_weighted_values.append(weighted)
@@ -231,14 +364,53 @@ def build_distribution_response(
         priority_breakdown[output_key] = {
             "priority": priority_code,
             "total": priority_total,
+            "share_percent": _pct(priority_total, total_studies),
             "assigned": priority_assigned,
             "unassigned": priority_total - priority_assigned,
             "assigned_rate_percent": _pct(priority_assigned, priority_total),
             "overdue_total": priority_overdue_total,
             "overdue_assigned": priority_overdue_assigned,
             "overdue_unassigned": priority_overdue_total - priority_overdue_assigned,
+            "overdue_rate_percent": _pct(priority_overdue_total, priority_total),
+            "overdue_cleared": priority_overdue_assigned,
+            "overdue_remaining": priority_overdue_total - priority_overdue_assigned,
+            "overdue_cleared_percent": _pct(priority_overdue_assigned, priority_overdue_total),
+            "queue_overdue_hours_total": round(priority_queue_overdue_hours_total, 2),
+            "queue_overdue_hours_assigned": round(priority_queue_overdue_hours_assigned, 2),
+            "queue_overdue_hours_remaining": round(priority_queue_overdue_hours_remaining, 2),
+            "queue_overdue_hours_cleared_percent": _pct(
+                priority_queue_overdue_hours_assigned,
+                priority_queue_overdue_hours_total,
+            ),
+            "scheduled_overdue_total": priority_scheduled_overdue_assigned + priority_scheduled_overdue_unassigned,
+            "scheduled_overdue_assigned": priority_scheduled_overdue_assigned,
+            "scheduled_overdue_unassigned": priority_scheduled_overdue_unassigned,
+            "scheduled_overdue_hours_total": round(
+                priority_scheduled_overdue_hours_assigned + priority_scheduled_overdue_hours_unassigned,
+                2,
+            ),
+            "scheduled_overdue_hours_assigned": round(priority_scheduled_overdue_hours_assigned, 2),
+            "scheduled_overdue_hours_unassigned": round(priority_scheduled_overdue_hours_unassigned, 2),
             "projected_tardiness_total": round(sum(priority_tardiness_values), 2),
             "projected_weighted_tardiness_total": round(sum(priority_weighted_values), 3),
+            "baseline_tardiness_total": round(priority_baseline_tardiness, 2),
+            "baseline_weighted_tardiness_total": round(priority_baseline_weighted_tardiness, 3),
+            "tardiness_reduction": round(
+                max(0.0, priority_baseline_tardiness - sum(priority_tardiness_values)),
+                2,
+            ),
+            "weighted_tardiness_reduction": round(
+                max(0.0, priority_baseline_weighted_tardiness - sum(priority_weighted_values)),
+                3,
+            ),
+            "tardiness_reduction_percent": _pct(
+                max(0.0, priority_baseline_tardiness - sum(priority_tardiness_values)),
+                priority_baseline_tardiness,
+            ),
+            "weighted_tardiness_reduction_percent": _pct(
+                max(0.0, priority_baseline_weighted_tardiness - sum(priority_weighted_values)),
+                priority_baseline_weighted_tardiness,
+            ),
             "tardiness_p50": _percentile(priority_tardiness_values, 0.5),
             "tardiness_p95": _percentile(priority_tardiness_values, 0.95),
             "tardiness_p99": _percentile(priority_tardiness_values, 0.99),
@@ -262,9 +434,34 @@ def build_distribution_response(
             "overdue_total": overdue_total,
             "overdue_assigned": overdue_assigned,
             "overdue_unassigned": overdue_total - overdue_assigned,
+            "overdue_cleared": overdue_assigned,
+            "overdue_remaining": overdue_total - overdue_assigned,
             "overdue_rate_percent": _pct(overdue_total, total_studies),
+            "overdue_cleared_percent": _pct(overdue_assigned, overdue_total),
+            "queue_overdue_hours_total": round(queue_overdue_hours_total, 2),
+            "queue_overdue_hours_assigned": round(queue_overdue_hours_assigned, 2),
+            "queue_overdue_hours_remaining": round(queue_overdue_hours_remaining, 2),
+            "queue_overdue_hours_cleared_percent": _pct(
+                queue_overdue_hours_assigned,
+                queue_overdue_hours_total,
+            ),
+            "scheduled_overdue_total": scheduled_overdue_total,
+            "scheduled_overdue_assigned": scheduled_overdue_assigned,
+            "scheduled_overdue_unassigned": scheduled_overdue_unassigned,
+            "scheduled_overdue_hours_total": round(projected_total_tardiness, 2),
+            "scheduled_overdue_hours_assigned": round(assigned_completion_tardiness, 2),
+            "scheduled_overdue_hours_unassigned": round(projected_unassigned_tardiness, 2),
             "total_tardiness": round(projected_total_tardiness, 2),
             "total_weighted_tardiness": round(projected_total_weighted_tardiness, 3),
+            "baseline_total_tardiness": round(baseline_total_tardiness, 2),
+            "baseline_total_weighted_tardiness": round(baseline_total_weighted_tardiness, 3),
+            "tardiness_reduction": round(tardiness_reduction, 2),
+            "weighted_tardiness_reduction": round(weighted_tardiness_reduction, 3),
+            "tardiness_reduction_percent": _pct(tardiness_reduction, baseline_total_tardiness),
+            "weighted_tardiness_reduction_percent": _pct(
+                weighted_tardiness_reduction,
+                baseline_total_weighted_tardiness,
+            ),
             "avg_tardiness": round(projected_total_tardiness / total_studies, 2) if total_studies else 0.0,
             "tardiness_p50": _percentile(all_tardiness_values, 0.5),
             "tardiness_p95": _percentile(all_tardiness_values, 0.95),

@@ -11,6 +11,7 @@ inflection==0.5.1
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 numpy==2.4.2
+ortools>=9.12
 openpyxl==3.1.5
 pandas==3.0.1
 psycopg2-binary==2.9.11

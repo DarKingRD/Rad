@@ -150,6 +150,11 @@ export interface Assignment {
   deadline: string;
   completion_time: string;
   tardiness_hours: number;
+  weighted_tardiness?: number;
+  baseline_tardiness_hours?: number;
+  baseline_weighted_tardiness?: number;
+  tardiness_reduction?: number;
+  weighted_tardiness_reduction?: number;
   up_value: number;
   is_overdue: boolean;
 }
@@ -165,21 +170,48 @@ export interface PriorityBreakdownStat {
   overdue_assigned: number;
   overdue_unassigned: number;
   overdue_rate_percent: number;
+  overdue_cleared?: number;
+  overdue_remaining?: number;
+  overdue_cleared_percent?: number;
+  queue_overdue_hours_total?: number;
+  queue_overdue_hours_assigned?: number;
+  queue_overdue_hours_remaining?: number;
+  queue_overdue_hours_cleared_percent?: number;
+  scheduled_overdue_total?: number;
+  scheduled_overdue_assigned?: number;
+  scheduled_overdue_unassigned?: number;
+  scheduled_overdue_hours_total?: number;
+  scheduled_overdue_hours_assigned?: number;
+  scheduled_overdue_hours_unassigned?: number;
   overdue_hours_total?: number;
   overdue_hours_avg?: number;
+  projected_tardiness_total?: number;
+  projected_weighted_tardiness_total?: number;
+  baseline_tardiness_total?: number;
+  baseline_weighted_tardiness_total?: number;
+  tardiness_reduction?: number;
+  weighted_tardiness_reduction?: number;
+  tardiness_reduction_percent?: number;
+  weighted_tardiness_reduction_percent?: number;
   tardiness_p50?: number;
   tardiness_p95?: number;
   tardiness_p99?: number;
 }
 
-export interface DistResult {
-  doctor_stats: DoctorDistStat[];
+export interface DistributionSummary {
+  total?: number;
   assigned: number;
   unassigned: number;
   cito_assigned?: number;
   cito_total?: number;
   total_tardiness: number;
   total_weighted_tardiness: number;
+  baseline_total_tardiness?: number;
+  baseline_total_weighted_tardiness?: number;
+  tardiness_reduction?: number;
+  weighted_tardiness_reduction?: number;
+  tardiness_reduction_percent?: number;
+  weighted_tardiness_reduction_percent?: number;
   avg_tardiness: number;
   assignment_rate_percent?: number;
   tardiness_p50?: number;
@@ -189,6 +221,24 @@ export interface DistResult {
   overdue_assigned?: number;
   overdue_unassigned?: number;
   overdue_rate_percent?: number;
+  overdue_cleared?: number;
+  overdue_remaining?: number;
+  overdue_cleared_percent?: number;
+  queue_overdue_hours_total?: number;
+  queue_overdue_hours_assigned?: number;
+  queue_overdue_hours_remaining?: number;
+  queue_overdue_hours_cleared_percent?: number;
+  scheduled_overdue_total?: number;
+  scheduled_overdue_assigned?: number;
+  scheduled_overdue_unassigned?: number;
+  scheduled_overdue_hours_total?: number;
+  scheduled_overdue_hours_assigned?: number;
+  scheduled_overdue_hours_unassigned?: number;
+}
+
+export interface DistResult extends DistributionSummary {
+  summary?: DistributionSummary;
+  doctor_stats: DoctorDistStat[];
   priority_breakdown?: {
     plan?: PriorityBreakdownStat;
     asap?: PriorityBreakdownStat;

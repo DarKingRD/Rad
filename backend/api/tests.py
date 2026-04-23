@@ -6,6 +6,12 @@ from django.utils import timezone
 from rest_framework.test import APIRequestFactory
 
 from .serializers import DistributionRunSerializer
+from .services.distribution.config import DEFAULT_SOLVER_BACKEND
+from .services.distribution.entities import DoctorData, StudyData
+from .services.distribution.exact_solver import build_exact_options, solve_exact_mip
+from .services.distribution.objectives import WeightedTardinessLexicographicObjective
+from .services.distribution.result_builder import build_distribution_response
+from .services.distribution_api import parse_distribution_datetime_end
 from .views import (
     chart_data,
     confirm_distribution,
@@ -30,6 +36,72 @@ class DistributionRunSerializerTests(SimpleTestCase):
         )
 
         self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_validate_accepts_objective(self):
+        serializer = DistributionRunSerializer(
+            data={"objective": "priority_tier_tardiness_multipass"}
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(
+            serializer.validated_data["objective"],
+            "priority_tier_tardiness_multipass",
+        )
+
+    def test_validate_accepts_cbc_solver_backend(self):
+        serializer = DistributionRunSerializer(data={"solver_backend": "cbc"})
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["solver_backend"], "cbc")
+
+    def test_validate_accepts_branch_price_solver_backend(self):
+        serializer = DistributionRunSerializer(data={"solver_backend": "branch_price"})
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["solver_backend"], "branch_price")
+
+    def test_validate_uses_configured_solver_backend_by_default(self):
+        serializer = DistributionRunSerializer(data={})
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["solver_backend"], DEFAULT_SOLVER_BACKEND)
+
+    def test_distribution_end_date_is_inclusive(self):
+        self.assertEqual(
+            parse_distribution_datetime_end("2026-03-20"),
+            datetime(2026, 3, 21, 0, 0),
+        )
+
+
+class ForecastCompareQuerySerializerTests(SimpleTestCase):
+    def test_validate_accepts_evaluation_date_range(self):
+        from .serializers import ForecastCompareQuerySerializer
+
+        serializer = ForecastCompareQuerySerializer(
+            data={
+                "evaluation_start_date": "2025-10-13",
+                "evaluation_end_date": "2025-10-19",
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(
+            serializer.validated_data["evaluation_start_date"],
+            date(2025, 10, 13),
+        )
+        self.assertEqual(
+            serializer.validated_data["evaluation_end_date"],
+            date(2025, 10, 19),
+        )
+
+    def test_validate_rejects_single_evaluation_date(self):
+        from .serializers import ForecastCompareQuerySerializer
+
+        serializer = ForecastCompareQuerySerializer(
+            data={"evaluation_start_date": "2025-10-13"}
+        )
+
+        self.assertFalse(serializer.is_valid())
 
 
 class DashboardAndChartViewsTests(SimpleTestCase):
@@ -86,6 +158,184 @@ class DashboardAndChartViewsTests(SimpleTestCase):
         self.assertEqual(response.data, {"error": "date_from не может быть позже date_to"})
 
 
+class DistributionResultBuilderTests(SimpleTestCase):
+    def test_summary_reports_tardiness_reduction_from_assignments(self):
+        base = timezone.make_aware(datetime(2026, 3, 20, 9, 0))
+        doctor = DoctorData(
+            id=1,
+            name="Doctor",
+            modality={"CT"},
+            max_up=8.0,
+            shift_start=base,
+            shift_end=timezone.make_aware(datetime(2026, 3, 20, 18, 0)),
+        )
+        studies = [
+            StudyData(
+                research_number="s1",
+                priority="normal",
+                created_at=base,
+                modality={"CT"},
+                up_value=1.0,
+                duration_minutes=30.0,
+                deadline=timezone.make_aware(datetime(2026, 3, 20, 10, 0)),
+                weight=1.0,
+            ),
+            StudyData(
+                research_number="s2",
+                priority="normal",
+                created_at=base,
+                modality={"CT"},
+                up_value=1.0,
+                duration_minutes=30.0,
+                deadline=timezone.make_aware(datetime(2026, 3, 20, 11, 0)),
+                weight=1.0,
+            ),
+        ]
+
+        result = build_distribution_response(
+            studies=studies,
+            doctors=[doctor],
+            assignment={"s1": 1},
+            details={
+                "s1": {
+                    "doctor_id": 1,
+                    "start_dt": base,
+                    "finish_dt": timezone.make_aware(datetime(2026, 3, 20, 12, 0)),
+                    "tardiness_hours": 2.0,
+                    "weighted_tardiness": 2.0,
+                    "objective_value": 2.0,
+                }
+            },
+            unassigned_meta={
+                "s2": {
+                    "virtual_finish_dt": timezone.make_aware(datetime(2026, 3, 20, 16, 0)),
+                    "tardiness_hours": 5.0,
+                    "weighted_tardiness": 5.0,
+                    "objective_value": 5.0,
+                }
+            },
+            baseline_unassigned_meta={
+                "s1": {
+                    "virtual_finish_dt": timezone.make_aware(datetime(2026, 3, 20, 18, 0)),
+                    "tardiness_hours": 8.0,
+                    "weighted_tardiness": 8.0,
+                    "objective_value": 8.0,
+                },
+                "s2": {
+                    "virtual_finish_dt": timezone.make_aware(datetime(2026, 3, 20, 16, 0)),
+                    "tardiness_hours": 5.0,
+                    "weighted_tardiness": 5.0,
+                    "objective_value": 5.0,
+                },
+            },
+            solver_obj=7.0,
+            now=base,
+            preview_mode=True,
+            target_date_iso="2026-03-20",
+            objective_code="weighted_tardiness_lexicographic",
+            objective_meta={},
+            debug_log=[],
+        )
+
+        self.assertEqual(result["summary"]["baseline_total_tardiness"], 13.0)
+        self.assertEqual(result["summary"]["total_tardiness"], 7.0)
+        self.assertEqual(result["summary"]["tardiness_reduction"], 6.0)
+        self.assertEqual(result["summary"]["tardiness_reduction_percent"], 46.15)
+        self.assertEqual(result["summary"]["queue_overdue_hours_total"], 0.0)
+        self.assertEqual(result["summary"]["queue_overdue_hours_assigned"], 0.0)
+        self.assertEqual(result["summary"]["queue_overdue_hours_remaining"], 0.0)
+        self.assertEqual(result["summary"]["scheduled_overdue_total"], 2)
+        self.assertEqual(result["summary"]["scheduled_overdue_assigned"], 1)
+        self.assertEqual(result["summary"]["scheduled_overdue_unassigned"], 1)
+        self.assertEqual(result["summary"]["scheduled_overdue_hours_total"], 7.0)
+        self.assertEqual(result["summary"]["scheduled_overdue_hours_assigned"], 2.0)
+        self.assertEqual(result["summary"]["scheduled_overdue_hours_unassigned"], 5.0)
+        self.assertEqual(result["priority_breakdown"]["plan"]["share_percent"], 100.0)
+        self.assertEqual(result["priority_breakdown"]["plan"]["overdue_rate_percent"], 0.0)
+        self.assertEqual(result["priority_breakdown"]["plan"]["scheduled_overdue_assigned"], 1)
+        self.assertEqual(result["priority_breakdown"]["plan"]["scheduled_overdue_hours_assigned"], 2.0)
+        self.assertEqual(result["priority_breakdown"]["plan"]["tardiness_reduction"], 6.0)
+        assigned = next(item for item in result["assignments"] if item["study_number"] == "s1")
+        self.assertEqual(assigned["tardiness_reduction"], 6.0)
+
+
+class ExactSolverOptionBuilderTests(SimpleTestCase):
+    def test_disabled_variant_cap_keeps_late_start_options(self):
+        base = timezone.make_aware(datetime(2026, 3, 20, 9, 0))
+        doctor = DoctorData(
+            id=1,
+            name="Doctor",
+            modality={"CT"},
+            max_up=8.0,
+            shift_start=base,
+            shift_end=timezone.make_aware(datetime(2026, 3, 20, 9, 30)),
+        )
+        study = StudyData(
+            research_number="s1",
+            priority="cito",
+            created_at=base,
+            modality={"CT"},
+            up_value=1.0,
+            duration_minutes=5.0,
+            deadline=base,
+            weight=64.0,
+        )
+
+        with patch("api.services.distribution.exact_solver.EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR", None):
+            options, *_ = build_exact_options(
+                studies=[study],
+                doctors=[doctor],
+                objective=WeightedTardinessLexicographicObjective(),
+                priority_weights={"cito": 64.0, "asap": 8.0, "normal": 1.0},
+                planning_now=base,
+                log=lambda _message: None,
+            )
+
+        self.assertEqual(len(options), 6)
+        self.assertEqual(options[-1].start_dt, timezone.make_aware(datetime(2026, 3, 20, 9, 25)))
+
+    @patch("api.services.distribution.exact_solver.solve_branch_price_mip")
+    def test_branch_price_backend_dispatches_to_new_solver(self, branch_price_mock):
+        base = timezone.make_aware(datetime(2026, 3, 20, 9, 0))
+        doctor = DoctorData(
+            id=1,
+            name="Doctor",
+            modality={"CT"},
+            max_up=8.0,
+            shift_start=base,
+            shift_end=timezone.make_aware(datetime(2026, 3, 20, 10, 0)),
+        )
+        study = StudyData(
+            research_number="s1",
+            priority="normal",
+            created_at=base,
+            modality={"CT"},
+            up_value=1.0,
+            duration_minutes=30.0,
+            deadline=timezone.make_aware(datetime(2026, 3, 20, 12, 0)),
+            weight=1.0,
+        )
+        branch_price_mock.return_value = ({}, {}, 0.0, {"s1": {"objective_value": 0.0}})
+
+        result = solve_exact_mip(
+            studies=[study],
+            doctors=[doctor],
+            objective=WeightedTardinessLexicographicObjective(),
+            objective_code="weighted_tardiness_lexicographic",
+            priority_weights={"cito": 64.0, "asap": 8.0, "normal": 1.0},
+            mip_time_limit=10000,
+            mip_gap_rel=0.01,
+            mip_threads=1,
+            solver_backend="branch_price",
+            planning_now=base,
+            solve_greedy_fn=lambda *_args, **_kwargs: ({}, {}),
+            planning_horizon_end_fn=lambda _doctors: timezone.make_aware(datetime(2026, 3, 20, 17, 0)),
+            log=lambda _message: None,
+        )
+
+        branch_price_mock.assert_called_once()
+        self.assertEqual(result, ({}, {}, 0.0, {"s1": {"objective_value": 0.0}}))
+
 class DistributionViewsTests(SimpleTestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
@@ -100,7 +350,7 @@ class DistributionViewsTests(SimpleTestCase):
         run_distribution_mock,
     ):
         parse_start_mock.return_value = datetime(2026, 3, 1, 0, 0)
-        parse_end_mock.return_value = datetime(2026, 3, 31, 23, 59)
+        parse_end_mock.return_value = datetime(2026, 4, 1, 0, 0)
         run_distribution_mock.return_value = {"distribution_id": "dist-1", "preview": True}
 
         request = self.factory.post(
@@ -124,8 +374,10 @@ class DistributionViewsTests(SimpleTestCase):
             target_date=date(2026, 3, 15),
             preview=True,
             date_from=datetime(2026, 3, 1, 0, 0),
-            date_to=datetime(2026, 3, 31, 23, 59),
+            date_to=datetime(2026, 4, 1, 0, 0),
             use_mip=False,
+            objective="weighted_tardiness_lexicographic",
+            solver_backend=DEFAULT_SOLVER_BACKEND,
         )
         self.assertEqual(response.data["distribution_id"], "dist-1")
 

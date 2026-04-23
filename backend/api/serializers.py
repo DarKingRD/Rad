@@ -20,6 +20,13 @@ from .services.schedule_status import (
     is_day_off_by_status,
     normalize_day_status,
 )
+from .services.distribution.objectives import OBJECTIVE_REGISTRY
+from .services.distribution.config import DEFAULT_SOLVER_BACKEND, SOLVER_BACKEND_CHOICES
+from .services.shift_forecast_multi_method import (
+    DEFAULT_EVALUATION_DAYS,
+    FORECAST_COMPARE_METHODS,
+    FORECAST_METHODS,
+)
 
 
 class DoctorSerializer(serializers.ModelSerializer):
@@ -363,6 +370,16 @@ class DistributionRunSerializer(serializers.Serializer):
     date_from = serializers.DateField(required=False, allow_null=True)
     date_to = serializers.DateField(required=False, allow_null=True)
     use_mip = serializers.BooleanField(required=False, default=True)
+    objective = serializers.ChoiceField(
+        choices=tuple(OBJECTIVE_REGISTRY.keys()),
+        required=False,
+        default="weighted_tardiness_lexicographic",
+    )
+    solver_backend = serializers.ChoiceField(
+        choices=SOLVER_BACKEND_CHOICES,
+        required=False,
+        default=DEFAULT_SOLVER_BACKEND,
+    )
 
     def validate(self, attrs):
         date_from = attrs.get("date_from")
@@ -387,6 +404,17 @@ class DistributionConfirmSerializer(serializers.Serializer):
 class ShiftForecastQuerySerializer(serializers.Serializer):
     date_from = serializers.DateField(required=False, allow_null=True)
     date_to = serializers.DateField(required=False, allow_null=True)
+    method = serializers.CharField(required=False, default="weekday_mean")
+    recent_weeks = serializers.IntegerField(required=False, min_value=1, max_value=12, default=4)
+    moving_window_days = serializers.IntegerField(required=False, min_value=1, max_value=90, default=14)
+
+    def validate_method(self, value):
+        if value not in FORECAST_METHODS:
+            allowed = ", ".join(FORECAST_METHODS.keys())
+            raise serializers.ValidationError(
+                f"Неизвестный метод прогнозирования: {value}. Доступно: {allowed}"
+            )
+        return value
 
     def validate(self, attrs):
         date_from = attrs.get("date_from")
@@ -396,6 +424,60 @@ class ShiftForecastQuerySerializer(serializers.Serializer):
                 {"date_to": "date_to не может быть раньше date_from"}
             )
         return attrs
+
+
+class ForecastCompareQuerySerializer(serializers.Serializer):
+    methods = serializers.CharField(required=False, allow_blank=True)
+    evaluation_start_date = serializers.DateField(required=False, allow_null=True)
+    evaluation_end_date = serializers.DateField(required=False, allow_null=True)
+    evaluation_days = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        max_value=90,
+        default=DEFAULT_EVALUATION_DAYS,
+    )
+    recent_weeks = serializers.IntegerField(required=False, min_value=1, max_value=12, default=4)
+    moving_window_days = serializers.IntegerField(required=False, min_value=1, max_value=90, default=14)
+    min_train_days = serializers.IntegerField(required=False, min_value=7, max_value=365, default=21)
+
+    def validate_methods(self, value):
+        if not value:
+            return []
+
+        methods = [item.strip() for item in value.split(",") if item.strip()]
+        invalid = [item for item in methods if item not in FORECAST_COMPARE_METHODS]
+        if invalid:
+            allowed = ", ".join(FORECAST_COMPARE_METHODS)
+            raise serializers.ValidationError(
+                f"Неизвестные методы: {', '.join(invalid)}. Доступно: {allowed}"
+            )
+
+        return list(dict.fromkeys(methods))
+
+    def validate(self, attrs):
+        evaluation_start_date = attrs.get("evaluation_start_date")
+        evaluation_end_date = attrs.get("evaluation_end_date")
+
+        if bool(evaluation_start_date) != bool(evaluation_end_date):
+            raise serializers.ValidationError(
+                {
+                    "evaluation_start_date": (
+                        "evaluation_start_date и evaluation_end_date нужно передавать вместе"
+                    )
+                }
+            )
+
+        if (
+            evaluation_start_date
+            and evaluation_end_date
+            and evaluation_start_date > evaluation_end_date
+        ):
+            raise serializers.ValidationError(
+                {"evaluation_end_date": "evaluation_end_date не может быть раньше evaluation_start_date"}
+            )
+
+        return attrs
+
 
 
 class ForecastModalitySerializer(serializers.Serializer):
@@ -409,6 +491,7 @@ class ForecastChartPointSerializer(serializers.Serializer):
     date = serializers.CharField()
     label = serializers.CharField()
     expected_studies_total = serializers.FloatField()
+    expected_up_total = serializers.FloatField(required=False)
     min_doctors = serializers.IntegerField()
 
 
@@ -437,6 +520,8 @@ class ShiftForecastResponseSerializer(serializers.Serializer):
     history_start_date = serializers.CharField(allow_null=True)
     history_end_date = serializers.CharField(allow_null=True)
     generated_at = serializers.CharField()
+    method = serializers.CharField(required=False)
+    method_label = serializers.CharField(required=False)
     summary = ShiftForecastSummarySerializer()
     chart = ForecastChartPointSerializer(many=True)
     days = ForecastDaySerializer(many=True)

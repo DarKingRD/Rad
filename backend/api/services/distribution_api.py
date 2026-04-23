@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 
 from django.core.cache import cache
@@ -32,7 +32,7 @@ def parse_distribution_datetime_start(value: str | None):
 def parse_distribution_datetime_end(value: str | None):
     if not value:
         return None
-    return datetime.strptime(value, "%Y-%m-%d")
+    return datetime.strptime(value, "%Y-%m-%d") + timedelta(days=1)
 
 
 def get_distribution_info(target_date=None):
@@ -99,8 +99,21 @@ def get_distribution_preview_info(target_date):
     }
 
 
-def run_distribution(*, target_date=None, preview=True, date_from=None, date_to=None, use_mip=True):
-    service = DistributionService(target_date=target_date)
+def run_distribution(
+    *,
+    target_date=None,
+    preview=True,
+    date_from=None,
+    date_to=None,
+    use_mip=True,
+    objective=None,
+    solver_backend=None,
+):
+    service = DistributionService(
+        target_date=target_date,
+        objective=objective,
+        solver_backend=solver_backend,
+    )
     service.set_preview_mode(preview)
 
     result = service.distribute(

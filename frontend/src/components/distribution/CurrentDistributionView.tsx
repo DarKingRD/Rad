@@ -35,6 +35,38 @@ import {
 } from './utils/distributionConstants';
 import { getPriorityColor, getPriorityLabel, getTodayString } from './utils/distributionFormatters';
 
+type DistributionObjective =
+  | 'weighted_tardiness_lexicographic'
+  | 'tardiness_lexicographic'
+  | 'max_assignments'
+  | 'priority_tier_tardiness_multipass';
+
+type SolverBackend = 'cbc' | 'branch_price';
+
+const OBJECTIVE_OPTIONS: Array<{ value: DistributionObjective; label: string }> = [
+  {
+    value: 'weighted_tardiness_lexicographic',
+    label: 'Взвешенная просрочка',
+  },
+  {
+    value: 'tardiness_lexicographic',
+    label: 'Обычная просрочка',
+  },
+  {
+    value: 'priority_tier_tardiness_multipass',
+    label: 'CITO → ASAP → normal',
+  },
+  {
+    value: 'max_assignments',
+    label: 'Максимум назначений',
+  },
+];
+
+const SOLVER_OPTIONS: Array<{ value: SolverBackend; label: string }> = [
+  { value: 'cbc', label: 'CBC' },
+  { value: 'branch_price', label: 'Branch & Price (beta)' },
+];
+
 const CurrentDistributionView: React.FC = () => {
   const [studiesTotal, setStudiesTotal] = useState(0);
   const [studies, setStudies] = useState<Study[]>([]);
@@ -58,6 +90,8 @@ const CurrentDistributionView: React.FC = () => {
   const [distributionDateFrom, setDistributionDateFrom] = useState('');
   const [distributionDateTo, setDistributionDateTo] = useState('');
   const [useMip, setUseMip] = useState(true);
+  const [objective, setObjective] = useState<DistributionObjective>('weighted_tardiness_lexicographic');
+  const [solverBackend, setSolverBackend] = useState<SolverBackend>('cbc');
 
   const [mobileTab, setMobileTab] = useState<MobileTab>('studies');
   const [currentPage, setCurrentPage] = useState(1);
@@ -171,6 +205,8 @@ const CurrentDistributionView: React.FC = () => {
         date_from: distributionDateFrom || undefined,
         date_to: distributionDateTo || undefined,
         use_mip: useMip,
+        objective,
+        solver_backend: solverBackend,
       });
 
       setDistResult(result);
@@ -359,6 +395,41 @@ const CurrentDistributionView: React.FC = () => {
               />
               <span className="text-sm text-slate-700">Использовать MIP</span>
             </label>
+
+            <div className="min-w-[220px]">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Objective
+              </label>
+              <select
+                value={objective}
+                onChange={(e) => setObjective(e.target.value as DistributionObjective)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+              >
+                {OBJECTIVE_OPTIONS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="min-w-[180px]">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Решатель
+              </label>
+              <select
+                value={solverBackend}
+                onChange={(e) => setSolverBackend(e.target.value as SolverBackend)}
+                disabled={!useMip}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                {SOLVER_OPTIONS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             <button
               onClick={handleRunDistribution}

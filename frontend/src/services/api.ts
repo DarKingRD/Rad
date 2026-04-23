@@ -68,6 +68,12 @@ type DistributionPreviewPayload = {
   date_from?: string;
   date_to?: string;
   use_mip?: boolean;
+  objective?:
+    | 'weighted_tardiness_lexicographic'
+    | 'tardiness_lexicographic'
+    | 'max_assignments'
+    | 'priority_tier_tardiness_multipass';
+  solver_backend?: 'cbc' | 'branch_price';
 };
 
 type DistributionConfirmResponse = {

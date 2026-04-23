@@ -1,7 +1,6 @@
 """
 Конфигурация сервиса оффлайн-распределения исследований.
 """
-import os
 from typing import Dict
 
 from ..modality_catalog import (
@@ -28,47 +27,15 @@ DEFAULT_STUDY_UP_VALUE = 0.25
 
 TIME_SLOT_MINUTES = 5
 
-MIP_TIME_LIMIT = 300
+MIP_TIME_LIMIT = 10000
 MIP_GAP_REL = 0.01
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, default))
-    except (TypeError, ValueError):
-        return default
+SOLVER_BACKEND_CHOICES = ("cbc", "branch_price")
+DEFAULT_SOLVER_BACKEND = "cbc"
 
+CBC_THREADS = 1
 
-def _env_optional_int(name: str, default: int | None) -> int | None:
-    value = os.getenv(name)
-    if value in (None, ""):
-        return default
-    if value.strip().lower() in {"none", "null", "0"}:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-
-_CPU_COUNT = os.cpu_count() or 1
-
-# CBC threads help only when branch-and-bound has a search tree. For root-only
-# solves they are expected to stay idle, but the value is useful for benchmarks.
-CBC_THREADS = max(1, _env_int("CBC_THREADS", min(4, _CPU_COUNT)))
-
-# This cap has the biggest effect on model size. With 50 variants the sample log
-# creates 858k MPS columns; try 10/15/20 for speed-quality experiments.
-EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR = max(
-    1,
-    _env_int("EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR", 50),
-)
-EXACT_MAX_OPTIONS = _env_optional_int("EXACT_MAX_OPTIONS", None)
-
-# Candidate generation is independent per doctor, so it can be parallelized even
-# when CBC itself solves the MILP at the root node.
-EXACT_OPTION_BUILD_WORKERS = max(
-    1,
-    _env_int("EXACT_OPTION_BUILD_WORKERS", 1),
-)
-EXACT_PARALLEL_MIN_DOCTORS = max(2, _env_int("EXACT_PARALLEL_MIN_DOCTORS", 2))
+# Ограничения размера модели отключены: CBC получает полный набор вариантов.
+EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR = None
+EXACT_MAX_OPTIONS = None

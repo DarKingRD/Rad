@@ -5,26 +5,168 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from typing import Callable, Dict, List, Optional
 
 from .config import (
     EXACT_MAX_OPTIONS,
     EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR,
-    EXACT_OPTION_BUILD_WORKERS,
-    EXACT_PARALLEL_MIN_DOCTORS,
 )
+from .branch_price_solver import solve_branch_price_mip
 from .entities import DoctorData, ScheduleOption, StudyData
 from .time_utils import add_work_minutes, execution_segments, occupied_slot_indices, slot_boundaries
 
 
-def make_solver(*, pulp, time_limit: float, gap_rel: float, threads: int, msg: int):
-    """Создать CBC-решатель без привязки к локальному пути."""
-    return pulp.PULP_CBC_CMD(
+def _solver_available(solver) -> bool:
+    try:
+        return bool(solver.available())
+    except Exception:
+        return True
+
+
+def make_solver(
+    *,
+    pulp,
+    time_limit: float,
+    gap_rel: float,
+    threads: int,
+    msg: int,
+):
+    """Создать обычный CBC-решатель без дополнительных режимов."""
+    threads = max(1, int(threads or 1))
+    solver = pulp.PULP_CBC_CMD(
         timeLimit=time_limit,
         gapRel=gap_rel,
-        threads=max(1, int(threads or 1)),
+        threads=threads,
         msg=msg,
+    )
+    if not _solver_available(solver):
+        raise RuntimeError(f"CBC executable не найден: {getattr(solver, 'path', None)}")
+    return solver, "CBC", threads
+
+
+def _build_solution_payload(
+    *,
+    chosen_option_ids: set[int],
+    options: List[ScheduleOption],
+    studies: List[StudyData],
+    doctors: List[DoctorData],
+    unassigned_meta_by_study: Dict[int, Dict],
+    solver_obj: float,
+    log: Callable[[str], None],
+):
+    chosen_study_indices = set()
+    assignment: Dict[str, int] = {}
+    details: Dict[str, Dict] = {}
+
+    for option in options:
+        if option.option_id not in chosen_option_ids:
+            continue
+        study = studies[option.study_idx]
+        doctor = doctors[option.doctor_idx]
+        chosen_study_indices.add(option.study_idx)
+        assignment[study.research_number] = doctor.id
+        details[study.research_number] = {
+            "doctor_id": doctor.id,
+            "doctor_name": doctor.name,
+            "start_dt": option.start_dt,
+            "finish_dt": option.finish_dt,
+            **{key: float(value) for key, value in option.metrics.items()},
+        }
+
+    unassigned_meta = {
+        studies[index].research_number: dict(unassigned_meta_by_study[index])
+        for index in range(len(studies))
+        if index not in chosen_study_indices
+    }
+    log(
+        f"Exact solver: назначено {len(assignment)} / {len(studies)}, "
+        f"неназначено {len(unassigned_meta)} / {len(studies)}"
+    )
+    return assignment, details, float(solver_obj), unassigned_meta
+
+
+def _solve_with_pulp_mip(
+    *,
+    options: List[ScheduleOption],
+    options_by_study: Dict[int, List[int]],
+    options_by_doctor: Dict[int, List[int]],
+    options_by_doctor_slot: Dict[tuple, List[int]],
+    studies: List[StudyData],
+    doctors: List[DoctorData],
+    unassigned_meta_by_study: Dict[int, Dict],
+    base_constant: float,
+    reduced_cost_by_option: Dict[int, float],
+    up_by_option: Dict[int, float],
+    mip_time_limit: float,
+    mip_gap_rel: float,
+    mip_threads: int,
+    objective_code: str,
+    log: Callable[[str], None],
+):
+    import pulp
+
+    t_build_model = time.perf_counter()
+    problem = pulp.LpProblem(f"Exact_{objective_code}", pulp.LpMinimize)
+    x = {option.option_id: pulp.LpVariable(f"x_{option.option_id}", cat="Binary") for option in options}
+
+    for study_idx, option_ids in options_by_study.items():
+        if option_ids:
+            problem += (pulp.lpSum(x[option_id] for option_id in option_ids) <= 1, f"StudyChoice_{study_idx}")
+
+    for (doctor_idx, slot_idx), option_ids in options_by_doctor_slot.items():
+        problem += (pulp.lpSum(x[option_id] for option_id in option_ids) <= 1, f"Cap_d{doctor_idx}_s{slot_idx}")
+
+    for doctor_idx, doctor in enumerate(doctors):
+        doctor_option_ids = options_by_doctor.get(doctor_idx, [])
+        if doctor_option_ids:
+            problem += (
+                pulp.lpSum(up_by_option[option_id] * x[option_id] for option_id in doctor_option_ids)
+                <= doctor.max_up,
+                f"UP_{doctor_idx}",
+            )
+
+    problem += (
+        base_constant + pulp.lpSum(reduced_cost_by_option[option_id] * x[option_id] for option_id in x),
+        "Obj",
+    )
+    log(f"TIMING build_model_cbc: {time.perf_counter() - t_build_model:.2f}s")
+
+    solver, executable_label, effective_threads = make_solver(
+        pulp=pulp,
+        time_limit=mip_time_limit,
+        gap_rel=mip_gap_rel,
+        threads=mip_threads,
+        msg=1,
+    )
+    log(
+        f"{executable_label} параметры: timeLimit={mip_time_limit}, "
+        f"gapRel={mip_gap_rel}, threads={effective_threads}"
+    )
+
+    t_solve = time.perf_counter()
+    problem.solve(solver)
+    log(f"TIMING cbc_solve: {time.perf_counter() - t_solve:.2f}s")
+
+    status = pulp.LpStatus[problem.status]
+    solver_obj = float(pulp.value(problem.objective) or 0.0)
+    log(f"{executable_label}: статус={status}, obj={solver_obj:.6f}")
+
+    if status not in {"Optimal", "Integer Feasible"}:
+        raise RuntimeError(f"{executable_label} не дал корректного решения: {status}")
+
+    chosen_option_ids = {
+        option_id
+        for option_id, variable in x.items()
+        if (pulp.value(variable) or 0.0) > 0.5
+    }
+    return _build_solution_payload(
+        chosen_option_ids=chosen_option_ids,
+        options=options,
+        studies=studies,
+        doctors=doctors,
+        unassigned_meta_by_study=unassigned_meta_by_study,
+        solver_obj=solver_obj,
+        log=log,
     )
 
 
@@ -115,7 +257,10 @@ def _build_rows_for_doctor(
                 )
 
             ranked.sort(key=lambda item: (item[0], item[1], item[2]))
-            rows.extend(ranked[:EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR])
+            if EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR is None:
+                rows.extend(ranked)
+            else:
+                rows.extend(ranked[:EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR])
 
     return rows
 
@@ -139,47 +284,27 @@ def build_exact_options(
     prebooked_map = doc_prebooked_minutes or {}
     raw_rows: List[tuple] = []
 
-    worker_count = min(EXACT_OPTION_BUILD_WORKERS, len(doctors))
-    use_parallel = worker_count > 1 and len(doctors) >= EXACT_PARALLEL_MIN_DOCTORS
+    log(f"Последовательная генерация options: doctors={len(doctors)}")
+    for doctor_idx, doctor in enumerate(doctors):
+        rows = _build_rows_for_doctor(
+            doctor_idx=doctor_idx,
+            doctor=doctor,
+            studies=studies,
+            objective=objective,
+            priority_weights=priority_weights,
+            planning_now=planning_now,
+            prebooked_minutes=prebooked_map.get(doctor.id, 0.0),
+        )
+        raw_rows.extend(rows)
+        log(f"  options doctor_idx={doctor_idx}, doctor_id={doctor.id}: {len(rows)}")
 
-    if use_parallel:
-        try:
-            log(f"Параллельная генерация options: workers={worker_count}, doctors={len(doctors)}")
-            with ProcessPoolExecutor(max_workers=worker_count) as executor:
-                futures = [
-                    executor.submit(
-                        _build_rows_for_doctor,
-                        doctor_idx=doctor_idx,
-                        doctor=doctor,
-                        studies=studies,
-                        objective=objective,
-                        priority_weights=priority_weights,
-                        planning_now=planning_now,
-                        prebooked_minutes=prebooked_map.get(doctor.id, 0.0),
-                    )
-                    for doctor_idx, doctor in enumerate(doctors)
-                ]
-                for future in futures:
-                    raw_rows.extend(future.result())
-        except Exception as exc:
-            log(f"Параллельная генерация options недоступна ({exc}) → последовательный режим")
-            raw_rows = []
-            use_parallel = False
-
-    if not use_parallel:
-        log(f"Последовательная генерация options: doctors={len(doctors)}")
-        for doctor_idx, doctor in enumerate(doctors):
-            raw_rows.extend(
-                _build_rows_for_doctor(
-                    doctor_idx=doctor_idx,
-                    doctor=doctor,
-                    studies=studies,
-                    objective=objective,
-                    priority_weights=priority_weights,
-                    planning_now=planning_now,
-                    prebooked_minutes=prebooked_map.get(doctor.id, 0.0),
-                )
-            )
+    if EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR is None:
+        log("Лимит вариантов на исследование/врача отключён")
+    else:
+        log(
+            "Лимит вариантов на исследование/врача: "
+            f"{EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR}"
+        )
 
     if EXACT_MAX_OPTIONS is not None and len(raw_rows) > EXACT_MAX_OPTIONS:
         raw_rows.sort(key=lambda item: (item[0], item[1], item[3], item[4]))
@@ -261,30 +386,51 @@ def solve_exact_mip(
     priority_weights: Dict[str, float],
     mip_time_limit: float,
     mip_gap_rel: float,
-    mip_threads: int = 4,
+    mip_threads: int = 1,
+    solver_backend: str = "cbc",
     planning_now=None,
     solve_greedy_fn: Callable,
     planning_horizon_end_fn: Callable,
     log: Optional[Callable[[str], None]] = None,
     doc_prebooked_minutes: Optional[Dict[int, float]] = None,
 ):
-    """Решить задачу точным MILP или откатиться на жадный fallback."""
+    """Решить задачу точным MILP через обычный CBC или откатиться на жадный fallback."""
     log = log or (lambda _msg: None)
+    solver_backend = (solver_backend or "cbc").lower()
 
-    try:
-        import pulp
-    except ImportError:
-        log("PuLP не установлен → используем жадный fallback")
-        return build_fallback_result(
-            studies=studies,
-            doctors=doctors,
-            solve_greedy_fn=solve_greedy_fn,
-            planning_horizon_end_fn=planning_horizon_end_fn,
-            objective=objective,
-            doc_prebooked_minutes=doc_prebooked_minutes,
-        )
+    log(
+        f"Exact solver: backend={solver_backend}, studies={len(studies)}, "
+        f"doctors={len(doctors)}, objective={objective_code}"
+    )
 
-    log(f"Exact MILP: studies={len(studies)}, doctors={len(doctors)}, objective={objective_code}")
+    horizon_end = planning_horizon_end_fn(doctors)
+    unassigned_meta_by_study = {
+        index: objective.unassigned_metrics(study, horizon_end)
+        for index, study in enumerate(studies)
+    }
+    unassigned_cost_by_study = {
+        index: float(meta["objective_value"])
+        for index, meta in unassigned_meta_by_study.items()
+    }
+    base_constant = float(sum(unassigned_cost_by_study.values()))
+
+    if solver_backend == "branch_price":
+        try:
+            return solve_branch_price_mip(
+                studies=studies,
+                doctors=doctors,
+                objective=objective,
+                priority_weights=priority_weights,
+                planning_now=planning_now,
+                base_constant=base_constant,
+                unassigned_meta_by_study=unassigned_meta_by_study,
+                unassigned_cost_by_study=unassigned_cost_by_study,
+                log=log,
+                doc_prebooked_minutes=doc_prebooked_minutes,
+            )
+        except Exception as exc:
+            log(f"BranchPrice ошибка: {exc} → fallback к обычному CBC")
+            solver_backend = "cbc"
 
     t_build_options = time.perf_counter()
     options, options_by_study, options_by_doctor, options_by_doctor_slot = build_exact_options(
@@ -301,16 +447,6 @@ def solve_exact_mip(
     if not options and studies:
         log("  Нет допустимых стартов → все исследования переходят в неназначенные")
 
-    horizon_end = planning_horizon_end_fn(doctors)
-    unassigned_meta_by_study = {
-        index: objective.unassigned_metrics(study, horizon_end)
-        for index, study in enumerate(studies)
-    }
-    unassigned_cost_by_study = {
-        index: float(meta["objective_value"])
-        for index, meta in unassigned_meta_by_study.items()
-    }
-    base_constant = float(sum(unassigned_cost_by_study.values()))
     reduced_cost_by_option = {
         option.option_id: float(option.objective_value - unassigned_cost_by_study[option.study_idx])
         for option in options
@@ -321,89 +457,23 @@ def solve_exact_mip(
     }
 
     try:
-        t_build_model = time.perf_counter()
-        problem = pulp.LpProblem(f"Exact_{objective_code}", pulp.LpMinimize)
-        x = {option.option_id: pulp.LpVariable(f"x_{option.option_id}", cat="Binary") for option in options}
-
-        for study_idx, option_ids in options_by_study.items():
-            if option_ids:
-                problem += (pulp.lpSum(x[option_id] for option_id in option_ids) <= 1, f"StudyChoice_{study_idx}")
-
-        for (doctor_idx, slot_idx), option_ids in options_by_doctor_slot.items():
-            problem += (pulp.lpSum(x[option_id] for option_id in option_ids) <= 1, f"Cap_d{doctor_idx}_s{slot_idx}")
-
-        for doctor_idx, doctor in enumerate(doctors):
-            doctor_option_ids = options_by_doctor.get(doctor_idx, [])
-            if doctor_option_ids:
-                problem += (
-                    pulp.lpSum(up_by_option[option_id] * x[option_id] for option_id in doctor_option_ids)
-                    <= doctor.max_up,
-                    f"UP_{doctor_idx}",
-                )
-
-        problem += (
-            base_constant + pulp.lpSum(reduced_cost_by_option[option_id] * x[option_id] for option_id in x),
-            "Obj",
+        return _solve_with_pulp_mip(
+            options=options,
+            options_by_study=options_by_study,
+            options_by_doctor=options_by_doctor,
+            options_by_doctor_slot=options_by_doctor_slot,
+            studies=studies,
+            doctors=doctors,
+            unassigned_meta_by_study=unassigned_meta_by_study,
+            base_constant=base_constant,
+            reduced_cost_by_option=reduced_cost_by_option,
+            up_by_option=up_by_option,
+            mip_time_limit=mip_time_limit,
+            mip_gap_rel=mip_gap_rel,
+            mip_threads=mip_threads,
+            objective_code=objective_code,
+            log=log,
         )
-        log(f"TIMING build_model: {time.perf_counter() - t_build_model:.2f}s")
-
-        solver = make_solver(
-            pulp=pulp,
-            time_limit=mip_time_limit,
-            gap_rel=mip_gap_rel,
-            threads=mip_threads,
-            msg=1,
-        )
-        log(f"CBC параметры: timeLimit={mip_time_limit}, gapRel={mip_gap_rel}, threads={max(1, int(mip_threads or 1))}")
-
-        t_cbc = time.perf_counter()
-        problem.solve(solver)
-        log(f"TIMING cbc_solve: {time.perf_counter() - t_cbc:.2f}s")
-
-        status = pulp.LpStatus[problem.status]
-        solver_obj = float(pulp.value(problem.objective) or 0.0)
-        log(f"CBC: статус={status}, obj={solver_obj:.6f}")
-
-        if status not in {"Optimal", "Integer Feasible"}:
-            log("  Exact MILP не дал корректного решения → жадный fallback")
-            return build_fallback_result(
-                studies=studies,
-                doctors=doctors,
-                solve_greedy_fn=solve_greedy_fn,
-                planning_horizon_end_fn=planning_horizon_end_fn,
-                objective=objective,
-                doc_prebooked_minutes=doc_prebooked_minutes,
-            )
-
-        chosen_study_indices = set()
-        assignment: Dict[str, int] = {}
-        details: Dict[str, Dict] = {}
-
-        for option in options:
-            if (pulp.value(x[option.option_id]) or 0.0) <= 0.5:
-                continue
-            study = studies[option.study_idx]
-            doctor = doctors[option.doctor_idx]
-            chosen_study_indices.add(option.study_idx)
-            assignment[study.research_number] = doctor.id
-            details[study.research_number] = {
-                "doctor_id": doctor.id,
-                "doctor_name": doctor.name,
-                "start_dt": option.start_dt,
-                "finish_dt": option.finish_dt,
-                **{key: float(value) for key, value in option.metrics.items()},
-            }
-
-        unassigned_meta = {
-            studies[index].research_number: dict(unassigned_meta_by_study[index])
-            for index in range(len(studies))
-            if index not in chosen_study_indices
-        }
-        log(
-            f"Exact MILP: назначено {len(assignment)} / {len(studies)}, "
-            f"неназначено {len(unassigned_meta)} / {len(studies)}"
-        )
-        return assignment, details, float(solver_obj), unassigned_meta
 
     except Exception as exc:
         log(f"CBC ошибка: {exc} → жадный fallback")

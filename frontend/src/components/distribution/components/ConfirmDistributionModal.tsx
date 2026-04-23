@@ -118,6 +118,8 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
     ],
     [distResult?.priority_breakdown]
   );
+  const resultSummary = distResult?.summary ?? distResult;
+  const citoStats = distResult?.priority_breakdown?.cito;
 
   const handleReassignChange = (assignment: Assignment, value: string) => {
     const doctorId = Number(value);
@@ -207,17 +209,17 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                     <span className="font-medium">CITO</span>
                   </div>
                   <div className="text-2xl font-bold text-red-800">
-                    {distResult.cito_assigned ?? 0} / {distResult.cito_total ?? 0}
+                    {citoStats?.assigned ?? resultSummary?.cito_assigned ?? 0} / {citoStats?.total ?? resultSummary?.cito_total ?? 0}
                   </div>
                 </div>
 
                 <div className="border rounded-xl p-4 bg-blue-50">
                   <div className="flex items-center gap-2 text-blue-700 mb-2">
                     <Clock size={18} />
-                    <span className="font-medium">Средняя просрочка</span>
+                    <span className="font-medium">Просрочка осталась</span>
                   </div>
                   <div className="text-2xl font-bold text-blue-800">
-                    {distResult.avg_tardiness ?? 0} ч
+                    {resultSummary?.overdue_remaining ?? resultSummary?.overdue_unassigned ?? 0}
                   </div>
                 </div>
               </div>
@@ -280,18 +282,50 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                       Без назначения: <strong>{unassignedAssignments.length}</strong>
                     </div>
                      <div>
-                      Доля назначений: <strong>{(distResult.assignment_rate_percent ?? 0).toFixed(2)}%</strong>
+                      Доля назначений: <strong>{(resultSummary?.assignment_rate_percent ?? 0).toFixed(2)}%</strong>
                     </div>
                     <div>
-                      Просрочка (все):{' '}
+                      Просроченных было:{' '}
                       <strong>
-                        {distResult.overdue_total ?? 0} ({(distResult.overdue_rate_percent ?? 0).toFixed(2)}%)
+                        {resultSummary?.overdue_total ?? 0} ({(resultSummary?.overdue_rate_percent ?? 0).toFixed(2)}% от очереди)
                       </strong>
                     </div>
                     <div>
-                      P50/P95/P99 просрочки:{' '}
+                      Часов просрочки в очереди:{' '}
+                      <strong>{(resultSummary?.queue_overdue_hours_total ?? 0).toFixed(2)}ч</strong>
+                    </div>
+                    <div>
+                      Просроченных назначено:{' '}
+                      <strong>{resultSummary?.overdue_assigned ?? 0}</strong>
+                    </div>
+                    <div>
+                      Назначено часов просрочки:{' '}
+                      <strong>{(resultSummary?.queue_overdue_hours_assigned ?? 0).toFixed(2)}ч</strong>
+                    </div>
+                    <div>
+                      Просроченных осталось:{' '}
+                      <strong>{resultSummary?.overdue_remaining ?? resultSummary?.overdue_unassigned ?? 0}</strong>
+                    </div>
+                    <div>
+                      Осталось часов просрочки:{' '}
+                      <strong>{(resultSummary?.queue_overdue_hours_remaining ?? 0).toFixed(2)}ч</strong>
+                    </div>
+                    <div>
+                      Просрочка закрыта:{' '}
                       <strong>
-                        {(distResult.tardiness_p50 ?? 0).toFixed(2)}ч / {(distResult.tardiness_p95 ?? 0).toFixed(2)}ч / {(distResult.tardiness_p99 ?? 0).toFixed(2)}ч
+                        {resultSummary?.overdue_cleared ?? resultSummary?.overdue_assigned ?? 0} иссл. / {(resultSummary?.queue_overdue_hours_assigned ?? 0).toFixed(2)}ч ({(resultSummary?.queue_overdue_hours_cleared_percent ?? resultSummary?.overdue_cleared_percent ?? 0).toFixed(2)}%)
+                      </strong>
+                    </div>
+                    <div>
+                      Завершатся с просрочкой:{' '}
+                      <strong>
+                        {resultSummary?.scheduled_overdue_total ?? 0} иссл. / {(resultSummary?.scheduled_overdue_hours_total ?? 0).toFixed(2)}ч
+                      </strong>
+                    </div>
+                    <div>
+                      Назначено с просрочкой:{' '}
+                      <strong>
+                        {resultSummary?.scheduled_overdue_assigned ?? 0} иссл. / {(resultSummary?.scheduled_overdue_hours_assigned ?? 0).toFixed(2)}ч
                       </strong>
                     </div>
                   </div>
@@ -311,10 +345,12 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                         <th className="py-2 pr-2">Всего</th>
                         <th className="py-2 pr-2">Доля</th>
                         <th className="py-2 pr-2">Назначено</th>
-                        <th className="py-2 pr-2">Просрочка</th>
-                        <th className="py-2 pr-2">Просрочка %</th>
-                        <th className="py-2 pr-2">Часы просрочки</th>
-                        <th className="py-2">P50/P95/P99 (ч)</th>
+                        <th className="py-2 pr-2">Проср. на старте</th>
+                        <th className="py-2 pr-2">С проср. в расписании</th>
+                        <th className="py-2 pr-2">Назначено с проср.</th>
+                        <th className="py-2 pr-2">Часы назнач.</th>
+                        <th className="py-2 pr-2">Не назначено с проср.</th>
+                        <th className="py-2">Часы не назнач.</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -327,14 +363,22 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
                             {row.data?.assigned ?? 0} ({(row.data?.assigned_rate_percent ?? 0).toFixed(2)}%)
                           </td>
                           <td className="py-2 pr-2">
-                            {row.data?.overdue_total ?? 0} / {row.data?.total ?? 0}
+                            {row.data?.overdue_total ?? 0} / {row.data?.total ?? 0} ({(row.data?.overdue_rate_percent ?? 0).toFixed(2)}%)
                           </td>
-                          <td className="py-2 pr-2">{(row.data?.overdue_rate_percent ?? 0).toFixed(2)}%</td>
                           <td className="py-2 pr-2">
-                            {(row.data?.overdue_hours_total ?? 0).toFixed(2)} (avg {(row.data?.overdue_hours_avg ?? 0).toFixed(2)})
+                            {row.data?.scheduled_overdue_total ?? 0}
+                          </td>
+                          <td className="py-2 pr-2">
+                            {row.data?.scheduled_overdue_assigned ?? 0}
+                          </td>
+                          <td className="py-2 pr-2">
+                            {(row.data?.scheduled_overdue_hours_assigned ?? 0).toFixed(2)}ч
+                          </td>
+                          <td className="py-2 pr-2">
+                            {row.data?.scheduled_overdue_unassigned ?? 0}
                           </td>
                           <td className="py-2">
-                            {(row.data?.tardiness_p50 ?? 0).toFixed(2)} / {(row.data?.tardiness_p95 ?? 0).toFixed(2)} / {(row.data?.tardiness_p99 ?? 0).toFixed(2)}
+                            {(row.data?.scheduled_overdue_hours_unassigned ?? 0).toFixed(2)}ч
                           </td>
                         </tr>
                       ))}
