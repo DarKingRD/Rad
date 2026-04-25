@@ -9,6 +9,9 @@ import type {
   DashboardStats,
   ChartPoint,
   ShiftForecastResponse,
+  DistributionConfirmResponse,
+  DistributionInfo,
+  DistributionPreviewPayload,
 } from '../types';
 
 type ApiListResponse<T> = T[] | { results: T[] };
@@ -41,45 +44,10 @@ type ShiftForecastParams = {
 type StudyAssignResponse = Study;
 type StudyStatusResponse = Study;
 
-type DistributionInfo = {
-  pending_studies: number;
-  available_doctors: number;
-  study_date_range: {
-    min: string | null;
-    max: string | null;
-  };
-  schedule_date_range: {
-    min: string | null;
-    max: string | null;
-  };
-  message: string;
-};
-
 type DistributionPreviewInfo = {
   pending_studies: number;
   available_doctors: number;
   target_date: string;
-  message: string;
-};
-
-type DistributionPreviewPayload = {
-  date: string;
-  preview?: boolean;
-  date_from?: string;
-  date_to?: string;
-  use_mip?: boolean;
-  objective?:
-    | 'weighted_tardiness_lexicographic'
-    | 'tardiness_lexicographic'
-    | 'max_assignments'
-    | 'priority_tier_tardiness_multipass';
-  solver_backend?: 'cbc' | 'branch_price';
-};
-
-type DistributionConfirmResponse = {
-  status: string;
-  assigned: number;
-  distribution_id: string;
   message: string;
 };
 

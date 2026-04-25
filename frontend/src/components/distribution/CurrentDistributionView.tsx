@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
   Calendar,
@@ -16,6 +16,8 @@ import type {
   DoctorDistStat,
   DoctorWithLoad,
   DistributionInfo,
+  DistributionObjective,
+  SolverBackend,
   Study,
 } from '../../types';
 
@@ -34,14 +36,6 @@ import {
   type MobileTab,
 } from './utils/distributionConstants';
 import { getPriorityColor, getPriorityLabel, getTodayString } from './utils/distributionFormatters';
-
-type DistributionObjective =
-  | 'weighted_tardiness_lexicographic'
-  | 'tardiness_lexicographic'
-  | 'max_assignments'
-  | 'priority_tier_tardiness_multipass';
-
-type SolverBackend = 'cbc' | 'branch_price';
 
 const OBJECTIVE_OPTIONS: Array<{ value: DistributionObjective; label: string }> = [
   {
@@ -67,7 +61,7 @@ const SOLVER_OPTIONS: Array<{ value: SolverBackend; label: string }> = [
   { value: 'branch_price', label: 'Branch & Price (beta)' },
 ];
 
-const CurrentDistributionView: React.FC = () => {
+const CurrentDistributionView = () => {
   const [studiesTotal, setStudiesTotal] = useState(0);
   const [studies, setStudies] = useState<Study[]>([]);
   const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);

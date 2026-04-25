@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -30,7 +30,7 @@ interface ConfirmDistributionModalProps {
 
 const PAGE_SIZE = 10;
 
-const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
+const ConfirmDistributionModal = ({
   isOpen,
   distResult,
   doctors,
@@ -38,7 +38,7 @@ const ConfirmDistributionModal: React.FC<ConfirmDistributionModalProps> = ({
   onCancel,
   onReassign,
   confirming,
-}) => {
+}: ConfirmDistributionModalProps) => {
   const [activeTab, setActiveTab] = useState<ConfirmTab>('summary');
   const [search, setSearch] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<AssignmentFilter>('all');

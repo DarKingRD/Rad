@@ -254,6 +254,31 @@ export interface DistResult extends DistributionSummary {
   _savedDate?: string;
 }
 
+export type DistributionObjective =
+  | 'weighted_tardiness_lexicographic'
+  | 'tardiness_lexicographic'
+  | 'max_assignments'
+  | 'priority_tier_tardiness_multipass';
+
+export type SolverBackend = 'cbc' | 'branch_price';
+
+export interface DistributionPreviewPayload {
+  date: string;
+  preview?: boolean;
+  date_from?: string;
+  date_to?: string;
+  use_mip?: boolean;
+  objective?: DistributionObjective;
+  solver_backend?: SolverBackend;
+}
+
+export interface DistributionConfirmResponse {
+  status: string;
+  assigned: number;
+  distribution_id: string;
+  message: string;
+}
+
 export interface DateRange {
   min: string | null;
   max: string | null;
