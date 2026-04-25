@@ -13,11 +13,9 @@ from api.models import Study
 from .config import (
     CBC_THREADS,
     DEADLINE_HOURS,
-    DEFAULT_SOLVER_BACKEND,
     MIP_GAP_REL,
     MIP_TIME_LIMIT,
     PRIORITY_WEIGHTS,
-    SOLVER_BACKEND_CHOICES,
 )
 from .entities import DoctorData, StudyData
 from .exact_solver import solve_exact_mip as solve_exact_mip_external
@@ -72,7 +70,6 @@ class DistributionService:
         priority_weights: Optional[Dict[str, float]] = None,
         deadline_hours: Optional[Dict[str, float]] = None,
         objective_params: Optional[Dict[str, Any]] = None,
-        solver_backend: Optional[str] = None,
     ):
         self.real_now = timezone.now()
         self.now = self.real_now
@@ -81,7 +78,6 @@ class DistributionService:
         self.priority_weights = {**PRIORITY_WEIGHTS, **(priority_weights or {})}
         self.deadline_hours = {**DEADLINE_HOURS, **(deadline_hours or {})}
         self.objective_params = dict(objective_params or {})
-        self.solver_backend = self._normalize_solver_backend(solver_backend)
         self._debug: List[str] = []
 
         self.objective: ObjectiveStrategy
@@ -106,12 +102,7 @@ class DistributionService:
             "priority_weights": self.priority_weights,
             "deadline_hours": self.deadline_hours,
             "objective_params": self.objective_params,
-            "solver_backend": self.solver_backend,
         }
-
-    def _normalize_solver_backend(self, solver_backend: Optional[str]) -> str:
-        backend = (solver_backend or DEFAULT_SOLVER_BACKEND).lower()
-        return backend if backend in SOLVER_BACKEND_CHOICES else DEFAULT_SOLVER_BACKEND
 
     def _mip_threads(self) -> int:
         return CBC_THREADS
@@ -414,7 +405,6 @@ class DistributionService:
             mip_time_limit=MIP_TIME_LIMIT,
             mip_gap_rel=MIP_GAP_REL,
             mip_threads=self._mip_threads(),
-            solver_backend=self.solver_backend,
             planning_now=self.now,
             solve_greedy_fn=self.solve_greedy,
             planning_horizon_end_fn=self._planning_horizon_end,
@@ -479,8 +469,7 @@ class DistributionService:
         self._log(f"Режим предпросмотра: {self.preview_mode}")
         self._log(f"Целевая функция: {self.objective_code} | {self.objective_description}")
         self._log(
-            f"Exact solver backend: {self.solver_backend}; "
-            f"CBC threads={CBC_THREADS}"
+            f"Exact solver backend: CBC; CBC threads={CBC_THREADS}"
         )
         self._log("=" * 60)
 

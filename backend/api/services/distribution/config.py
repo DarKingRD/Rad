@@ -30,10 +30,6 @@ TIME_SLOT_MINUTES = 5
 MIP_TIME_LIMIT = 10000
 MIP_GAP_REL = 0.01
 
-
-SOLVER_BACKEND_CHOICES = ("cbc", "branch_price")
-DEFAULT_SOLVER_BACKEND = "cbc"
-
 CBC_THREADS = 1
 
 # Ограничения размера модели отключены: CBC получает полный набор вариантов.

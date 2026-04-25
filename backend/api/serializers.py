@@ -21,7 +21,6 @@ from .services.schedule_status import (
     normalize_day_status,
 )
 from .services.distribution.objectives import OBJECTIVE_REGISTRY
-from .services.distribution.config import DEFAULT_SOLVER_BACKEND, SOLVER_BACKEND_CHOICES
 from .services.shift_forecast_multi_method import (
     DEFAULT_EVALUATION_DAYS,
     FORECAST_COMPARE_METHODS,
@@ -374,11 +373,6 @@ class DistributionRunSerializer(serializers.Serializer):
         choices=tuple(OBJECTIVE_REGISTRY.keys()),
         required=False,
         default="weighted_tardiness_lexicographic",
-    )
-    solver_backend = serializers.ChoiceField(
-        choices=SOLVER_BACKEND_CHOICES,
-        required=False,
-        default=DEFAULT_SOLVER_BACKEND,
     )
 
     def validate(self, attrs):

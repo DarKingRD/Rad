@@ -107,12 +107,10 @@ def run_distribution(
     date_to=None,
     use_mip=True,
     objective=None,
-    solver_backend=None,
 ):
     service = DistributionService(
         target_date=target_date,
         objective=objective,
-        solver_backend=solver_backend,
     )
     service.set_preview_mode(preview)
 

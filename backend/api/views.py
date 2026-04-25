@@ -334,7 +334,6 @@ def distribute_studies_view(request):
     date_to = validated.get("date_to")
     use_mip = validated.get("use_mip", True)
     objective = validated.get("objective", "weighted_tardiness_lexicographic")
-    solver_backend = validated.get("solver_backend", "cbc")
 
     date_from_dt = parse_distribution_datetime_start(
         date_from.isoformat() if date_from else None
@@ -351,7 +350,6 @@ def distribute_studies_view(request):
             date_to=date_to_dt,
             use_mip=use_mip,
             objective=objective,
-            solver_backend=solver_backend,
         )
         return Response(result, status=status.HTTP_200_OK)
     except Exception as e:

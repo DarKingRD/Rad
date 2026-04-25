@@ -260,8 +260,6 @@ export type DistributionObjective =
   | 'max_assignments'
   | 'priority_tier_tardiness_multipass';
 
-export type SolverBackend = 'cbc' | 'branch_price';
-
 export interface DistributionPreviewPayload {
   date: string;
   preview?: boolean;
@@ -269,7 +267,6 @@ export interface DistributionPreviewPayload {
   date_to?: string;
   use_mip?: boolean;
   objective?: DistributionObjective;
-  solver_backend?: SolverBackend;
 }
 
 export interface DistributionConfirmResponse {

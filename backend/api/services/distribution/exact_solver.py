@@ -11,7 +11,6 @@ from .config import (
     EXACT_MAX_OPTIONS,
     EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR,
 )
-from .branch_price_solver import solve_branch_price_mip
 from .entities import DoctorData, ScheduleOption, StudyData
 from .time_utils import add_work_minutes, execution_segments, occupied_slot_indices, slot_boundaries
 
@@ -387,7 +386,6 @@ def solve_exact_mip(
     mip_time_limit: float,
     mip_gap_rel: float,
     mip_threads: int = 1,
-    solver_backend: str = "cbc",
     planning_now=None,
     solve_greedy_fn: Callable,
     planning_horizon_end_fn: Callable,
@@ -396,10 +394,9 @@ def solve_exact_mip(
 ):
     """Решить задачу точным MILP через обычный CBC или откатиться на жадный fallback."""
     log = log or (lambda _msg: None)
-    solver_backend = (solver_backend or "cbc").lower()
 
     log(
-        f"Exact solver: backend={solver_backend}, studies={len(studies)}, "
+        f"Exact solver: backend=cbc, studies={len(studies)}, "
         f"doctors={len(doctors)}, objective={objective_code}"
     )
 
@@ -413,24 +410,6 @@ def solve_exact_mip(
         for index, meta in unassigned_meta_by_study.items()
     }
     base_constant = float(sum(unassigned_cost_by_study.values()))
-
-    if solver_backend == "branch_price":
-        try:
-            return solve_branch_price_mip(
-                studies=studies,
-                doctors=doctors,
-                objective=objective,
-                priority_weights=priority_weights,
-                planning_now=planning_now,
-                base_constant=base_constant,
-                unassigned_meta_by_study=unassigned_meta_by_study,
-                unassigned_cost_by_study=unassigned_cost_by_study,
-                log=log,
-                doc_prebooked_minutes=doc_prebooked_minutes,
-            )
-        except Exception as exc:
-            log(f"BranchPrice ошибка: {exc} → fallback к обычному CBC")
-            solver_backend = "cbc"
 
     t_build_options = time.perf_counter()
     options, options_by_study, options_by_doctor, options_by_doctor_slot = build_exact_options(

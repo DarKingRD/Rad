@@ -6,9 +6,8 @@ from django.utils import timezone
 from rest_framework.test import APIRequestFactory
 
 from .serializers import DistributionRunSerializer
-from .services.distribution.config import DEFAULT_SOLVER_BACKEND
 from .services.distribution.entities import DoctorData, StudyData
-from .services.distribution.exact_solver import build_exact_options, solve_exact_mip
+from .services.distribution.exact_solver import build_exact_options
 from .services.distribution.objectives import WeightedTardinessLexicographicObjective
 from .services.distribution.result_builder import build_distribution_response
 from .services.distribution_api import parse_distribution_datetime_end
@@ -47,24 +46,6 @@ class DistributionRunSerializerTests(SimpleTestCase):
             serializer.validated_data["objective"],
             "priority_tier_tardiness_multipass",
         )
-
-    def test_validate_accepts_cbc_solver_backend(self):
-        serializer = DistributionRunSerializer(data={"solver_backend": "cbc"})
-
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        self.assertEqual(serializer.validated_data["solver_backend"], "cbc")
-
-    def test_validate_accepts_branch_price_solver_backend(self):
-        serializer = DistributionRunSerializer(data={"solver_backend": "branch_price"})
-
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        self.assertEqual(serializer.validated_data["solver_backend"], "branch_price")
-
-    def test_validate_uses_configured_solver_backend_by_default(self):
-        serializer = DistributionRunSerializer(data={})
-
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        self.assertEqual(serializer.validated_data["solver_backend"], DEFAULT_SOLVER_BACKEND)
 
     def test_distribution_end_date_is_inclusive(self):
         self.assertEqual(
@@ -294,48 +275,6 @@ class ExactSolverOptionBuilderTests(SimpleTestCase):
         self.assertEqual(len(options), 6)
         self.assertEqual(options[-1].start_dt, timezone.make_aware(datetime(2026, 3, 20, 9, 25)))
 
-    @patch("api.services.distribution.exact_solver.solve_branch_price_mip")
-    def test_branch_price_backend_dispatches_to_new_solver(self, branch_price_mock):
-        base = timezone.make_aware(datetime(2026, 3, 20, 9, 0))
-        doctor = DoctorData(
-            id=1,
-            name="Doctor",
-            modality={"CT"},
-            max_up=8.0,
-            shift_start=base,
-            shift_end=timezone.make_aware(datetime(2026, 3, 20, 10, 0)),
-        )
-        study = StudyData(
-            research_number="s1",
-            priority="normal",
-            created_at=base,
-            modality={"CT"},
-            up_value=1.0,
-            duration_minutes=30.0,
-            deadline=timezone.make_aware(datetime(2026, 3, 20, 12, 0)),
-            weight=1.0,
-        )
-        branch_price_mock.return_value = ({}, {}, 0.0, {"s1": {"objective_value": 0.0}})
-
-        result = solve_exact_mip(
-            studies=[study],
-            doctors=[doctor],
-            objective=WeightedTardinessLexicographicObjective(),
-            objective_code="weighted_tardiness_lexicographic",
-            priority_weights={"cito": 64.0, "asap": 8.0, "normal": 1.0},
-            mip_time_limit=10000,
-            mip_gap_rel=0.01,
-            mip_threads=1,
-            solver_backend="branch_price",
-            planning_now=base,
-            solve_greedy_fn=lambda *_args, **_kwargs: ({}, {}),
-            planning_horizon_end_fn=lambda _doctors: timezone.make_aware(datetime(2026, 3, 20, 17, 0)),
-            log=lambda _message: None,
-        )
-
-        branch_price_mock.assert_called_once()
-        self.assertEqual(result, ({}, {}, 0.0, {"s1": {"objective_value": 0.0}}))
-
 class DistributionViewsTests(SimpleTestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
@@ -377,7 +316,6 @@ class DistributionViewsTests(SimpleTestCase):
             date_to=datetime(2026, 4, 1, 0, 0),
             use_mip=False,
             objective="weighted_tardiness_lexicographic",
-            solver_backend=DEFAULT_SOLVER_BACKEND,
         )
         self.assertEqual(response.data["distribution_id"], "dist-1")
 

@@ -17,7 +17,6 @@ import type {
   DoctorWithLoad,
   DistributionInfo,
   DistributionObjective,
-  SolverBackend,
   Study,
 } from '../../types';
 
@@ -56,11 +55,6 @@ const OBJECTIVE_OPTIONS: Array<{ value: DistributionObjective; label: string }> 
   },
 ];
 
-const SOLVER_OPTIONS: Array<{ value: SolverBackend; label: string }> = [
-  { value: 'cbc', label: 'CBC' },
-  { value: 'branch_price', label: 'Branch & Price (beta)' },
-];
-
 const CurrentDistributionView = () => {
   const [studiesTotal, setStudiesTotal] = useState(0);
   const [studies, setStudies] = useState<Study[]>([]);
@@ -85,7 +79,6 @@ const CurrentDistributionView = () => {
   const [distributionDateTo, setDistributionDateTo] = useState('');
   const [useMip, setUseMip] = useState(true);
   const [objective, setObjective] = useState<DistributionObjective>('weighted_tardiness_lexicographic');
-  const [solverBackend, setSolverBackend] = useState<SolverBackend>('cbc');
 
   const [mobileTab, setMobileTab] = useState<MobileTab>('studies');
   const [currentPage, setCurrentPage] = useState(1);
@@ -200,7 +193,6 @@ const CurrentDistributionView = () => {
         date_to: distributionDateTo || undefined,
         use_mip: useMip,
         objective,
-        solver_backend: solverBackend,
       });
 
       setDistResult(result);
@@ -400,24 +392,6 @@ const CurrentDistributionView = () => {
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
               >
                 {OBJECTIVE_OPTIONS.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="min-w-[180px]">
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Решатель
-              </label>
-              <select
-                value={solverBackend}
-                onChange={(e) => setSolverBackend(e.target.value as SolverBackend)}
-                disabled={!useMip}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                {SOLVER_OPTIONS.map((item) => (
                   <option key={item.value} value={item.value}>
                     {item.label}
                   </option>
