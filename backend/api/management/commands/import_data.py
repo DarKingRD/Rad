@@ -83,6 +83,16 @@ def parse_time(val):
         return None
 
 
+def parse_optional_datetime(value):
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        dt = pd.to_datetime(value).to_pydatetime()
+    except Exception:
+        return None
+    return dt if dt.tzinfo else dj_timezone.make_aware(dt)
+
+
 class Command(BaseCommand):
     help = "Импорт врачей, расписаний, типов исследований и исследований из CSV/XLSX"
 
@@ -386,23 +396,8 @@ class Command(BaseCommand):
             priority = get_priority(row.get("Столбец2"))
             pstats[priority] += 1
 
-            created_at = None
-            raw_created = row.get("Дата создания")
-            if raw_created is not None and not (isinstance(raw_created, float) and pd.isna(raw_created)):
-                try:
-                    dt = pd.to_datetime(raw_created).to_pydatetime()
-                    created_at = dt if dt.tzinfo else dj_timezone.make_aware(dt)
-                except Exception:
-                    pass
-
-            planned_at = None
-            raw_planned = row.get("Плановая дата")
-            if raw_planned is not None and not (isinstance(raw_planned, float) and pd.isna(raw_planned)):
-                try:
-                    dt = pd.to_datetime(raw_planned).to_pydatetime()
-                    planned_at = dt if dt.tzinfo else dj_timezone.make_aware(dt)
-                except Exception:
-                    pass
+            created_at = parse_optional_datetime(row.get("Дата создания"))
+            planned_at = parse_optional_datetime(row.get("Плановая дата"))
 
             diagnostician_id = None
             diag_raw = row.get("Диагност")

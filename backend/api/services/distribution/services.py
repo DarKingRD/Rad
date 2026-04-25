@@ -36,10 +36,7 @@ from .time_utils import (
     add_work_minutes,
     align_to_work_time,
     effective_start_after_prebook,
-    execution_segments,
-    occupied_slot_indices,
     planning_horizon_end,
-    slot_boundaries,
 )
 
 logger = logging.getLogger(__name__)
@@ -236,11 +233,29 @@ class DistributionService:
         studies: List[StudyData],
         doctors: List[DoctorData],
     ) -> Dict[str, Dict[str, float | datetime]]:
+        return self._build_unassigned_meta(studies, doctors)
+
+    def _build_unassigned_meta(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        assignment: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Dict[str, float | datetime]]:
+        assigned_studies = assignment or {}
         horizon_end = self._planning_horizon_end(doctors)
         return {
             study.research_number: self.objective.unassigned_metrics(study, horizon_end)
             for study in studies
+            if study.research_number not in assigned_studies
         }
+
+    @staticmethod
+    def _sum_objective_values(*collections: Dict[str, Dict[str, float | datetime]]) -> float:
+        return sum(
+            float(item.get("objective_value", 0.0))
+            for collection in collections
+            for item in collection.values()
+        )
 
     def _make_pass_doctors(
         self,
@@ -294,16 +309,12 @@ class DistributionService:
                     pass_doctors,
                     doc_prebooked_minutes=doctor_prebooked_minutes,
                 )
-                horizon_end = self._planning_horizon_end(pass_doctors)
-                pass_unassigned_meta = {
-                    study.research_number: self.objective.unassigned_metrics(study, horizon_end)
-                    for study in tier_studies
-                    if study.research_number not in pass_assignment
-                }
-                pass_solver_obj = (
-                    sum(float(item.get("objective_value", 0.0)) for item in pass_details.values())
-                    + sum(float(item.get("objective_value", 0.0)) for item in pass_unassigned_meta.values())
+                pass_unassigned_meta = self._build_unassigned_meta(
+                    tier_studies,
+                    pass_doctors,
+                    pass_assignment,
                 )
+                pass_solver_obj = self._sum_objective_values(pass_details, pass_unassigned_meta)
 
             total_solver_obj += float(pass_solver_obj)
             assignment.update(pass_assignment)
@@ -492,16 +503,8 @@ class DistributionService:
             assignment, details, solver_obj, unassigned_meta = self.solve_exact_mip(studies, doctors)
         else:
             assignment, details = self.solve_greedy(studies, doctors)
-            horizon_end = self._planning_horizon_end(doctors)
-            unassigned_meta = {
-                study.research_number: self.objective.unassigned_metrics(study, horizon_end)
-                for study in studies
-                if study.research_number not in assignment
-            }
-            solver_obj = (
-                sum(float(item.get("objective_value", 0.0)) for item in details.values())
-                + sum(float(item.get("objective_value", 0.0)) for item in unassigned_meta.values())
-            )
+            unassigned_meta = self._build_unassigned_meta(studies, doctors, assignment)
+            solver_obj = self._sum_objective_values(details, unassigned_meta)
 
         full_unassigned_meta = self._complete_unassigned_meta(studies, doctors, assignment, unassigned_meta)
         baseline_unassigned_meta = self._baseline_unassigned_meta(studies, doctors)
