@@ -3,13 +3,20 @@ Exact-решатель задачи распределения на основе
 """
 from __future__ import annotations
 
+import os
 import time
+from datetime import timedelta
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Callable, Dict, List, Optional
 
 from .config import (
     EXACT_MAX_OPTIONS,
     EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR,
+    EXACT_OPTIONS_WORKERS,
+    EXACT_PARALLEL_MIN_DOCTORS,
+    EXACT_PRUNE_WORSE_THAN_UNASSIGNED,
+    TIME_SLOT_MINUTES,
 )
 from .entities import DoctorData, ScheduleOption, StudyData
 from .time_utils import add_work_minutes, execution_segments, occupied_slot_indices, slot_boundaries
@@ -192,6 +199,9 @@ def _build_rows_for_doctor(
     if not boundaries:
         return []
 
+    slot_delta = timedelta(minutes=TIME_SLOT_MINUTES)
+    slot_ends = [slot_start + slot_delta for slot_start in boundaries]
+
     studies_by_duration = defaultdict(list)
     for study_idx, study in enumerate(studies):
         if not _modality_ok(study.modality, doctor.modality):
@@ -212,7 +222,7 @@ def _build_rows_for_doctor(
                 break
 
             segments = execution_segments(doctor, start_dt, duration_minutes)
-            occupied_slots = occupied_slot_indices(segments, boundaries)
+            occupied_slots = occupied_slot_indices(segments, boundaries, slot_ends)
             if occupied_slots:
                 variants.append((start_dt, finish_dt, occupied_slots))
         geometry_by_duration[duration_minutes] = variants
@@ -264,6 +274,113 @@ def _build_rows_for_doctor(
     return rows
 
 
+def _auto_options_workers(doctors_count: int) -> int:
+    """Определить число процессов для генерации options."""
+    if doctors_count < EXACT_PARALLEL_MIN_DOCTORS:
+        return 1
+
+    configured = int(EXACT_OPTIONS_WORKERS or 0)
+    if configured > 0:
+        return max(1, min(configured, doctors_count))
+
+    cpu_count = os.cpu_count() or 1
+    return max(1, min(cpu_count, doctors_count))
+
+
+def _build_rows_for_doctor_worker(payload):
+    """Worker для ProcessPoolExecutor: генерирует options одного врача."""
+    (
+        doctor_idx,
+        doctor,
+        studies,
+        objective,
+        priority_weights,
+        planning_now,
+        prebooked_minutes,
+    ) = payload
+
+    rows = _build_rows_for_doctor(
+        doctor_idx=doctor_idx,
+        doctor=doctor,
+        studies=studies,
+        objective=objective,
+        priority_weights=priority_weights,
+        planning_now=planning_now,
+        prebooked_minutes=prebooked_minutes,
+    )
+    return doctor_idx, doctor.id, rows
+
+
+def _collect_raw_option_rows(
+    *,
+    studies: List[StudyData],
+    doctors: List[DoctorData],
+    objective,
+    priority_weights: Dict[str, float],
+    planning_now,
+    prebooked_map: Dict[int, float],
+    log: Callable[[str], None],
+) -> List[tuple]:
+    """Собрать сырые rows для options: последовательно или параллельно по врачам."""
+    workers = _auto_options_workers(len(doctors))
+
+    def collect_sequential(reason: Optional[str] = None) -> List[tuple]:
+        raw_rows: List[tuple] = []
+        if reason:
+            log(f"Параллельная генерация options недоступна: {reason}; fallback=sequential")
+        log(f"Последовательная генерация options: doctors={len(doctors)}")
+        for doctor_idx, doctor in enumerate(doctors):
+            rows = _build_rows_for_doctor(
+                doctor_idx=doctor_idx,
+                doctor=doctor,
+                studies=studies,
+                objective=objective,
+                priority_weights=priority_weights,
+                planning_now=planning_now,
+                prebooked_minutes=prebooked_map.get(doctor.id, 0.0),
+            )
+            raw_rows.extend(rows)
+            log(f"  options doctor_idx={doctor_idx}, doctor_id={doctor.id}: {len(rows)}")
+        return raw_rows
+
+    if workers <= 1:
+        return collect_sequential()
+
+    payloads = [
+        (
+            doctor_idx,
+            doctor,
+            studies,
+            objective,
+            priority_weights,
+            planning_now,
+            prebooked_map.get(doctor.id, 0.0),
+        )
+        for doctor_idx, doctor in enumerate(doctors)
+    ]
+
+    log(f"Параллельная генерация options: workers={workers}, doctors={len(doctors)}")
+    raw_rows_by_doctor: Dict[int, List[tuple]] = {}
+
+    try:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            future_map = {
+                executor.submit(_build_rows_for_doctor_worker, payload): payload[0]
+                for payload in payloads
+            }
+            for future in as_completed(future_map):
+                doctor_idx, doctor_id, rows = future.result()
+                raw_rows_by_doctor[doctor_idx] = rows
+                log(f"  options doctor_idx={doctor_idx}, doctor_id={doctor_id}: {len(rows)}")
+    except Exception as exc:
+        return collect_sequential(str(exc))
+
+    raw_rows: List[tuple] = []
+    for doctor_idx in sorted(raw_rows_by_doctor):
+        raw_rows.extend(raw_rows_by_doctor[doctor_idx])
+
+    return raw_rows
+
 def build_exact_options(
     *,
     studies: List[StudyData],
@@ -273,6 +390,7 @@ def build_exact_options(
     planning_now,
     log: Callable[[str], None],
     doc_prebooked_minutes: Optional[Dict[int, float]] = None,
+    unassigned_cost_by_study: Optional[Dict[int, float]] = None,
 ):
     """Построить бинарные опции MILP и индексы для ограничений."""
     options: List[ScheduleOption] = []
@@ -281,21 +399,27 @@ def build_exact_options(
     options_by_doctor_slot = defaultdict(list)
 
     prebooked_map = doc_prebooked_minutes or {}
-    raw_rows: List[tuple] = []
+    raw_rows = _collect_raw_option_rows(
+        studies=studies,
+        doctors=doctors,
+        objective=objective,
+        priority_weights=priority_weights,
+        planning_now=planning_now,
+        prebooked_map=prebooked_map,
+        log=log,
+    )
 
-    log(f"Последовательная генерация options: doctors={len(doctors)}")
-    for doctor_idx, doctor in enumerate(doctors):
-        rows = _build_rows_for_doctor(
-            doctor_idx=doctor_idx,
-            doctor=doctor,
-            studies=studies,
-            objective=objective,
-            priority_weights=priority_weights,
-            planning_now=planning_now,
-            prebooked_minutes=prebooked_map.get(doctor.id, 0.0),
+    if EXACT_PRUNE_WORSE_THAN_UNASSIGNED and unassigned_cost_by_study:
+        before_prune = len(raw_rows)
+        raw_rows = [
+            row
+            for row in raw_rows
+            if float(row[0]) <= float(unassigned_cost_by_study.get(row[3], 0.0)) + 1e-9
+        ]
+        log(
+            "Prune worse-than-unassigned options: "
+            f"removed={before_prune - len(raw_rows)}, remained={len(raw_rows)}"
         )
-        raw_rows.extend(rows)
-        log(f"  options doctor_idx={doctor_idx}, doctor_id={doctor.id}: {len(rows)}")
 
     if EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR is None:
         log("Лимит вариантов на исследование/врача отключён")
@@ -420,6 +544,7 @@ def solve_exact_mip(
         planning_now=planning_now,
         log=log,
         doc_prebooked_minutes=doc_prebooked_minutes,
+        unassigned_cost_by_study=unassigned_cost_by_study,
     )
     log(f"TIMING build_exact_options: {time.perf_counter() - t_build_options:.2f}s")
     log(f"  Кандидатных стартов: {len(options)}")

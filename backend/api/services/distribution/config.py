@@ -32,6 +32,16 @@ MIP_GAP_REL = 0.01
 
 CBC_THREADS = 1
 
+# 0 означает auto: использовать до os.cpu_count(), но не больше числа врачей.
+# Для Windows/Django безопаснее держать значение умеренным, например 4.
+EXACT_OPTIONS_WORKERS = 6
+EXACT_PARALLEL_MIN_DOCTORS = 2
+
+# Удалять только те варианты, которые хуже, чем оставить исследование неназначенным
+# до конца планового горизонта. Варианты с равной стоимостью остаются, чтобы
+# не снижать долю назначений в отчёте при одинаковом objective.
+EXACT_PRUNE_WORSE_THAN_UNASSIGNED = True
+
 # Ограничения размера модели отключены: CBC получает полный набор вариантов.
 EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR = None
 EXACT_MAX_OPTIONS = None
