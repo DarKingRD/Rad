@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
@@ -83,6 +83,151 @@ class ForecastCompareQuerySerializerTests(SimpleTestCase):
         )
 
         self.assertFalse(serializer.is_valid())
+
+    def test_validate_accepts_default_forecast_methods(self):
+        from .serializers import ForecastCompareQuerySerializer
+
+        serializer = ForecastCompareQuerySerializer(
+            data={
+                "methods": (
+                    "weekday_mean,linear_regression,"
+                    "poisson_regression,holt_winters"
+                )
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(
+            serializer.validated_data["methods"],
+            [
+                "weekday_mean",
+                "linear_regression",
+                "poisson_regression",
+                "holt_winters",
+            ],
+        )
+
+    def test_validate_rejects_split_methods(self):
+        from .serializers import ForecastCompareQuerySerializer
+
+        serializer = ForecastCompareQuerySerializer(
+            data={"methods": "linear_regression_split"}
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("methods", serializer.errors)
+
+
+class ForecastCompareMethodsTests(SimpleTestCase):
+    @patch("api.services.shift_forecast_multi_method._load_actual_day_totals")
+    @patch("api.services.shift_forecast_multi_method.build_shift_forecast")
+    @patch("api.services.shift_forecast_multi_method._get_history_bounds")
+    def test_default_comparison_holds_out_last_week_from_training(
+        self,
+        history_bounds_mock,
+        build_forecast_mock,
+        actual_totals_mock,
+    ):
+        from .services.shift_forecast_multi_method import evaluate_forecast_methods
+
+        history_bounds_mock.return_value = (date(2025, 10, 1), date(2025, 10, 31))
+        actual_totals_mock.return_value = {
+            date(2025, 10, day): {"studies_count": 10.0, "total_up": 15.0}
+            for day in range(25, 32)
+        }
+        build_forecast_mock.return_value = {
+            "days": [
+                {
+                    "date": date(2025, 10, day).isoformat(),
+                    "expected_studies_total": 10.0,
+                    "expected_up_total": 15.0,
+                }
+                for day in range(25, 32)
+            ]
+        }
+
+        result = evaluate_forecast_methods(
+            methods=["weekday_mean"],
+            evaluation_days=7,
+            min_train_days=1,
+        )
+
+        self.assertEqual(result["evaluation_start_date"], "2025-10-25")
+        self.assertEqual(result["evaluation_end_date"], "2025-10-31")
+        self.assertEqual(result["training_start_date"], "2025-10-01")
+        self.assertEqual(result["training_end_date"], "2025-10-24")
+        self.assertEqual(result["comparison_mode"], "holdout_last_period")
+        build_forecast_mock.assert_called_once()
+        self.assertEqual(
+            build_forecast_mock.call_args.kwargs["history_start_override"],
+            date(2025, 10, 1),
+        )
+        self.assertEqual(
+            build_forecast_mock.call_args.kwargs["history_end_override"],
+            date(2025, 10, 24),
+        )
+
+    @patch("api.services.shift_forecast_multi_method._forecast_with_linear_regression")
+    def test_linear_regression_derives_up_from_predicted_studies(self, forecast_mock):
+        from .services.shift_forecast_multi_method import _forecast_model_based_totals
+
+        history_start = date(2025, 10, 6)
+        history_end = date(2025, 10, 12)
+        history_days = [history_start + timedelta(days=offset) for offset in range(7)]
+        totals_map = {
+            current_day: {
+                "studies_count": 10.0,
+                "total_up": 10.0 * (current_day.weekday() + 2),
+            }
+            for current_day in history_days
+        }
+        monday = date(2025, 10, 13)
+        tuesday = date(2025, 10, 14)
+        forecast_mock.return_value = {
+            monday: 100.0,
+            tuesday: 200.0,
+        }
+
+        result = _forecast_model_based_totals(
+            forecast_days=[monday, tuesday],
+            history_start=history_start,
+            history_end=history_end,
+            totals_map=totals_map,
+            method="linear_regression",
+        )
+
+        self.assertEqual(forecast_mock.call_count, 1)
+        self.assertEqual(forecast_mock.call_args.kwargs["target_key"], "studies_count")
+        self.assertEqual(result[monday]["studies_count"], 100.0)
+        self.assertEqual(result[monday]["total_up"], 200.0)
+        self.assertEqual(result[tuesday]["studies_count"], 200.0)
+        self.assertEqual(result[tuesday]["total_up"], 600.0)
+
+    def test_outlier_smoothing_uses_same_weekday_peers(self):
+        from .services.shift_forecast_multi_method import _smooth_daily_totals
+
+        mondays = [date(2025, 10, 6) + timedelta(days=7 * offset) for offset in range(5)]
+        saturdays = [date(2025, 10, 4) + timedelta(days=7 * offset) for offset in range(5)]
+        monday_values = [100.0, 102.0, 98.0, 101.0, 5.0]
+        saturday_values = [10.0, 11.0, 9.0, 12.0, 100.0]
+        totals_map = {
+            current_day: {
+                "studies_count": value,
+                "total_up": value * 2,
+            }
+            for current_day, value in zip(mondays + saturdays, monday_values + saturday_values)
+        }
+
+        smoothed = _smooth_daily_totals(
+            totals_map=totals_map,
+            history_days=mondays + saturdays,
+        )
+
+        self.assertEqual(smoothed[mondays[0]]["studies_count"], 100.0)
+        self.assertGreater(smoothed[mondays[-1]]["studies_count"], 90.0)
+        self.assertLess(smoothed[saturdays[-1]]["studies_count"], 20.0)
+        self.assertGreater(smoothed[mondays[-1]]["total_up"], 180.0)
+        self.assertLess(smoothed[saturdays[-1]]["total_up"], 40.0)
 
 
 class DashboardAndChartViewsTests(SimpleTestCase):

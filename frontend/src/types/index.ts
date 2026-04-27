@@ -39,6 +39,8 @@ export interface Schedule {
   break_end: string | null;
   break_duration_minutes: number;
   is_day_off: number;
+  day_status: number;
+  day_status_label?: string;
   planned_up: number;
   doctor_name?: string;
   doctor?: Doctor;
@@ -94,6 +96,7 @@ export interface ForecastChartPoint {
   date: string;
   label: string;
   expected_studies_total: number;
+  expected_up_total?: number;
   min_doctors: number;
 }
 
@@ -126,6 +129,49 @@ export interface ShiftForecastResponse {
   chart: ForecastChartPoint[];
   days: ForecastDay[];
   message: string;
+}
+
+export interface ForecastCompareDayDetail {
+  date: string;
+  forecast_studies: number;
+  actual_studies: number;
+  forecast_up: number;
+  actual_up: number;
+  abs_error_studies: number;
+  abs_error_up: number;
+}
+
+export interface ForecastCompareResult {
+  method: string;
+  method_label: string;
+  days_evaluated: number;
+  mae_studies: number;
+  mae_up: number;
+  mape_studies_pct: number | null;
+  mape_up_pct: number | null;
+  day_details: ForecastCompareDayDetail[];
+}
+
+export interface ForecastCompareResponse {
+  history_start_date: string | null;
+  history_end_date: string | null;
+  training_start_date: string | null;
+  training_end_date: string | null;
+  evaluation_start_date: string | null;
+  evaluation_end_date: string | null;
+  comparison_mode: string;
+  results: ForecastCompareResult[];
+  message: string;
+  available_methods: Array<{ key: string; label: string }>;
+  params: {
+    methods: string[];
+    evaluation_start_date: string | null;
+    evaluation_end_date: string | null;
+    evaluation_days: number;
+    recent_weeks: number;
+    moving_window_days: number;
+    min_train_days: number;
+  };
 }
 
 // === РАСПРЕДЕЛЕНИЕ ===

@@ -413,7 +413,10 @@ def distribution_preview(request):
 @api_view(["GET"])
 def forecast_compare_methods(request):
     """
-    Сравнение методов прогнозирования на последних днях истории (backtest).
+    Сравнение методов прогнозирования на holdout-периоде.
+
+    По умолчанию оцениваем последнюю неделю истории, а обучаем методы только
+    на данных до этой недели.
     """
     query_serializer = ForecastCompareQuerySerializer(data=request.query_params)
     query_serializer.is_valid(raise_exception=True)

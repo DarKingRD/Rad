@@ -24,11 +24,15 @@ from .modality_catalog import (
 
 try:
     import numpy as np
-    from sklearn.linear_model import LinearRegression, PoissonRegressor
+    from sklearn.linear_model import PoissonRegressor, Ridge
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
 except Exception:  # pragma: no cover
     np = None
-    LinearRegression = None
     PoissonRegressor = None
+    Ridge = None
+    make_pipeline = None
+    StandardScaler = None
 
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -43,16 +47,13 @@ DEFAULT_MOVING_WINDOW_DAYS = 14
 DEFAULT_MIN_TRAIN_DAYS = 21
 DEFAULT_EVALUATION_DAYS = 7
 DEFAULT_HOLT_WINTERS_SEASONAL_PERIODS = 7
+OUTLIER_MIN_SAME_WEEKDAY_DAYS = 4
+OUTLIER_IQR_MULTIPLIER = 1.5
 
 FORECAST_METHODS = {
-    "overall_mean": "Среднее по всем дням истории",
     "weekday_mean": "Среднее по одинаковым дням недели",
-    "recent_weekday_mean": "Среднее по последним одинаковым дням недели",
-    "moving_average": "Скользящее среднее по последним дням",
-    "seasonal_naive": "Значение последнего такого же дня недели",
-    "weighted_weekday_mean": "Взвешенное среднее по одинаковым дням недели с приоритетом последних наблюдений",
-    "linear_regression": "Линейная регрессия с календарными признаками и лагами",
-    "poisson_regression": "Пуассоновская регрессия для количества исследований",
+    "linear_regression": "Линейная регрессия",
+    "poisson_regression": "Пуассоновская регрессия",
     "holt_winters": "Экспоненциальное сглаживание Холта—Уинтерса",
 }
 
@@ -64,12 +65,7 @@ FORECAST_COMPARE_METHODS = (
 )
 
 SIMPLE_PROFILE_METHODS = {
-    "overall_mean",
     "weekday_mean",
-    "recent_weekday_mean",
-    "moving_average",
-    "seasonal_naive",
-    "weighted_weekday_mean",
 }
 MODEL_BASED_METHODS = {
     "linear_regression",
@@ -145,7 +141,6 @@ def _daterange(start: date, end_inclusive: date):
 def _weekday_label(day: date) -> str:
     labels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     return labels[day.weekday()]
-
 
 
 def _sort_modalities(items: list[dict]) -> list[dict]:
@@ -333,14 +328,6 @@ def _get_scheduled_doctors_map(date_from: date, date_to: date) -> dict[date, int
 
 
 
-def _weighted_average(pairs: list[tuple[float, float]]) -> float:
-    weight_sum = sum(weight for _, weight in pairs)
-    if weight_sum <= 0:
-        return 0.0
-    return sum(value * weight for value, weight in pairs) / weight_sum
-
-
-
 def _select_source_days(
     *,
     target_day: date,
@@ -352,30 +339,10 @@ def _select_source_days(
     if not history_days:
         return []
 
-    if method == "overall_mean":
-        return history_days
-
     if method == "weekday_mean":
-        same_weekday_days = [day for day in history_days if day.weekday() == target_day.weekday()]
-        return same_weekday_days or history_days
-
-    if method == "recent_weekday_mean":
-        same_weekday_days = [day for day in history_days if day.weekday() == target_day.weekday()]
-        if same_weekday_days:
-            return same_weekday_days[-max(1, recent_weeks):]
-        return history_days[-max(1, moving_window_days):]
-
-    if method == "moving_average":
-        return history_days[-max(1, moving_window_days):]
-
-    if method == "seasonal_naive":
-        same_weekday_days = [day for day in history_days if day.weekday() == target_day.weekday()]
-        if same_weekday_days:
-            return [same_weekday_days[-1]]
-        return [history_days[-1]]
-
-    if method == "weighted_weekday_mean":
-        same_weekday_days = [day for day in history_days if day.weekday() == target_day.weekday()]
+        same_weekday_days = [
+            day for day in history_days if day.weekday() == target_day.weekday()
+        ]
         return same_weekday_days or history_days
 
     raise ValueError(f"Неизвестный метод прогнозирования: {method}")
@@ -406,25 +373,16 @@ def _build_profile_for_day(
 
     items: list[dict] = []
     for modality in modalities:
-        if method == "weighted_weekday_mean":
-            study_pairs: list[tuple[float, float]] = []
-            up_pairs: list[tuple[float, float]] = []
-            for index, source_day in enumerate(source_days, start=1):
-                source_values = daily_series.get(source_day, {}).get(modality, {})
-                study_pairs.append((float(source_values.get("studies_count") or 0.0), float(index)))
-                up_pairs.append((float(source_values.get("total_up") or 0.0), float(index)))
-            expected_studies = _weighted_average(study_pairs)
-            expected_up = _weighted_average(up_pairs)
-        else:
-            studies_total = 0.0
-            up_total = 0.0
-            for source_day in source_days:
-                source_values = daily_series.get(source_day, {}).get(modality, {})
-                studies_total += float(source_values.get("studies_count") or 0.0)
-                up_total += float(source_values.get("total_up") or 0.0)
-            denominator = len(source_days)
-            expected_studies = studies_total / denominator if denominator else 0.0
-            expected_up = up_total / denominator if denominator else 0.0
+        studies_total = 0.0
+        up_total = 0.0
+        for source_day in source_days:
+            source_values = daily_series.get(source_day, {}).get(modality, {})
+            studies_total += float(source_values.get("studies_count") or 0.0)
+            up_total += float(source_values.get("total_up") or 0.0)
+        denominator = len(source_days)
+        expected_studies = studies_total / denominator if denominator else 0.0
+        up_per_study = up_total / studies_total if studies_total > 0 else 0.0
+        expected_up = expected_studies * up_per_study
 
         if expected_studies <= 0 and expected_up <= 0:
             continue
@@ -447,10 +405,147 @@ def _safe_ratio(numerator: float, denominator: float, fallback: float = 0.0) -> 
     return numerator / denominator
 
 
+def _percentile(values: list[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+
+    sorted_values = sorted(values)
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+
+    position = (len(sorted_values) - 1) * fraction
+    lower_index = int(position)
+    upper_index = min(lower_index + 1, len(sorted_values) - 1)
+    lower_weight = upper_index - position
+    upper_weight = position - lower_index
+    return (
+        sorted_values[lower_index] * lower_weight
+        + sorted_values[upper_index] * upper_weight
+    )
+
+
+def _smooth_value_by_weekday_peers(value: float, peer_values: list[float]) -> float:
+    if len(peer_values) < OUTLIER_MIN_SAME_WEEKDAY_DAYS:
+        return value
+
+    q1 = _percentile(peer_values, 0.25)
+    q3 = _percentile(peer_values, 0.75)
+    iqr = q3 - q1
+    if iqr <= 0:
+        median = _percentile(peer_values, 0.5)
+        return median if value != median else value
+
+    lower_bound = max(0.0, q1 - OUTLIER_IQR_MULTIPLIER * iqr)
+    upper_bound = q3 + OUTLIER_IQR_MULTIPLIER * iqr
+    return min(max(value, lower_bound), upper_bound)
+
+
+def _smooth_daily_totals(
+    *,
+    totals_map: dict[date, dict[str, float]],
+    history_days: list[date],
+) -> dict[date, dict[str, float]]:
+    smoothed = {
+        day: {
+            "studies_count": float((totals_map.get(day) or {}).get("studies_count") or 0.0),
+            "total_up": float((totals_map.get(day) or {}).get("total_up") or 0.0),
+        }
+        for day in history_days
+    }
+
+    for target_key in ("studies_count", "total_up"):
+        for weekday in range(7):
+            weekday_days = [day for day in history_days if day.weekday() == weekday]
+            peer_values = [
+                float((totals_map.get(day) or {}).get(target_key) or 0.0)
+                for day in weekday_days
+            ]
+            for day in weekday_days:
+                raw_value = float((totals_map.get(day) or {}).get(target_key) or 0.0)
+                smoothed[day][target_key] = _smooth_value_by_weekday_peers(
+                    raw_value,
+                    peer_values,
+                )
+
+    return smoothed
+
+
+def _rescale_daily_series_to_totals(
+    *,
+    daily_series: dict[date, dict[str, dict[str, float]]],
+    raw_totals_map: dict[date, dict[str, float]],
+    smoothed_totals_map: dict[date, dict[str, float]],
+    history_days: list[date],
+) -> dict[date, dict[str, dict[str, float]]]:
+    smoothed_series: dict[date, dict[str, dict[str, float]]] = {}
+    for day in history_days:
+        raw_day_totals = raw_totals_map.get(day) or {}
+        smoothed_day_totals = smoothed_totals_map.get(day) or {}
+        studies_scale = _safe_ratio(
+            float(smoothed_day_totals.get("studies_count") or 0.0),
+            float(raw_day_totals.get("studies_count") or 0.0),
+            1.0,
+        )
+        up_scale = _safe_ratio(
+            float(smoothed_day_totals.get("total_up") or 0.0),
+            float(raw_day_totals.get("total_up") or 0.0),
+            1.0,
+        )
+        smoothed_series[day] = {
+            modality: {
+                "studies_count": float(values.get("studies_count") or 0.0) * studies_scale,
+                "total_up": float(values.get("total_up") or 0.0) * up_scale,
+            }
+            for modality, values in (daily_series.get(day) or {}).items()
+        }
+    return smoothed_series
+
+
+def _build_weekday_up_per_study_ratios(
+    *,
+    history_days: list[date],
+    totals_map: dict[date, dict[str, float]],
+) -> tuple[dict[int, float], float]:
+    global_ratio = _safe_ratio(
+        sum(float((totals_map.get(day) or {}).get("total_up") or 0.0) for day in history_days),
+        sum(float((totals_map.get(day) or {}).get("studies_count") or 0.0) for day in history_days),
+        0.0,
+    )
+    weekday_ratios: dict[int, float] = {}
+    for weekday in range(7):
+        weekday_days = [day for day in history_days if day.weekday() == weekday]
+        weekday_ratios[weekday] = _safe_ratio(
+            sum(float((totals_map.get(day) or {}).get("total_up") or 0.0) for day in weekday_days),
+            sum(float((totals_map.get(day) or {}).get("studies_count") or 0.0) for day in weekday_days),
+            global_ratio,
+        )
+    return weekday_ratios, global_ratio
+
+
+def _build_totals_from_study_forecast(
+    *,
+    forecast_days: list[date],
+    predicted_studies: dict[date, float],
+    history_days: list[date],
+    totals_map: dict[date, dict[str, float]],
+) -> dict[date, dict[str, float]]:
+    weekday_ratios, global_ratio = _build_weekday_up_per_study_ratios(
+        history_days=history_days,
+        totals_map=totals_map,
+    )
+    return {
+        current_day: {
+            "studies_count": predicted_studies.get(current_day, 0.0),
+            "total_up": predicted_studies.get(current_day, 0.0)
+            * weekday_ratios.get(current_day.weekday(), global_ratio),
+        }
+        for current_day in forecast_days
+    }
+
+
 
 def _mean_or_default(values: list[float], default: float = 0.0) -> float:
     return mean(values) if values else default
-
 
 
 def _get_series_value(series_map: dict[date, float], target_day: date, default: float = 0.0) -> float:
@@ -498,13 +593,11 @@ def _build_feature_row(
     day_index = float((target_day - origin_day).days)
     month = float(target_day.month)
     day_of_month = float(target_day.day)
-    is_weekend = 1.0 if target_day.weekday() >= 5 else 0.0
 
     return [
         day_index,
         month,
         day_of_month,
-        is_weekend,
         *weekday_flags,
         lag_1,
         lag_7,
@@ -548,7 +641,7 @@ def _forecast_with_linear_regression(
     totals_map: dict[date, dict[str, float]],
     target_key: str,
 ) -> dict[date, float]:
-    if LinearRegression is None or np is None:
+    if Ridge is None or StandardScaler is None or make_pipeline is None or np is None:
         raise RuntimeError("scikit-learn недоступен")
 
     series_map = {day: float((totals_map.get(day) or {}).get(target_key) or 0.0) for day in history_days}
@@ -559,7 +652,7 @@ def _forecast_with_linear_regression(
         origin_day=origin_day,
     )
 
-    model = LinearRegression()
+    model = make_pipeline(StandardScaler(), Ridge(alpha=10.0))
     model.fit(np.array(x_rows, dtype=float), np.array(y_values, dtype=float))
 
     predicted_series = dict(series_map)
@@ -581,14 +674,13 @@ def _forecast_with_linear_regression(
     return result
 
 
-
 def _forecast_with_poisson_regression(
     *,
     history_days: list[date],
     forecast_days: list[date],
     totals_map: dict[date, dict[str, float]],
 ) -> dict[date, float]:
-    if PoissonRegressor is None or np is None:
+    if PoissonRegressor is None or StandardScaler is None or make_pipeline is None or np is None:
         raise RuntimeError("scikit-learn недоступен")
 
     series_map = {day: float((totals_map.get(day) or {}).get("studies_count") or 0.0) for day in history_days}
@@ -599,7 +691,7 @@ def _forecast_with_poisson_regression(
         origin_day=origin_day,
     )
 
-    model = PoissonRegressor(alpha=1e-6, max_iter=1000)
+    model = make_pipeline(StandardScaler(), PoissonRegressor(alpha=1e-6, max_iter=2000))
     model.fit(np.array(x_rows, dtype=float), np.array(y_values, dtype=float))
 
     predicted_series = dict(series_map)
@@ -619,7 +711,6 @@ def _forecast_with_poisson_regression(
         result[current_day] = prediction
 
     return result
-
 
 
 def _forecast_with_holt_winters(
@@ -651,15 +742,16 @@ def _forecast_with_holt_winters(
         for current_day, fitted_value in zip(history_days, fitted_values)
     }
 
-    history_end = history_days[-1]
-    future_days = [current_day for current_day in forecast_days if current_day > history_end]
+    future_days = [
+        current_day
+        for current_day in sorted(forecast_days)
+        if current_day not in fitted_by_day
+    ]
     future_by_day: dict[date, float] = {}
     if future_days:
-        max_horizon = max((current_day - history_end).days for current_day in future_days)
-        forecast_values = fitted_model.forecast(max_horizon)
-        for current_day in future_days:
-            horizon_index = (current_day - history_end).days - 1
-            future_by_day[current_day] = max(0.0, float(forecast_values[horizon_index]))
+        forecast_values = fitted_model.forecast(len(future_days))
+        for index, current_day in enumerate(future_days):
+            future_by_day[current_day] = max(0.0, float(forecast_values[index]))
 
     result: dict[date, float] = {}
     for current_day in forecast_days:
@@ -668,7 +760,6 @@ def _forecast_with_holt_winters(
         else:
             result[current_day] = future_by_day.get(current_day, 0.0)
     return result
-
 
 
 def _forecast_model_based_totals(
@@ -690,19 +781,12 @@ def _forecast_model_based_totals(
             totals_map=totals_map,
             target_key="studies_count",
         )
-        predicted_up = _forecast_with_linear_regression(
-            history_days=history_days,
+        return _build_totals_from_study_forecast(
             forecast_days=forecast_days,
+            predicted_studies=predicted_studies,
+            history_days=history_days,
             totals_map=totals_map,
-            target_key="total_up",
         )
-        return {
-            current_day: {
-                "studies_count": predicted_studies.get(current_day, 0.0),
-                "total_up": predicted_up.get(current_day, 0.0),
-            }
-            for current_day in forecast_days
-        }
 
     if method == "poisson_regression":
         predicted_studies = _forecast_with_poisson_regression(
@@ -710,27 +794,12 @@ def _forecast_model_based_totals(
             forecast_days=forecast_days,
             totals_map=totals_map,
         )
-        weekday_ratios: dict[int, float] = {}
-        global_ratio = _safe_ratio(
-            sum(float((totals_map.get(day) or {}).get("total_up") or 0.0) for day in history_days),
-            sum(float((totals_map.get(day) or {}).get("studies_count") or 0.0) for day in history_days),
-            0.0,
+        return _build_totals_from_study_forecast(
+            forecast_days=forecast_days,
+            predicted_studies=predicted_studies,
+            history_days=history_days,
+            totals_map=totals_map,
         )
-        for weekday in range(7):
-            weekday_days = [day for day in history_days if day.weekday() == weekday]
-            weekday_ratios[weekday] = _safe_ratio(
-                sum(float((totals_map.get(day) or {}).get("total_up") or 0.0) for day in weekday_days),
-                sum(float((totals_map.get(day) or {}).get("studies_count") or 0.0) for day in weekday_days),
-                global_ratio,
-            )
-
-        return {
-            current_day: {
-                "studies_count": predicted_studies.get(current_day, 0.0),
-                "total_up": predicted_studies.get(current_day, 0.0) * weekday_ratios.get(current_day.weekday(), global_ratio),
-            }
-            for current_day in forecast_days
-        }
 
     if method == "holt_winters":
         predicted_studies = _forecast_with_holt_winters(
@@ -739,22 +808,14 @@ def _forecast_model_based_totals(
             totals_map=totals_map,
             target_key="studies_count",
         )
-        predicted_up = _forecast_with_holt_winters(
-            history_days=history_days,
+        return _build_totals_from_study_forecast(
             forecast_days=forecast_days,
+            predicted_studies=predicted_studies,
+            history_days=history_days,
             totals_map=totals_map,
-            target_key="total_up",
         )
-        return {
-            current_day: {
-                "studies_count": predicted_studies.get(current_day, 0.0),
-                "total_up": predicted_up.get(current_day, 0.0),
-            }
-            for current_day in forecast_days
-        }
 
     raise ValueError(f"Неизвестный модельный метод прогнозирования: {method}")
-
 
 
 def _rescale_profile_items(profile_items: list[dict], *, target_studies: float, target_up: float) -> list[dict]:
@@ -880,8 +941,19 @@ def build_shift_forecast(
             f"Неизвестный метод прогнозирования: {method}. Доступно: {', '.join(FORECAST_METHODS)}"
         )
 
-    daily_series, modalities = _load_daily_series(history_start, history_end)
-    totals_map = _load_daily_totals(history_start, history_end)
+    history_days = [current_day for current_day in _daterange(history_start, history_end)]
+    raw_daily_series, modalities = _load_daily_series(history_start, history_end)
+    raw_totals_map = _load_daily_totals(history_start, history_end)
+    totals_map = _smooth_daily_totals(
+        totals_map=raw_totals_map,
+        history_days=history_days,
+    )
+    daily_series = _rescale_daily_series_to_totals(
+        daily_series=raw_daily_series,
+        raw_totals_map=raw_totals_map,
+        smoothed_totals_map=totals_map,
+        history_days=history_days,
+    )
     capacity_context = _get_capacity_context()
     scheduled_doctors_map = _get_scheduled_doctors_map(forecast_date_from, forecast_date_to)
     forecast_days = [current_day for current_day in _daterange(forecast_date_from, forecast_date_to)]
@@ -930,7 +1002,7 @@ def build_shift_forecast(
         except Exception as exc:
             model_warning = (
                 f"Метод '{FORECAST_METHODS[method]}' не удалось применить: {exc}. "
-                "Использован fallback на метод 'Среднее по одинаковым дням недели'."
+                "Использован fallback на метод среднего."
             )
             for current_day in forecast_days:
                 day_profiles[current_day] = _build_profile_for_day(
@@ -1024,21 +1096,27 @@ def evaluate_forecast_methods(
         return {
             "history_start_date": None,
             "history_end_date": None,
+            "training_start_date": None,
+            "training_end_date": None,
             "evaluation_start_date": None,
             "evaluation_end_date": None,
+            "comparison_mode": "holdout_last_period",
             "results": [],
             "message": "Недостаточно исторических исследований для сравнения методов.",
         }
 
     all_days = list(_daterange(history_start, history_end))
-    if len(all_days) <= min_train_days:
+    if not all_days:
         return {
             "history_start_date": history_start.isoformat(),
             "history_end_date": history_end.isoformat(),
+            "training_start_date": history_start.isoformat(),
+            "training_end_date": history_end.isoformat(),
             "evaluation_start_date": None,
             "evaluation_end_date": None,
+            "comparison_mode": "holdout_last_period",
             "results": [],
-            "message": "Недостаточно истории для backtest-сравнения методов.",
+            "message": "Недостаточно истории для сравнения методов.",
         }
 
     resolved_methods = methods or list(FORECAST_COMPARE_METHODS)
@@ -1062,11 +1140,61 @@ def evaluate_forecast_methods(
             if evaluation_start_date <= current_day <= evaluation_end_date
         ]
     else:
-        evaluation_start_index = max(min_train_days, len(all_days) - evaluation_days)
+        evaluation_start_index = max(0, len(all_days) - evaluation_days)
         evaluation_days_list = all_days[evaluation_start_index:]
+
+    if not evaluation_days_list:
+        return {
+            "history_start_date": history_start.isoformat(),
+            "history_end_date": history_end.isoformat(),
+            "training_start_date": history_start.isoformat(),
+            "training_end_date": history_end.isoformat(),
+            "evaluation_start_date": None,
+            "evaluation_end_date": None,
+            "comparison_mode": "holdout_last_period",
+            "results": [],
+            "message": "В выбранном диапазоне нет дней для сравнения методов.",
+        }
 
     evaluation_start = evaluation_days_list[0]
     evaluation_end = evaluation_days_list[-1]
+    training_start = history_start
+    training_end = evaluation_start - timedelta(days=1)
+
+    if training_end < training_start:
+        return {
+            "history_start_date": history_start.isoformat(),
+            "history_end_date": history_end.isoformat(),
+            "training_start_date": None,
+            "training_end_date": None,
+            "evaluation_start_date": evaluation_start.isoformat(),
+            "evaluation_end_date": evaluation_end.isoformat(),
+            "comparison_mode": "holdout_last_period",
+            "results": [],
+            "message": (
+                "Недостаточно истории перед выбранным диапазоном оценки: "
+                "данные из периода оценки не используются для обучения."
+            ),
+        }
+
+    training_days_count = (training_end - training_start).days + 1
+    if training_days_count < min_train_days:
+        return {
+            "history_start_date": history_start.isoformat(),
+            "history_end_date": history_end.isoformat(),
+            "training_start_date": training_start.isoformat(),
+            "training_end_date": training_end.isoformat(),
+            "evaluation_start_date": evaluation_start.isoformat(),
+            "evaluation_end_date": evaluation_end.isoformat(),
+            "comparison_mode": "holdout_last_period",
+            "results": [],
+            "message": (
+                f"Недостаточно обучающей истории перед периодом оценки: "
+                f"{training_days_count} дн., требуется минимум {min_train_days}. "
+                "Данные из периода оценки не используются для обучения."
+            ),
+        }
+
     actual_totals = _load_actual_day_totals(evaluation_start, evaluation_end)
 
     results = []
@@ -1077,17 +1205,19 @@ def evaluate_forecast_methods(
         ape_up = []
         day_details = []
 
+        forecast = build_shift_forecast(
+            date_from=evaluation_start,
+            date_to=evaluation_end,
+            method=method,
+            recent_weeks=recent_weeks,
+            moving_window_days=moving_window_days,
+            history_start_override=training_start,
+            history_end_override=training_end,
+        )
+        forecast_by_date = {item["date"]: item for item in forecast["days"]}
+
         for target_day in evaluation_days_list:
-            forecast = build_shift_forecast(
-                date_from=target_day,
-                date_to=target_day,
-                method=method,
-                recent_weeks=recent_weeks,
-                moving_window_days=moving_window_days,
-                history_start_override=history_start,
-                history_end_override=history_end,
-            )
-            day_forecast = forecast["days"][0]
+            day_forecast = forecast_by_date[target_day.isoformat()]
             actual = actual_totals.get(target_day, {"studies_count": 0.0, "total_up": 0.0})
 
             forecast_studies = float(day_forecast["expected_studies_total"])
@@ -1135,11 +1265,15 @@ def evaluate_forecast_methods(
     return {
         "history_start_date": history_start.isoformat(),
         "history_end_date": history_end.isoformat(),
+        "training_start_date": training_start.isoformat(),
+        "training_end_date": training_end.isoformat(),
         "evaluation_start_date": evaluation_start.isoformat(),
         "evaluation_end_date": evaluation_end.isoformat(),
+        "comparison_mode": "holdout_last_period",
         "results": results,
         "message": (
-            "Методы оценены на выбранном диапазоне с использованием всей доступной "
+            "Методы оценены на holdout-периоде; данные из периода оценки "
+            "не используются для обучения. По умолчанию holdout — последняя неделя "
             "истории. Отсортировано по MAE по УП: чем меньше, тем лучше."
         ),
     }

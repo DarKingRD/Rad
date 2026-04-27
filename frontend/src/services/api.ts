@@ -8,6 +8,7 @@ import type {
   StudyType,
   DashboardStats,
   ChartPoint,
+  ForecastCompareResponse,
   ShiftForecastResponse,
   DistributionConfirmResponse,
   DistributionInfo,
@@ -39,6 +40,16 @@ type DoctorPayload = {
 type ShiftForecastParams = {
   date_from?: string;
   date_to?: string;
+};
+
+type ForecastCompareParams = {
+  evaluation_days?: number;
+  evaluation_start_date?: string;
+  evaluation_end_date?: string;
+  recent_weeks?: number;
+  moving_window_days?: number;
+  min_train_days?: number;
+  methods?: string;
 };
 
 type StudyAssignResponse = Study;
@@ -195,6 +206,11 @@ export const schedulesApi = {
   update: (id: number, data: SchedulePayload) =>
     putOne<Schedule, SchedulePayload>(`/schedules/${id}/`, data),
   delete: (id: number) => deleteOne(`/schedules/${id}/`),
+};
+
+export const forecastApi = {
+  compareMethods: (params?: ForecastCompareParams) =>
+    getOne<ForecastCompareResponse>('/forecast/compare-methods/', params),
 };
 
 export const studiesApi = {
