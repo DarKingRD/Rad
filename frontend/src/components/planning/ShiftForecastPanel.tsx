@@ -48,8 +48,12 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const defaults = useMemo(() => getDefaultRange(), []);
   const [inputDateFrom, setInputDateFrom] = useState(defaults.dateFrom);
   const [inputDateTo, setInputDateTo] = useState(defaults.dateTo);
+  const [inputHistoryStartDate, setInputHistoryStartDate] = useState('');
+  const [inputHistoryEndDate, setInputHistoryEndDate] = useState('');
   const [appliedDateFrom, setAppliedDateFrom] = useState(defaults.dateFrom);
   const [appliedDateTo, setAppliedDateTo] = useState(defaults.dateTo);
+  const [appliedHistoryStartDate, setAppliedHistoryStartDate] = useState('');
+  const [appliedHistoryEndDate, setAppliedHistoryEndDate] = useState('');
   const [forecast, setForecast] = useState<ShiftForecastResponse | null>(null);
   const [comparison, setComparison] = useState<ForecastCompareResponse | null>(null);
   const [selectedCompareMethod, setSelectedCompareMethod] = useState<string | null>(null);
@@ -58,13 +62,20 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const [error, setError] = useState<string | null>(null);
   const [compareError, setCompareError] = useState<string | null>(null);
 
-  const loadForecast = async (dateFrom: string, dateTo: string) => {
+  const loadForecast = async (
+    dateFrom: string,
+    dateTo: string,
+    historyStartDate = '',
+    historyEndDate = ''
+  ) => {
     try {
       setLoading(true);
       setError(null);
       const data = await schedulesApi.getForecast({
         date_from: dateFrom,
         date_to: dateTo,
+        ...(historyStartDate ? { history_start_date: historyStartDate } : {}),
+        ...(historyEndDate ? { history_end_date: historyEndDate } : {}),
       });
       setForecast(data);
     } catch (err: any) {
@@ -94,8 +105,8 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   };
 
   useEffect(() => {
-    loadForecast(appliedDateFrom, appliedDateTo);
-  }, [appliedDateFrom, appliedDateTo, refreshKey]);
+    loadForecast(appliedDateFrom, appliedDateTo, appliedHistoryStartDate, appliedHistoryEndDate);
+  }, [appliedDateFrom, appliedDateTo, appliedHistoryStartDate, appliedHistoryEndDate, refreshKey]);
 
   useEffect(() => {
     loadComparison();
@@ -110,8 +121,18 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
       setError('Дата окончания не может быть раньше даты начала.');
       return;
     }
+    if ((inputHistoryStartDate && !inputHistoryEndDate) || (!inputHistoryStartDate && inputHistoryEndDate)) {
+      setError('Для исторического периода нужно выбрать обе даты или оставить оба поля пустыми.');
+      return;
+    }
+    if (inputHistoryStartDate && inputHistoryEndDate && inputHistoryStartDate > inputHistoryEndDate) {
+      setError('Дата окончания истории не может быть раньше даты начала истории.');
+      return;
+    }
     setAppliedDateFrom(inputDateFrom);
     setAppliedDateTo(inputDateTo);
+    setAppliedHistoryStartDate(inputHistoryStartDate);
+    setAppliedHistoryEndDate(inputHistoryEndDate);
   };
 
   const chartData = forecast?.chart || [];
@@ -132,32 +153,60 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
           </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-          <input
-            type="date"
-            value={inputDateFrom}
-            onChange={(e) => setInputDateFrom(e.target.value)}
-            className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
-          />
-          <input
-            type="date"
-            value={inputDateTo}
-            onChange={(e) => setInputDateTo(e.target.value)}
-            className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
-          />
-          <button
-            onClick={handleApply}
-            className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
-          >
-            Построить прогноз
-          </button>
-          <button
-            onClick={() => loadForecast(appliedDateFrom, appliedDateTo)}
-            className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 inline-flex items-center gap-1.5"
-          >
-            <RefreshCw size={16} />
-            Обновить
-          </button>
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+              Прогноз от
+              <input
+                type="date"
+                value={inputDateFrom}
+                onChange={(e) => setInputDateFrom(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-normal text-slate-900"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+              Прогноз до
+              <input
+                type="date"
+                value={inputDateTo}
+                onChange={(e) => setInputDateTo(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-normal text-slate-900"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+              История от
+              <input
+                type="date"
+                value={inputHistoryStartDate}
+                onChange={(e) => setInputHistoryStartDate(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-normal text-slate-900"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+              История до
+              <input
+                type="date"
+                value={inputHistoryEndDate}
+                onChange={(e) => setInputHistoryEndDate(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-normal text-slate-900"
+              />
+            </label>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+            <button
+              onClick={handleApply}
+              className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
+            >
+              Построить прогноз
+            </button>
+            <button
+              onClick={() => loadForecast(appliedDateFrom, appliedDateTo, appliedHistoryStartDate, appliedHistoryEndDate)}
+              className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 inline-flex items-center justify-center gap-1.5"
+            >
+              <RefreshCw size={16} />
+              Обновить
+            </button>
+          </div>
         </div>
       </div>
 

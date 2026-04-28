@@ -327,6 +327,24 @@ class StudyStatusUpdateSerializer(serializers.Serializer):
     )
 
 
+class DoctorDailyUpStatsSerializer(serializers.Serializer):
+    median = serializers.FloatField()
+    min = serializers.FloatField()
+    max = serializers.FloatField()
+
+
+class DoctorPerformanceSerializer(serializers.Serializer):
+    doctor_id = serializers.IntegerField()
+    doctor_name = serializers.CharField()
+    completed_studies = serializers.IntegerField()
+    completed_up = serializers.FloatField()
+    completed_days = serializers.IntegerField()
+    avg_up_per_day = serializers.FloatField()
+    median_up_per_day = serializers.FloatField()
+    min_daily_completed_up = serializers.FloatField()
+    max_daily_completed_up = serializers.FloatField()
+
+
 class DashboardStatsSerializer(serializers.Serializer):
     total_studies = serializers.IntegerField()
     completed_studies = serializers.IntegerField()
@@ -335,6 +353,8 @@ class DashboardStatsSerializer(serializers.Serializer):
     avg_load_per_doctor = serializers.IntegerField()
     cito_studies = serializers.IntegerField()
     asap_studies = serializers.IntegerField()
+    doctor_daily_up_stats = DoctorDailyUpStatsSerializer()
+    doctor_performance = DoctorPerformanceSerializer(many=True)
 
 
 class ChartDataSerializer(serializers.Serializer):
@@ -398,6 +418,8 @@ class DistributionConfirmSerializer(serializers.Serializer):
 class ShiftForecastQuerySerializer(serializers.Serializer):
     date_from = serializers.DateField(required=False, allow_null=True)
     date_to = serializers.DateField(required=False, allow_null=True)
+    history_start_date = serializers.DateField(required=False, allow_null=True)
+    history_end_date = serializers.DateField(required=False, allow_null=True)
     method = serializers.CharField(required=False, default="weekday_mean")
     recent_weeks = serializers.IntegerField(required=False, min_value=1, max_value=12, default=4)
     moving_window_days = serializers.IntegerField(required=False, min_value=1, max_value=90, default=14)
@@ -416,6 +438,12 @@ class ShiftForecastQuerySerializer(serializers.Serializer):
         if date_from and date_to and date_from > date_to:
             raise serializers.ValidationError(
                 {"date_to": "date_to не может быть раньше date_from"}
+            )
+        history_start_date = attrs.get("history_start_date")
+        history_end_date = attrs.get("history_end_date")
+        if history_start_date and history_end_date and history_start_date > history_end_date:
+            raise serializers.ValidationError(
+                {"history_end_date": "history_end_date не может быть раньше history_start_date"}
             )
         return attrs
 

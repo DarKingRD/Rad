@@ -40,6 +40,8 @@ type DoctorPayload = {
 type ShiftForecastParams = {
   date_from?: string;
   date_to?: string;
+  history_start_date?: string;
+  history_end_date?: string;
 };
 
 type ForecastCompareParams = {
@@ -81,7 +83,7 @@ const api: AxiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 1000000,
+  timeout: 10000000000,
 });
 
 api.interceptors.response.use(

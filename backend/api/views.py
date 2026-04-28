@@ -137,6 +137,8 @@ class ScheduleViewSet(viewsets.ModelViewSet):
             method=validated.get("method", "weekday_mean"),
             recent_weeks=validated.get("recent_weeks", 4),
             moving_window_days=validated.get("moving_window_days", 14),
+            history_start_override=validated.get("history_start_date"),
+            history_end_override=validated.get("history_end_date"),
         )
         serializer = ShiftForecastResponseSerializer(result)
         return Response(serializer.data)

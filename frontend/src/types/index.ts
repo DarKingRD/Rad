@@ -66,6 +66,26 @@ export interface DashboardStats {
   avg_load_per_doctor: number;
   cito_studies: number;
   asap_studies: number;
+  doctor_daily_up_stats: DoctorDailyUpStats;
+  doctor_performance: DoctorPerformance[];
+}
+
+export interface DoctorDailyUpStats {
+  median: number;
+  min: number;
+  max: number;
+}
+
+export interface DoctorPerformance {
+  doctor_id: number;
+  doctor_name: string;
+  completed_studies: number;
+  completed_up: number;
+  completed_days: number;
+  avg_up_per_day: number;
+  median_up_per_day: number;
+  min_daily_completed_up: number;
+  max_daily_completed_up: number;
 }
 
 export interface ChartData {
