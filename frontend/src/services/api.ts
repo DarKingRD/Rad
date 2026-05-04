@@ -224,7 +224,11 @@ export const studiesApi = {
     diagnostician_id?: number;
   }) => getList<Study>('/studies/', params),
 
-  getPending: async (page = 1, pageSize = 100) => {
+  getPending: async (
+    page = 1,
+    pageSize = 100,
+    params?: { priority?: string; date_from?: string; date_to?: string; modality?: string }
+  ) => {
     const response = await retryGetRequest(() =>
       api.get<{
         results: Study[];
@@ -233,7 +237,7 @@ export const studiesApi = {
         page_size: number;
         total_pages: number;
       }>('/studies/pending/', {
-        params: { page, page_size: pageSize },
+        params: { page, page_size: pageSize, ...params },
       })
     );
     return response.data;

@@ -12,11 +12,26 @@ PRIORITY_ORDER = Case(
 )
 
 
-def get_pending_studies_queryset() -> QuerySet[Study]:
+def get_pending_studies_queryset(
+    *,
+    priority: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    modality: str | None = None,
+) -> QuerySet[Study]:
+    qs = Study.objects.filter(diagnostician_id__isnull=True)
+    if priority:
+        qs = qs.filter(priority=priority)
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+    if modality:
+        qs = qs.filter(study_type__name__icontains=modality)
     return (
-        Study.objects.filter(diagnostician_id__isnull=True)
-        .select_related("study_type", "diagnostician")
-        .order_by(PRIORITY_ORDER, "created_at")
+        qs
+            .select_related("study_type", "diagnostician")
+            .order_by(PRIORITY_ORDER, "created_at")
     )
 
 

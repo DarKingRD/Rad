@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { dashboardApi, doctorsApi } from "../../services/api";
-import type { DashboardStats, Doctor } from "../../types";
+import { dashboardApi } from "../../services/api";
+import type { DashboardStats } from "../../types";
 import {
   Activity,
   BarChart3,
@@ -26,19 +26,6 @@ import {
   Cell,
 } from "recharts";
 
-interface DepartmentSummary {
-  department: string;
-  planUp: number;
-  actualUp: number;
-  fulfillment: number;
-  studies: number;
-}
-
-interface ModalityDoctorSummary {
-  modality: string;
-  activeDoctors: number;
-  totalDoctors: number;
-}
 
 export const ReportsView: React.FC = () => {
   const today = new Date();
@@ -60,8 +47,6 @@ export const ReportsView: React.FC = () => {
   const [kpiData, setKpiData] = useState<DashboardStats | null>(null);
   const [chartData, setChartData] = useState<any[]>([]);
   const [pieData, setPieData] = useState<any[]>([]);
-  const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummary[]>([]);
-  const [modalityDoctorSummary, setModalityDoctorSummary] = useState<ModalityDoctorSummary[]>([]);
 
   const COLORS = ["#3b82f6", "#22c55e", "#f97316"];
   const dailyUpStats = kpiData?.doctor_daily_up_stats ?? { median: 0, min: 0, max: 0 };
@@ -73,34 +58,6 @@ export const ReportsView: React.FC = () => {
     return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value);
   };
 
-  const buildModalityDoctorSummary = (doctors: Doctor[]): ModalityDoctorSummary[] => {
-    const summary = new Map<string, ModalityDoctorSummary>();
-
-    doctors.forEach((doctor) => {
-      const modalities = new Set(
-        (doctor.modality || [])
-          .map((item) => item?.trim())
-          .filter((item): item is string => Boolean(item))
-      );
-
-      modalities.forEach((modality) => {
-        const row =
-          summary.get(modality) ||
-          { modality, activeDoctors: 0, totalDoctors: 0 };
-
-        row.totalDoctors += 1;
-        if (doctor.is_active) {
-          row.activeDoctors += 1;
-        }
-
-        summary.set(modality, row);
-      });
-    });
-
-    return Array.from(summary.values()).sort((a, b) =>
-      a.modality.localeCompare(b.modality, "ru")
-    );
-  };
 
   useEffect(() => {
     if (appliedDateFrom && appliedDateTo) {
@@ -117,15 +74,13 @@ export const ReportsView: React.FC = () => {
     try {
       setLoading(true);
 
-      const [stats, chart, doctors] = await Promise.all([
+      const [stats, chart] = await Promise.all([
         dashboardApi.getStats(appliedDateFrom, appliedDateTo),
         dashboardApi.getChartData(appliedDateFrom, appliedDateTo),
-        doctorsApi.getAll(),
       ]);
 
       setKpiData(stats);
       setChartData(chart || []);
-      setModalityDoctorSummary(buildModalityDoctorSummary(doctors || []));
 
       const normalStudies = Math.max(
         0,
@@ -138,25 +93,11 @@ export const ReportsView: React.FC = () => {
         { name: "Обычные", value: normalStudies },
       ]);
 
-      setDepartmentSummary([
-        {
-          department: "Все исследования",
-          planUp: stats.total_studies,
-          actualUp: stats.completed_studies,
-          fulfillment:
-            stats.total_studies > 0
-              ? Math.round((stats.completed_studies / stats.total_studies) * 100)
-              : 0,
-          studies: stats.total_studies,
-        },
-      ]);
     } catch (err) {
       console.error("Error loading reports:", err);
       setKpiData(null);
       setChartData([]);
       setPieData([]);
-      setDepartmentSummary([]);
-      setModalityDoctorSummary([]);
     } finally {
       setLoading(false);
     }
@@ -360,169 +301,28 @@ export const ReportsView: React.FC = () => {
               </div>
             </div>
           </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-            <div className="flex items-center justify-between gap-4 mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900">
-                  Врачи по модальностям
-                </h3>
-                <p className="text-sm text-slate-500 mt-1">
-                  Сколько врачей имеет каждую модальность
-                </p>
-              </div>
-              <div className="hidden sm:flex h-11 w-11 items-center justify-center rounded-xl bg-sky-50 text-sky-600">
-                <BarChart3 size={22} />
-              </div>
-            </div>
-
-            <div className="overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Модальность
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Активных врачей
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Всего врачей
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {modalityDoctorSummary.length === 0 ? (
-                    <tr className="border-t border-slate-100">
-                      <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
-                        Нет данных по модальностям врачей
-                      </td>
-                    </tr>
-                  ) : (
-                    modalityDoctorSummary.map((row) => (
-                      <tr key={row.modality} className="border-t border-slate-100">
-                        <td className="px-4 py-3 text-slate-800 font-medium">
-                          {row.modality}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">
-                          {row.activeDoctors}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">
-                          {row.totalDoctors}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">
               Выполненные исследования по врачам
             </h3>
 
-            <div className="overflow-auto">
+            <div className="overflow-auto max-h-[420px]">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50">
                   <tr>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Врач
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Выполнено исследований
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Выполнено УП
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Дней с выполнением
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Среднее УП/день
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Медиана УП/день
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Минимум УП/день
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Максимум УП/день
-                    </th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Врач</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Исследований</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">УП</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Среднее УП/день</th>
                   </tr>
                 </thead>
                 <tbody>
                   {kpiData.doctor_performance.map((row) => (
                     <tr key={row.doctor_id} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-slate-800 font-medium">
-                        {row.doctor_name}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {row.completed_studies}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {formatUp(row.completed_up)}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {row.completed_days}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {formatUp(row.avg_up_per_day)}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {formatUp(row.median_up_per_day)}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {formatUp(row.min_daily_completed_up)}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {formatUp(row.max_daily_completed_up)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">
-              Сводка по отделению
-            </h3>
-
-            <div className="overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Отделение
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      План
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Факт
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Выполнение
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Исследований
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {departmentSummary.map((row) => (
-                    <tr key={row.department} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-slate-800 font-medium">
-                        {row.department}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">{row.planUp}</td>
-                      <td className="px-4 py-3 text-slate-600">{row.actualUp}</td>
-                      <td className="px-4 py-3 text-slate-600">{row.fulfillment}%</td>
-                      <td className="px-4 py-3 text-slate-600">{row.studies}</td>
+                      <td className="px-4 py-3 text-slate-800 font-medium">{row.doctor_name}</td>
+                      <td className="px-4 py-3 text-slate-600">{row.completed_studies}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatUp(row.completed_up)}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatUp(row.avg_up_per_day)}</td>
                     </tr>
                   ))}
                 </tbody>

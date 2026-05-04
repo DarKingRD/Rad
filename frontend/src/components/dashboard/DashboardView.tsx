@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { dashboardApi } from '../../services/api';
 import { KPICard } from './KPICard';
-import { AlertCircle, Clock } from 'lucide-react';
+import { CalendarClock, Clock } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { DashboardStats, ChartData } from '../../types';
 
@@ -101,14 +101,14 @@ export const DashboardView: React.FC = () => {
         </div>
 
         <div className="space-y-3">
-          <h3 className="font-semibold text-slate-800 text-sm md:text-base">Оповещения</h3>
+          <h3 className="font-semibold text-slate-800 text-sm md:text-base">Фокус на сегодня</h3>
           <div className="flex items-start space-x-3 p-3 bg-slate-50 rounded-lg border border-slate-100">
-            <div className="mt-0.5 text-red-500 shrink-0">
-              <AlertCircle size={18} />
+            <div className="mt-0.5 text-blue-500 shrink-0">
+              <CalendarClock size={18} />
             </div>
             <div>
-              <p className="text-sm font-medium text-slate-800">CITO: {stats?.cito_studies || 0}</p>
-              <p className="text-xs text-slate-500 mt-0.5">Требуют срочного выполнения</p>
+              <p className="text-sm font-medium text-slate-800">План/факт: {stats?.completed_studies || 0} / {stats?.total_studies || 0}</p>
+              <p className="text-xs text-slate-500 mt-0.5">Ориентир выполнения на текущий период</p>
             </div>
           </div>
           <div className="flex items-start space-x-3 p-3 bg-slate-50 rounded-lg border border-slate-100">
@@ -125,8 +125,8 @@ export const DashboardView: React.FC = () => {
               <Clock size={18} />
             </div>
             <div>
-              <p className="text-sm font-medium text-slate-800">В плане: {stats?.pending_studies || 0}</p>
-              <p className="text-xs text-slate-500 mt-0.5">Ожидают назначения врача</p>
+              <p className="text-sm font-medium text-slate-800">CITO: {stats?.cito_studies || 0}</p>
+              <p className="text-xs text-slate-500 mt-0.5">Срочные исследования в очереди</p>
             </div>
           </div>
         </div>

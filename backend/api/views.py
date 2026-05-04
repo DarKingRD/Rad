@@ -175,7 +175,17 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
         page = max(int(request.query_params.get("page", 1)), 1)
         offset = (page - 1) * page_size
 
-        qs = get_pending_studies_queryset()
+        priority = request.query_params.get("priority")
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        modality = request.query_params.get("modality")
+
+        qs = get_pending_studies_queryset(
+            priority=priority or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+            modality=modality or None,
+        )
 
         total = qs.count()
         studies = qs[offset : offset + page_size]

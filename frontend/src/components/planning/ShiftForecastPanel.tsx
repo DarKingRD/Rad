@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { ResponsiveContainer, CartesianGrid, Tooltip, XAxis, YAxis, BarChart, Bar, LineChart, Line } from 'recharts';
 
-import { forecastApi, schedulesApi } from '../../services/api';
-import type { ForecastCompareResponse, ForecastCompareResult, ShiftForecastResponse } from '../../types';
+import { schedulesApi } from '../../services/api';
+import type { ShiftForecastResponse } from '../../types';
 
 interface ShiftForecastPanelProps {
   refreshKey?: number;
@@ -55,12 +55,8 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const [appliedHistoryStartDate, setAppliedHistoryStartDate] = useState('');
   const [appliedHistoryEndDate, setAppliedHistoryEndDate] = useState('');
   const [forecast, setForecast] = useState<ShiftForecastResponse | null>(null);
-  const [comparison, setComparison] = useState<ForecastCompareResponse | null>(null);
-  const [selectedCompareMethod, setSelectedCompareMethod] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [compareLoading, setCompareLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [compareError, setCompareError] = useState<string | null>(null);
 
   const loadForecast = async (
     dateFrom: string,
@@ -87,30 +83,10 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
     }
   };
 
-  const loadComparison = async () => {
-    try {
-      setCompareLoading(true);
-      setCompareError(null);
-      const data = await forecastApi.compareMethods({ evaluation_days: 7 });
-      setComparison(data);
-      setSelectedCompareMethod(data.results[0]?.method || null);
-    } catch (err: any) {
-      console.error('Error loading forecast comparison:', err);
-      setCompareError(err?.message || 'Не удалось загрузить сравнение моделей.');
-      setComparison(null);
-      setSelectedCompareMethod(null);
-    } finally {
-      setCompareLoading(false);
-    }
-  };
-
   useEffect(() => {
     loadForecast(appliedDateFrom, appliedDateTo, appliedHistoryStartDate, appliedHistoryEndDate);
   }, [appliedDateFrom, appliedDateTo, appliedHistoryStartDate, appliedHistoryEndDate, refreshKey]);
 
-  useEffect(() => {
-    loadComparison();
-  }, [refreshKey]);
 
   const handleApply = () => {
     if (!inputDateFrom || !inputDateTo) {
@@ -138,9 +114,6 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const chartData = forecast?.chart || [];
   const summary = forecast?.summary;
   const days = forecast?.days || [];
-  const compareRows = comparison?.results || [];
-  const selectedCompareResult: ForecastCompareResult | undefined =
-    compareRows.find((item) => item.method === selectedCompareMethod) || compareRows[0];
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 md:p-5 space-y-4">
@@ -275,7 +248,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                   <XAxis dataKey="label" />
                   <YAxis allowDecimals={false} />
                   <Tooltip formatter={(value: number) => [value, 'Врачей']} />
-                  <Line type="monotone" dataKey="min_doctors" name="Врачей" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="min_doctors" name="Врачей" stroke="#3b82f6" strokeWidth={3} dot={{ r: 4 }} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -356,132 +329,6 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
           </div>
         </div>
       )}
-
-      <div className="border border-slate-200 rounded-xl overflow-hidden">
-        <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div>
-            <div className="font-semibold text-slate-900">Сравнение моделей прогноза</div>
-            <div className="text-xs text-slate-600 mt-1">
-              Holdout: {formatDateFullLabel(comparison?.evaluation_start_date)} — {formatDateFullLabel(comparison?.evaluation_end_date)} · обучение: {formatDateFullLabel(comparison?.training_start_date)} — {formatDateFullLabel(comparison?.training_end_date)}
-            </div>
-          </div>
-          <button
-            onClick={loadComparison}
-            className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 inline-flex items-center gap-1.5 self-start md:self-auto"
-          >
-            <RefreshCw size={16} />
-            Обновить
-          </button>
-        </div>
-
-        {compareError && (
-          <div className="m-4 bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">
-            {compareError}
-          </div>
-        )}
-
-        {!compareError && (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm" style={{ minWidth: '860px' }}>
-                <thead className="bg-white border-b border-slate-200">
-                  <tr className="text-slate-600">
-                    <th className="px-4 py-3 font-medium">Место</th>
-                    <th className="px-4 py-3 font-medium">Модель</th>
-                    <th className="px-4 py-3 font-medium text-right">MAE, УП</th>
-                    <th className="px-4 py-3 font-medium text-right">MAE, исследований</th>
-                    <th className="px-4 py-3 font-medium text-right">MAPE, УП</th>
-                    <th className="px-4 py-3 font-medium text-right">MAPE, исследований</th>
-                    <th className="px-4 py-3 font-medium text-right">Дней</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {compareLoading && (
-                    <tr>
-                      <td className="px-4 py-6 text-slate-500" colSpan={7}>Загрузка сравнения...</td>
-                    </tr>
-                  )}
-                  {!compareLoading && compareRows.length === 0 && (
-                    <tr>
-                      <td className="px-4 py-6 text-slate-500" colSpan={7}>Нет данных для сравнения моделей.</td>
-                    </tr>
-                  )}
-                  {!compareLoading && compareRows.map((row, index) => {
-                    const isSelected = selectedCompareResult?.method === row.method;
-                    return (
-                      <tr
-                        key={row.method}
-                        onClick={() => setSelectedCompareMethod(row.method)}
-                        className={`cursor-pointer hover:bg-blue-50 ${isSelected ? 'bg-blue-50' : 'bg-white'}`}
-                      >
-                        <td className="px-4 py-3 align-top">
-                          <span className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full px-2 text-xs font-semibold ${
-                            index === 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {index + 1}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 align-top">
-                          <div className="font-medium text-slate-900">{row.method_label}</div>
-                          <div className="text-xs text-slate-500">{row.method}</div>
-                        </td>
-                        <td className="px-4 py-3 align-top text-right font-semibold text-slate-900">{formatMetric(row.mae_up, 2)}</td>
-                        <td className="px-4 py-3 align-top text-right text-slate-900">{formatMetric(row.mae_studies, 2)}</td>
-                        <td className="px-4 py-3 align-top text-right text-slate-900">
-                          {row.mape_up_pct === null ? '—' : `${formatMetric(row.mape_up_pct, 2)}%`}
-                        </td>
-                        <td className="px-4 py-3 align-top text-right text-slate-900">
-                          {row.mape_studies_pct === null ? '—' : `${formatMetric(row.mape_studies_pct, 2)}%`}
-                        </td>
-                        <td className="px-4 py-3 align-top text-right text-slate-900">{row.days_evaluated}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {selectedCompareResult && (
-              <div className="border-t border-slate-200">
-                <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
-                  <div className="font-semibold text-slate-900">Детализация по дням: {selectedCompareResult.method_label}</div>
-                  <div className="text-xs text-slate-600 mt-1">
-                    Прогноз против факта на последней неделе, без обучения на этой неделе.
-                  </div>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm" style={{ minWidth: '920px' }}>
-                    <thead className="bg-white border-b border-slate-200">
-                      <tr className="text-slate-600">
-                        <th className="px-4 py-3 font-medium">Дата</th>
-                        <th className="px-4 py-3 font-medium text-right">Прогноз, исслед.</th>
-                        <th className="px-4 py-3 font-medium text-right">Факт, исслед.</th>
-                        <th className="px-4 py-3 font-medium text-right">Ошибка, исслед.</th>
-                        <th className="px-4 py-3 font-medium text-right">Прогноз, УП</th>
-                        <th className="px-4 py-3 font-medium text-right">Факт, УП</th>
-                        <th className="px-4 py-3 font-medium text-right">Ошибка, УП</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {selectedCompareResult.day_details.map((day) => (
-                        <tr key={day.date} className="hover:bg-slate-50">
-                          <td className="px-4 py-3 font-medium text-slate-900">{formatDateFullLabel(day.date)}</td>
-                          <td className="px-4 py-3 text-right text-slate-900">{formatMetric(day.forecast_studies, 1)}</td>
-                          <td className="px-4 py-3 text-right text-slate-900">{formatMetric(day.actual_studies, 1)}</td>
-                          <td className="px-4 py-3 text-right font-medium text-slate-900">{formatMetric(day.abs_error_studies, 1)}</td>
-                          <td className="px-4 py-3 text-right text-slate-900">{formatMetric(day.forecast_up, 2)}</td>
-                          <td className="px-4 py-3 text-right text-slate-900">{formatMetric(day.actual_up, 2)}</td>
-                          <td className="px-4 py-3 text-right font-medium text-slate-900">{formatMetric(day.abs_error_up, 2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
     </div>
   );
 };
