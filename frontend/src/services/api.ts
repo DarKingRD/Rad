@@ -65,6 +65,14 @@ type DistributionPreviewInfo = {
 };
 
 const API_BASE_URL = 'http://localhost:8000/api';
+const AUTH_TOKEN_KEY = 'radplan_auth_token';
+const AUTH_USER_KEY = 'radplan_auth_user';
+
+type AuthUser = {
+  id: number;
+  username: string;
+  full_name: string;
+};
 
 export class ApiClientError extends Error {
   status?: number;
@@ -85,6 +93,11 @@ const api: AxiosInstance = axios.create({
   },
   timeout: 10000000000,
 });
+
+const savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
+if (savedToken) {
+  api.defaults.headers.common.Authorization = `Token ${savedToken}`;
+}
 
 api.interceptors.response.use(
   (response) => response,
@@ -213,6 +226,38 @@ export const schedulesApi = {
 export const forecastApi = {
   compareMethods: (params?: ForecastCompareParams) =>
     getOne<ForecastCompareResponse>('/forecast/compare-methods/', params),
+};
+
+export const authApi = {
+  login: async (username: string, password: string) => {
+    const response = await postOne<{ token: string; user: AuthUser }, { username: string; password: string }>(
+      '/auth/login/',
+      { username, password }
+    );
+    localStorage.setItem(AUTH_TOKEN_KEY, response.token);
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(response.user));
+    api.defaults.headers.common.Authorization = `Token ${response.token}`;
+    return response;
+  },
+  logout: () => {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    delete api.defaults.headers.common.Authorization;
+  },
+  getCurrentUser: (): AuthUser | null => {
+    const rawUser = localStorage.getItem(AUTH_USER_KEY);
+    if (!rawUser) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(rawUser) as AuthUser;
+    } catch {
+      localStorage.removeItem(AUTH_USER_KEY);
+      return null;
+    }
+  },
+  isAuthenticated: () => Boolean(localStorage.getItem(AUTH_TOKEN_KEY)),
 };
 
 export const studiesApi = {

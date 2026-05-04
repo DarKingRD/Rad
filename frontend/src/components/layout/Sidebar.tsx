@@ -1,6 +1,5 @@
-import React from 'react';
-import { Activity, LayoutDashboard, CalendarDays, GitBranch, Users, BarChart2 } from 'lucide-react';
-
+import { Activity, LayoutDashboard, CalendarDays, GitBranch, Users, BarChart2, ChevronUp, UserCircle2 } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 interface SidebarItemProps {
   icon: React.ElementType;
   label: string;
@@ -42,9 +41,22 @@ const SidebarItem: React.FC<SidebarItemProps> = ({ icon: Icon, label, active, on
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  accountName: string;
+  accountRole: string;
+  onLogout: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
+export const Sidebar: React.FC<SidebarProps> = ({
+  activeTab,
+  setActiveTab,
+  accountName,
+  accountRole,
+  onLogout,
+}) => {
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const desktopMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileMenuRef = useRef<HTMLDivElement | null>(null);
+
   const menuItems = [
     { id: 'dashboard', label: 'Главная', icon: LayoutDashboard },
     { id: 'planning', label: 'Смены', icon: CalendarDays },
@@ -53,9 +65,28 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'reports', label: 'Отчёты', icon: BarChart2 },
   ];
 
+    const initials = useMemo(() => {
+    const words = accountName.trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return 'РС';
+    return words.slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('');
+  }, [accountName]);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as Node;
+      const isDesktopHit = desktopMenuRef.current?.contains(target);
+      const isMobileHit = mobileMenuRef.current?.contains(target);
+      if (!isDesktopHit && !isMobileHit) {
+        setIsAccountMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
   return (
     <>
-      {/* Desktop sidebar */}
       <div className="hidden md:flex w-64 bg-white border-r border-slate-200 flex-col">
         <div className="p-6 border-b border-slate-100">
           <div className="flex items-center space-x-2 text-blue-600">
@@ -77,21 +108,56 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           ))}
         </nav>
 
-        <div className="p-4 border-t border-slate-100">
-          <div className="flex items-center space-x-3 p-2 rounded-lg bg-slate-50 border border-slate-100">
+        <div className="p-4 border-t border-slate-100" ref={desktopMenuRef}>
+          <button
+            onClick={() => setIsAccountMenuOpen((prev) => !prev)}
+            className="w-full flex items-center space-x-3 p-2 rounded-lg bg-slate-50 border border-slate-100 hover:border-slate-200"
+            >
             <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
-              АД
+              {initials}
             </div>
-            <div className="overflow-hidden">
-              <p className="text-sm font-medium text-slate-900 truncate">Администратор</p>
-              <p className="text-xs text-slate-500 truncate">Зав. отделением</p>
+            <div className="overflow-hidden flex-1 text-left">
+              <p className="text-sm font-medium text-slate-900 truncate">{accountName}</p>
+              <p className="text-xs text-slate-500 truncate">{accountRole}</p>
             </div>
+            <ChevronUp size={16} className={`text-slate-400 transition-transform ${isAccountMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isAccountMenuOpen ? (
+            <div className="mt-2 rounded-lg border border-slate-200 bg-white shadow-sm py-1">
+              <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Настроить пользователя</button>
+              <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Сменить пароль</button>
+              <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры профиля (ФИО)</button>
+              <hr className="my-1 border-slate-100" />
+              <button onClick={onLogout} className="w-full px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50">Выйти из аккаунта</button>
+            </div>
+          ) : null}
           </div>
         </div>
+
+      <div className="md:hidden fixed right-3 bottom-20 z-50" ref={mobileMenuRef}>
+        <button
+          onClick={() => setIsAccountMenuOpen((prev) => !prev)}
+          className="w-11 h-11 rounded-full bg-white border border-slate-200 shadow flex items-center justify-center text-blue-700"
+          aria-label="Меню пользователя"
+        >
+          <UserCircle2 size={24} />
+        </button>
+        {isAccountMenuOpen ? (
+          <div className="absolute right-0 bottom-14 w-64 rounded-lg border border-slate-200 bg-white shadow-lg py-2">
+            <div className="px-3 pb-2 border-b border-slate-100">
+              <p className="text-sm font-medium text-slate-900 truncate">{accountName}</p>
+              <p className="text-xs text-slate-500 truncate">{accountRole}</p>
+            </div>
+            <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Настроить пользователя</button>
+            <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Сменить пароль</button>
+            <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры профиля (ФИО)</button>
+            <hr className="my-1 border-slate-100" />
+            <button onClick={onLogout} className="w-full px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50">Выйти из аккаунта</button>
+          </div>
+        ) : null}
       </div>
 
-      {/* Mobile bottom nav */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-slate-200 flex items-stretch h-16 safe-area-pb">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200 flex items-stretch h-16 safe-area-pb">
         {menuItems.map((item) => (
           <SidebarItem
             key={item.id}

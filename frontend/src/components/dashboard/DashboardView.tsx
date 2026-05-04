@@ -23,8 +23,8 @@ export const DashboardView: React.FC = () => {
           new Date().toISOString().split('T')[0]
         )
       ]);
-      setStats(statsRes.data);
-      setChartData(chartRes.data);
+      setStats(statsRes);
+      setChartData(chartRes);
     } catch (error) {
       console.error('Error loading dashboard:', error);
     } finally {
