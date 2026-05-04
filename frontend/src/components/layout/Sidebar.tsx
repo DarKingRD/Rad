@@ -124,9 +124,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             {isAccountMenuOpen ? (
             <div className="mt-2 rounded-lg border border-slate-200 bg-white shadow-sm py-1">
-              <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Настроить пользователя</button>
+              <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры пользователя</button>
               <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Сменить пароль</button>
-              <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры профиля (ФИО)</button>
               <hr className="my-1 border-slate-100" />
               <button onClick={onLogout} className="w-full px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50">Выйти из аккаунта</button>
             </div>
@@ -148,9 +147,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <p className="text-sm font-medium text-slate-900 truncate">{accountName}</p>
               <p className="text-xs text-slate-500 truncate">{accountRole}</p>
             </div>
-            <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Настроить пользователя</button>
+            <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры пользователя</button>
             <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Сменить пароль</button>
-            <button className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры профиля (ФИО)</button>
             <hr className="my-1 border-slate-100" />
             <button onClick={onLogout} className="w-full px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50">Выйти из аккаунта</button>
           </div>

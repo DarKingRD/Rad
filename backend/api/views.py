@@ -502,3 +502,70 @@ def login_view(request):
             },
         }
     )
+
+@api_view(["GET", "PATCH"])
+def profile_view(request):
+    user = request.user
+
+    if request.method == "GET":
+        return Response(
+            {
+                "id": user.id,
+                "username": user.username,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "full_name": user.get_full_name() or user.username,
+            }
+        )
+
+    first_name = request.data.get("first_name")
+    last_name = request.data.get("last_name")
+
+    update_fields = []
+    if first_name is not None:
+        user.first_name = str(first_name).strip()
+        update_fields.append("first_name")
+    if last_name is not None:
+        user.last_name = str(last_name).strip()
+        update_fields.append("last_name")
+
+    if not update_fields:
+        return Response(
+            {"detail": "Передайте first_name и/или last_name."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user.save(update_fields=update_fields)
+    return Response(
+        {
+            "id": user.id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "full_name": user.get_full_name() or user.username,
+        }
+    )
+
+
+@api_view(["POST"])
+def change_password_view(request):
+    old_password = request.data.get("old_password")
+    new_password = request.data.get("new_password")
+
+    if not old_password or not new_password:
+        return Response(
+            {"detail": "Передайте old_password и new_password."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user = request.user
+    if not user.check_password(old_password):
+        return Response(
+            {"detail": "Старый пароль указан неверно."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+
+    return Response({"detail": "Пароль успешно изменён."})

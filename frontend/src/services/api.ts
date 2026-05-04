@@ -192,6 +192,11 @@ async function putOne<TResponse, TPayload>(url: string, payload: TPayload): Prom
   return response.data;
 }
 
+async function patchOne<TResponse, TPayload>(url: string, payload: TPayload): Promise<TResponse> {
+  const response = await api.patch<TResponse>(url, payload);
+  return response.data;
+}
+
 async function deleteOne(url: string): Promise<void> {
   await api.delete(url);
 }
@@ -257,6 +262,17 @@ export const authApi = {
       return null;
     }
   },
+  getProfile: () => getOne<AuthUser & { first_name: string; last_name: string }>('/auth/profile/'),
+  updateProfile: (payload: { first_name?: string; last_name?: string }) =>
+    patchOne<AuthUser & { first_name: string; last_name: string }, { first_name?: string; last_name?: string }>(
+      '/auth/profile/',
+      payload
+    ),
+  changePassword: (old_password: string, new_password: string) =>
+    postOne<{ detail: string }, { old_password: string; new_password: string }>(
+      '/auth/change-password/',
+      { old_password, new_password }
+    ),
   isAuthenticated: () => Boolean(localStorage.getItem(AUTH_TOKEN_KEY)),
 };
 

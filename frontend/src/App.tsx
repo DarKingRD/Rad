@@ -61,9 +61,6 @@ export default function App() {
           onRefresh={handleRefresh}
         />
         <div className="px-8 pt-4">
-          <button onClick={handleLogout} className="text-sm text-slate-500 hover:text-slate-800">
-            Выйти
-          </button>
         </div>
         <main className="flex-1 overflow-y-auto p-8">
           <div className="max-w-7xl mx-auto">

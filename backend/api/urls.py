@@ -12,6 +12,8 @@ from .views import (
     confirm_distribution,
     forecast_compare_methods,
     login_view,
+    profile_view,
+    change_password_view,
 )
 
 router = DefaultRouter()
@@ -29,4 +31,6 @@ urlpatterns = [
     path('distribute/preview/', distribution_preview, name='distribution-preview'),
     path('forecast/compare-methods/', forecast_compare_methods, name='forecast-compare-methods'),
     path('auth/login/', login_view, name="auth-login"),
+    path("auth/profile/", profile_view, name="auth-profile"),
+    path("auth/change-password/", change_password_view, name="auth-change-password"),
 ]
