@@ -271,25 +271,25 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const days = forecast?.days || [];
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 md:p-5 space-y-4">
-      <div className="flex flex-col lg:flex-row lg:justify-between lg:items-end gap-4">
+    <div className="space-y-4 rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <div className="text-lg font-semibold text-slate-900">Прогноз потребности в специалистах</div>
-          <div className="text-sm text-slate-600 mt-1">
+          <div className="text-lg font-semibold text-slate-950">Прогноз потребности в специалистах</div>
+          <div className="mt-1 max-w-3xl text-sm text-slate-600">
             Выберите диапазон дат прогноза. Расчёт строится по всем доступным исследованиям в БД и показывает ожидаемое число исследований,
             рекомендуемое количество врачей и ключевые модальности по дням.
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+        <div className="flex flex-col gap-3 xl:min-w-[680px]">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
             <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
               Прогноз от
               <input
                 type="date"
                 value={inputDateFrom}
                 onChange={(e) => setInputDateFrom(e.target.value)}
-                className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-normal text-slate-900"
+                className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
               />
             </label>
             <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
@@ -298,7 +298,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                 type="date"
                 value={inputDateTo}
                 onChange={(e) => setInputDateTo(e.target.value)}
-                className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-normal text-slate-900"
+                className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
               />
             </label>
             <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
@@ -307,7 +307,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                 type="date"
                 value={inputHistoryStartDate}
                 onChange={(e) => setInputHistoryStartDate(e.target.value)}
-                className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-normal text-slate-900"
+                className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
               />
             </label>
             <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
@@ -316,20 +316,20 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                 type="date"
                 value={inputHistoryEndDate}
                 onChange={(e) => setInputHistoryEndDate(e.target.value)}
-                className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-normal text-slate-900"
+                className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
               />
             </label>
           </div>
           <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
             <button
               onClick={handleApply}
-              className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
+              className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
             >
               Построить прогноз
             </button>
             <button
               onClick={() => loadForecast(appliedDateFrom, appliedDateTo, appliedHistoryStartDate, appliedHistoryEndDate)}
-              className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 inline-flex items-center justify-center gap-1.5"
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
             >
               <RefreshCw size={16} />
               Обновить
@@ -338,28 +338,28 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         </div>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-        <div className="bg-slate-50 rounded-lg border border-slate-200 p-3">
-          <div className="text-xs text-slate-500 mb-1">Ожидается исследований</div>
-          <div className="text-xl font-bold text-slate-900">{loading ? '…' : formatMetric(summary?.total_expected_studies, 1)}</div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ожидается исследований</div>
+          <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : formatMetric(summary?.total_expected_studies, 1)}</div>
         </div>
-        <div className="bg-slate-50 rounded-lg border border-slate-200 p-3">
-          <div className="text-xs text-slate-500 mb-1">Ожидаемый объём, УП</div>
-          <div className="text-xl font-bold text-slate-900">{loading ? '…' : formatMetric(summary?.total_expected_up, 2)}</div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ожидаемый объём, УП</div>
+          <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : formatMetric(summary?.total_expected_up, 2)}</div>
         </div>
-        <div className="bg-slate-50 rounded-lg border border-slate-200 p-3">
-          <div className="text-xs text-slate-500 mb-1">Пиковая потребность во врачах</div>
-          <div className="text-xl font-bold text-slate-900">{loading ? '…' : summary?.max_min_doctors_per_shift ?? 0}</div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Пиковая потребность во врачах</div>
+          <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : summary?.max_min_doctors_per_shift ?? 0}</div>
         </div>
-        <div className="bg-slate-50 rounded-lg border border-slate-200 p-3">
-          <div className="text-xs text-slate-500 mb-1">Основные модальности</div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Основные модальности</div>
           <div className="text-sm font-medium text-slate-900 leading-6">
             {loading ? '…' : summary?.modalities?.join(', ') || '—'}
           </div>
         </div>
       </div>
 
-      <div className="text-xs md:text-sm text-slate-600 bg-slate-50 px-4 py-2 rounded-md">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600 md:text-sm">
         {forecast?.message || 'Прогноз будет загружен после выбора диапазона.'}
       </div>
 
@@ -370,17 +370,17 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
 
       {!loading && !error && chartData.length > 0 && (
-        <div className="grid lg:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-slate-200 p-4">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="font-semibold text-slate-900 mb-1">График ожидаемого числа исследований</div>
             <div className="text-xs text-slate-500 mb-4">Сколько исследований прогнозируется на каждый день выбранного диапазона.</div>
-            <div className="h-72">
+            <div className="h-64 sm:h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -393,10 +393,10 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 p-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="font-semibold text-slate-900 mb-1">График рекомендуемого числа врачей</div>
             <div className="text-xs text-slate-500 mb-4">Сколько врачей рекомендуется на каждый день выбранного диапазона.</div>
-            <div className="h-72">
+            <div className="h-64 sm:h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -411,7 +411,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         </div>
       )}
       {!loading && !error && days.length > 0 && (
-        <div className="rounded-xl border border-slate-200 p-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="font-semibold text-slate-900 mb-1">Рекомендации по вызову врачей на смену</div>
           <div className="text-xs text-slate-500 mb-3">
             Базовый подбор: для каждой модальности выбираются все активные врачи с этой модальностью.
@@ -430,7 +430,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                       const missingCount = Math.max(0, needCount - selected.length);
 
                       return (
-                        <div key={`${day.date}-${modality.modality}`} className="text-sm">
+                        <div key={`${day.date}-${modality.modality}`} className="rounded-xl bg-white px-3 py-2 text-sm">
                           <span className="font-medium text-slate-800">{modality.modality}</span>: нужно <span className="font-semibold">{needCount}</span>
                           {selected.length > 0 ? (
                             <span className="text-slate-600"> · желательно вызвать: {selected.map(getDoctorName).join(', ')}</span>
@@ -451,14 +451,14 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         </div>
       )}
       {!loading && !error && days.length === 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           Для выбранного диапазона не удалось построить прогноз.
         </div>
       )}
 
       {!loading && !error && days.length > 0 && (
-        <div className="border border-slate-200 rounded-xl overflow-hidden">
-          <div className="bg-slate-50 px-4 py-3 border-b border-slate-200">
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 bg-slate-50/80 px-4 py-3">
             <div className="font-semibold text-slate-900">
               {formatDateFullLabel(forecast?.date_from)} — {formatDateFullLabel(forecast?.date_to)}
             </div>

@@ -286,13 +286,13 @@ const CurrentDistributionView = () => {
     [studyTypes]
   );
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="space-y-5 md:space-y-6">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">
+          <h2 className="text-2xl font-bold tracking-tight text-slate-950">
             Текущее распределение
           </h2>
-          <p className="text-slate-500 mt-1">
+          <p className="mt-1 max-w-2xl text-sm text-slate-500">
             Выбери исследование, врача и выполни ручное или автоматическое распределение
           </p>
         </div>
@@ -300,7 +300,7 @@ const CurrentDistributionView = () => {
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setShowDrafts(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
             <Archive size={16} />
             Черновики
@@ -314,48 +314,48 @@ const CurrentDistributionView = () => {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 md:gap-4">
+        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
               <UserCheck size={22} />
             </div>
             <div>
-              <div className="text-sm text-slate-500">Доступно врачей</div>
-              <div className="text-2xl font-bold text-slate-900">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Доступно врачей</div>
+              <div className="text-2xl font-bold tracking-tight text-slate-950">
                 {loading ? '—' : distInfo?.available_doctors ?? doctors.length}
               </div>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
               <Filter size={22} />
             </div>
             <div>
-              <div className="text-sm text-slate-500">Ожидают назначения</div>
-              <div className="text-2xl font-bold text-slate-900">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ожидают назначения</div>
+              <div className="text-2xl font-bold tracking-tight text-slate-950">
                 {studiesLoading ? '—' : studiesTotal}
               </div>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-green-50 flex items-center justify-center text-green-600">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
               <Calendar size={22} />
             </div>
             <div>
-              <div className="text-sm text-slate-500">Дата распределения</div>
-              <div className="text-2xl font-bold text-slate-900">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Дата распределения</div>
+              <div className="text-2xl font-bold tracking-tight text-slate-950">
                 {distributionDate}
               </div>
             </div>
@@ -363,9 +363,9 @@ const CurrentDistributionView = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 md:p-5">
+      <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
         <div className="flex flex-col gap-4">
-          <div className="flex flex-col lg:flex-row gap-3 lg:items-end">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto_240px_auto] xl:items-end">
             <div className="flex-1">
               <label className="block text-sm font-medium text-slate-700 mb-1">
                 Дата распределения
@@ -374,7 +374,7 @@ const CurrentDistributionView = () => {
                 type="date"
                 value={distributionDate}
                 onChange={(e) => setDistributionDate(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
               />
             </div>
 
@@ -386,7 +386,7 @@ const CurrentDistributionView = () => {
                 type="date"
                 value={distributionDateFrom}
                 onChange={(e) => setDistributionDateFrom(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
               />
             </div>
 
@@ -398,27 +398,27 @@ const CurrentDistributionView = () => {
                 type="date"
                 value={distributionDateTo}
                 onChange={(e) => setDistributionDateTo(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
               />
             </div>
 
-            <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 h-[42px]">
+            <label className="inline-flex h-[42px] items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm xl:mb-0">
               <input
                 type="checkbox"
                 checked={useMip}
                 onChange={(e) => setUseMip(e.target.checked)}
               />
-              <span className="text-sm text-slate-700">Использовать MIP</span>
+              <span className="text-sm font-medium text-slate-700">MIP</span>
             </label>
 
-            <div className="min-w-[220px]">
+            <div className="min-w-0">
               <label className="block text-sm font-medium text-slate-700 mb-1">
                 Objective
               </label>
               <select
                 value={objective}
                 onChange={(e) => setObjective(e.target.value as DistributionObjective)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
               >
                 {OBJECTIVE_OPTIONS.map((item) => (
                   <option key={item.value} value={item.value}>
@@ -431,7 +431,7 @@ const CurrentDistributionView = () => {
             <button
               onClick={handleRunDistribution}
               disabled={distributing}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              className="inline-flex h-[42px] items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:col-span-2 xl:col-span-1"
             >
               {distributing ? (
                 <>
@@ -448,7 +448,7 @@ const CurrentDistributionView = () => {
           </div>
 
           {selectedStudy && (
-            <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div className="flex flex-col gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <div className="text-sm text-blue-700">Выбрано исследование</div>
                 <div className="font-medium text-blue-900">
@@ -469,7 +469,7 @@ const CurrentDistributionView = () => {
                 <button
                   onClick={handleAssign}
                   disabled={!selectedDoctor}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Eye size={16} />
                   Назначить вручную
@@ -480,7 +480,7 @@ const CurrentDistributionView = () => {
                     setSelectedStudy(null);
                     setSelectedDoctor(null);
                   }}
-                  className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   Сбросить
                 </button>
@@ -490,12 +490,12 @@ const CurrentDistributionView = () => {
         </div>
       </div>
 
-      <div className="lg:hidden flex rounded-xl border border-slate-200 bg-white p-1">
+      <div className="sticky top-2 z-20 flex rounded-2xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur lg:hidden">
         <button
           onClick={() => setMobileTab('studies')}
           className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${
             mobileTab === 'studies'
-              ? 'bg-blue-600 text-white'
+              ? 'bg-blue-600 text-white shadow-sm'
               : 'text-slate-700 hover:bg-slate-50'
           }`}
         >
@@ -505,7 +505,7 @@ const CurrentDistributionView = () => {
           onClick={() => setMobileTab('doctors')}
           className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${
             mobileTab === 'doctors'
-              ? 'bg-blue-600 text-white'
+              ? 'bg-blue-600 text-white shadow-sm'
               : 'text-slate-700 hover:bg-slate-50'
           }`}
         >
@@ -513,19 +513,19 @@ const CurrentDistributionView = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
         <div
           className={`xl:col-span-5 space-y-4 ${
             mobileTab !== 'studies' ? 'hidden lg:block' : ''
           }`}
         >
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4 md:px-5">
               <div>
-                <h3 className="font-semibold text-slate-900">
+                <h3 className="font-semibold text-slate-950">
                   Ожидающие исследования
                 </h3>
-                <p className="text-sm text-slate-500 mt-0.5">
+                <p className="mt-0.5 text-sm text-slate-500">
                   Выбери исследование для ручного назначения
                 </p>
               </div>
@@ -533,13 +533,13 @@ const CurrentDistributionView = () => {
               {studiesLoading && <Loader2 size={18} className="animate-spin text-slate-400" />}
             </div>
 
-            <div className="divide-y divide-slate-100 max-h-[720px] overflow-y-auto">
-              <div className="px-5 py-4 border-b border-slate-100 bg-slate-50">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div className="max-h-[calc(100dvh-300px)] divide-y divide-slate-100 overflow-y-auto xl:max-h-[720px]">
+              <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-4 md:px-5">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <select
                     value={priorityFilter}
                     onChange={(e) => setPriorityFilter(e.target.value as typeof priorityFilter)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
                   >
                     <option value="all">Все приоритеты</option>
                     <option value="cito">CITO</option>
@@ -549,7 +549,7 @@ const CurrentDistributionView = () => {
                   <select
                     value={modalityFilter}
                     onChange={(e) => setModalityFilter(e.target.value)}
-                    className="min-w-0 max-w-full border border-slate-300 rounded-lg px-3 py-2 pr-8 text-sm bg-white overflow-hidden text-ellipsis whitespace-nowrap"
+                    className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-8 text-sm"
                   >
                     <option value="">Все модальности</option>
                     {modalityOptions.map((modality) => (
@@ -562,13 +562,13 @@ const CurrentDistributionView = () => {
                     type="date"
                     value={createdFromFilter}
                     onChange={(e) => setCreatedFromFilter(e.target.value)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
                   />
                   <input
                     type="date"
                     value={createdToFilter}
                     onChange={(e) => setCreatedToFilter(e.target.value)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
                   />
                 </div>
               </div>
@@ -583,8 +583,8 @@ const CurrentDistributionView = () => {
                     <button
                       key={study.research_number}
                       onClick={() => setSelectedStudy(study)}
-                      className={`w-full text-left px-5 py-4 hover:bg-slate-50 transition ${
-                        isSelected ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                      className={`w-full px-4 py-4 text-left transition hover:bg-slate-50 md:px-5 ${
+                        isSelected ? 'border-l-4 border-blue-500 bg-blue-50' : ''
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -611,7 +611,7 @@ const CurrentDistributionView = () => {
               )}
             </div>
 
-            <div className="px-5 py-4 border-t border-slate-200">
+            <div className="border-t border-slate-200 px-4 py-4 md:px-5">
               <Pagination
                 page={currentPage}
                 setPage={setCurrentPage}
@@ -626,17 +626,17 @@ const CurrentDistributionView = () => {
             mobileTab !== 'doctors' ? 'hidden lg:block' : ''
           }`}
         >
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4 md:px-5">
               <div>
-                <h3 className="font-semibold text-slate-900">Доступные врачи</h3>
-                <p className="text-sm text-slate-500 mt-0.5">
+                <h3 className="font-semibold text-slate-950">Доступные врачи</h3>
+                <p className="mt-0.5 text-sm text-slate-500">
                   Раскрой врача, чтобы посмотреть его текущие исследования
                 </p>
               </div>
             </div>
 
-            <div className="p-4 space-y-3 max-h-[720px] overflow-y-auto">
+            <div className="max-h-[calc(100dvh-250px)] space-y-3 overflow-y-auto p-3 md:p-4 xl:max-h-[720px]">
               {paginatedDoctors.length === 0 && !loading ? (
                 <div className="text-center py-12 text-slate-500">Врачи не найдены</div>
               ) : (
@@ -656,7 +656,7 @@ const CurrentDistributionView = () => {
               )}
             </div>
 
-            <div className="px-5 py-4 border-t border-slate-200">
+            <div className="border-t border-slate-200 px-4 py-4 md:px-5">
               <Pagination
                 page={doctorPage}
                 setPage={setDoctorPage}

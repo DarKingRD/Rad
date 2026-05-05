@@ -41,7 +41,7 @@ export default function App() {
   const accountRole = currentUser?.username ? `Логин: ${currentUser.username}` : 'Авторизованный пользователь';
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
+    <div className="flex h-dvh overflow-hidden bg-gradient-to-br from-slate-50 via-white to-blue-50/40 font-sans text-slate-900">
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -50,7 +50,7 @@ export default function App() {
         onLogout={handleLogout}
       />
       
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex min-w-0 flex-col overflow-hidden">
         <Header 
           currentDate={new Date().toLocaleDateString('ru-RU', { 
             day: 'numeric', 
@@ -60,10 +60,8 @@ export default function App() {
           })} 
           onRefresh={handleRefresh}
         />
-        <div className="px-8 pt-4">
-        </div>
-        <main className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-7xl mx-auto">
+        <main className="flex-1 overflow-y-auto px-4 py-4 pb-24 md:px-6 md:py-6 md:pb-6 xl:px-8">
+          <div className="mx-auto w-full max-w-[1480px]">
             {renderContent()}
           </div>
         </main>

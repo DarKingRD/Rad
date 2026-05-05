@@ -329,14 +329,17 @@ export const ShiftPlanningView: React.FC = () => {
   }
 
   return (
-    <div className="space-y-4 md:space-y-6">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
-        <h2 className="text-xl md:text-2xl font-bold text-slate-900">Планирование смен</h2>
-        <div className="flex items-center gap-2 flex-wrap">
+    <div className="space-y-5 md:space-y-6">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-950">Планирование смен</h2>
+          <p className="mt-1 text-sm text-slate-500">График врачей, статусы дней и прогноз потребности</p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <select
             value={selectedDoctor}
             onChange={(e) => setSelectedDoctor(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-            className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white flex-1 sm:flex-none min-w-0"
+            className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm sm:flex-none sm:min-w-[240px]"
           >
             <option value="all">Все врачи</option>
             {doctors.map((doc) => (
@@ -344,78 +347,79 @@ export const ShiftPlanningView: React.FC = () => {
             ))}
           </select>
 
-          <div className="flex items-center gap-1">
-            <button onClick={handlePrevWeek} className="p-2 bg-white border border-slate-300 rounded-md hover:bg-slate-50">
+          <div className="flex items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+            <button onClick={handlePrevWeek} className="rounded-xl p-2 text-slate-700 hover:bg-slate-100">
               <ChevronLeft size={16} />
             </button>
-            <button onClick={handleToday} className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 whitespace-nowrap">
+            <button onClick={handleToday} className="rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap">
               Сегодня
             </button>
-            <button onClick={handleNextWeek} className="p-2 bg-white border border-slate-300 rounded-md hover:bg-slate-50">
+            <button onClick={handleNextWeek} className="rounded-xl p-2 text-slate-700 hover:bg-slate-100">
               <ChevronRight size={16} />
             </button>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
-          <div className="text-xs md:text-sm text-slate-600 mb-1">Всего врачей</div>
-          <div className="text-xl md:text-2xl font-bold text-slate-900">{calculateStats.totalDoctors}</div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Всего врачей</div>
+          <div className="text-2xl font-bold tracking-tight text-slate-950">{calculateStats.totalDoctors}</div>
         </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
+        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-xs md:text-sm text-slate-600">Рабочих смен</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Рабочих смен</div>
             <CheckCircle2 size={14} className="text-green-600" />
           </div>
-          <div className="text-xl md:text-2xl font-bold text-slate-900">
+          <div className="text-2xl font-bold tracking-tight text-slate-950">
             {calculateStats.filledShifts}/{calculateStats.totalPossibleShifts}
           </div>
         </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
+        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-xs md:text-sm text-slate-600">Близко к лимиту</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Близко к лимиту</div>
             <AlertTriangle size={14} className="text-amber-600" />
           </div>
-          <div className="text-xl md:text-2xl font-bold text-amber-600">{calculateStats.warningShifts}</div>
+          <div className="text-2xl font-bold tracking-tight text-amber-600">{calculateStats.warningShifts}</div>
         </div>
-        <div className="bg-white rounded-lg border border-slate-200 p-3 md:p-4">
+        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-xs md:text-sm text-slate-600">Перегрузки</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Перегрузки</div>
             <AlertCircle size={14} className="text-red-600" />
           </div>
-          <div className="text-xl md:text-2xl font-bold text-red-600">{calculateStats.overloadShifts}</div>
+          <div className="text-2xl font-bold tracking-tight text-red-600">{calculateStats.overloadShifts}</div>
         </div>
       </div>
 
       <ShiftForecastPanel refreshKey={forecastRefreshKey} doctors={doctors}/>
 
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
-          <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <button className="hidden items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 md:flex">
             <RefreshCw size={16} />Очистить неделю
           </button>
-          <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
+          <button className="hidden items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 md:flex">
             <Search size={16} />Балансировать нагрузку
           </button>
-          <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
+          <button className="hidden items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 md:flex">
             <Printer size={16} />Печать
           </button>
         </div>
         <div className="flex items-center gap-2">
-          <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
+          <button className="hidden items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 md:flex">
             <Copy size={16} />Копировать неделю
           </button>
         </div>
       </div>
 
-      <div className="text-xs md:text-sm text-slate-600 bg-slate-50 px-4 py-2 rounded-md">
+      <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-xs text-slate-600 shadow-sm md:text-sm">
         <span className="font-medium">Неделя:</span> {new Date(dates[0]).toLocaleDateString('ru-RU')} — {new Date(dates[6]).toLocaleDateString('ru-RU')}
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm" style={{ minWidth: '760px' }}>
+          <div className="min-w-max">
+          <table className="w-full text-left text-sm" style={{ minWidth: '840px' }}>
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-4 md:px-6 py-4 font-semibold text-slate-700 sticky left-0 bg-slate-50 z-10">Врач</th>
@@ -489,12 +493,13 @@ export const ShiftPlanningView: React.FC = () => {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <div className="text-sm font-semibold text-blue-900 mb-2">Как теперь трактуется day_status</div>
-        <ul className="text-xs text-blue-800 space-y-1">
+      <div className="rounded-2xl border border-blue-200 bg-blue-50/80 p-4">
+        <div className="mb-2 text-sm font-semibold text-blue-900">Подсказка по day_status</div>
+        <ul className="grid gap-1 text-xs text-blue-800 sm:grid-cols-2 lg:grid-cols-3">
           <li>• 0 — рабочий день.</li>
           <li>• 1 — выходной.</li>
           <li>• 2 — отпуск / плановое отсутствие.</li>
@@ -504,10 +509,10 @@ export const ShiftPlanningView: React.FC = () => {
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full mx-4">
-            <div className="flex justify-between items-center p-6 border-b border-slate-200">
-              <h3 className="text-xl font-bold text-slate-900">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4">
+          <div className="max-h-[95dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 p-5 backdrop-blur">
+              <h3 className="text-lg font-bold text-slate-900">
                 {editingSchedule ? 'Редактировать смену' : 'Добавить смену'}
               </h3>
               <button
@@ -526,7 +531,7 @@ export const ShiftPlanningView: React.FC = () => {
                 <select
                   value={formData.doctor_id}
                   onChange={(e) => setFormData({ ...formData, doctor_id: parseInt(e.target.value) })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                   required
                 >
                   {doctors.map((doc) => (
@@ -545,7 +550,7 @@ export const ShiftPlanningView: React.FC = () => {
                   type="date"
                   value={formData.work_date}
                   onChange={(e) => setFormData({ ...formData, work_date: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                   required
                 />
               </div>
@@ -557,7 +562,7 @@ export const ShiftPlanningView: React.FC = () => {
                 <select
                   value={formData.day_status}
                   onChange={(e) => setFormData({ ...formData, day_status: Number(e.target.value) })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                 >
                   {DAY_STATUS_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
@@ -567,7 +572,7 @@ export const ShiftPlanningView: React.FC = () => {
 
               {formData.day_status === 0 && (
                 <>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
                         Время начала
@@ -576,7 +581,7 @@ export const ShiftPlanningView: React.FC = () => {
                         type="time"
                         value={formData.time_start}
                         onChange={(e) => setFormData({ ...formData, time_start: e.target.value })}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                         required
                       />
                     </div>
@@ -588,7 +593,7 @@ export const ShiftPlanningView: React.FC = () => {
                         type="time"
                         value={formData.time_end}
                         onChange={(e) => setFormData({ ...formData, time_end: e.target.value })}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                         required
                       />
                     </div>
@@ -605,7 +610,7 @@ export const ShiftPlanningView: React.FC = () => {
                           type="time"
                           value={formData.break_start}
                           onChange={(e) => setFormData({ ...formData, break_start: e.target.value })}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                          className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                         />
                       </div>
                       <div>
@@ -614,7 +619,7 @@ export const ShiftPlanningView: React.FC = () => {
                           type="time"
                           value={formData.break_end}
                           onChange={(e) => setFormData({ ...formData, break_end: e.target.value })}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                          className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                         />
                       </div>
                     </div>
@@ -628,7 +633,7 @@ export const ShiftPlanningView: React.FC = () => {
                       type="number"
                       value={formData.planned_up}
                       onChange={(e) => setFormData({ ...formData, planned_up: parseInt(e.target.value) || 0 })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                       min="0"
                     />
                   </div>
@@ -636,15 +641,15 @@ export const ShiftPlanningView: React.FC = () => {
               )}
 
               {formData.day_status !== 0 && (
-                <div className="rounded-md bg-slate-50 border border-slate-200 p-3 text-sm text-slate-600">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                   Для нерабочих статусов время смены и УП при сохранении будут сброшены.
                 </div>
               )}
 
-              <div className="flex space-x-3 pt-4">
+              <div className="flex flex-col gap-3 pt-4 sm:flex-row">
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700"
+                  className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-700"
                 >
                   {editingSchedule ? 'Сохранить' : 'Добавить'}
                 </button>
@@ -652,7 +657,7 @@ export const ShiftPlanningView: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleDelete}
-                    className="px-4 py-2 bg-red-600 text-white rounded-md font-medium hover:bg-red-700"
+                    className="rounded-xl bg-red-600 px-4 py-2.5 font-semibold text-white hover:bg-red-700"
                   >
                     Удалить
                   </button>
@@ -660,7 +665,7 @@ export const ShiftPlanningView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  className="flex-1 px-4 py-2 bg-slate-200 text-slate-700 rounded-md font-medium hover:bg-slate-300"
+                  className="flex-1 rounded-xl bg-slate-100 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-200"
                 >
                   Отмена
                 </button>

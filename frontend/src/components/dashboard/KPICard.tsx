@@ -2,16 +2,16 @@ import React from 'react';
 import { KPICardProps } from '../../types';
 
 export const KPICard: React.FC<KPICardProps & { className?: string }> = ({ title, value, subtext, trend, className }) => (
-  <div className={`bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm ${className || ''}`}>
-    <h3 className="text-slate-500 text-xs md:text-sm font-medium mb-1 md:mb-2 truncate">{title}</h3>
-    <div className="flex items-baseline space-x-2">
-      <span className="text-2xl md:text-3xl font-bold text-slate-900 truncate">{value}</span>
-      {trend && (
-        <span className={`text-xs md:text-sm shrink-0 ${trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
+  <div className={`rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 transition hover:-translate-y-0.5 hover:shadow-md md:p-5 ${className || ''}`}>
+    <h3 className="mb-1.5 truncate text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</h3>
+    <div className="flex min-w-0 items-baseline gap-2">
+      <span className="truncate text-2xl font-bold tracking-tight text-slate-950 md:text-3xl">{value}</span>
+      {trend ? (
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${trend > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
           {trend > 0 ? '+' : ''}{trend}%
         </span>
-      )}
+      ) : null}
     </div>
-    <p className="text-slate-400 text-xs mt-1 md:mt-2 truncate">{subtext}</p>
+    <p className="mt-2 truncate text-xs text-slate-500">{subtext}</p>
   </div>
 );

@@ -192,22 +192,25 @@ export const DoctorsView: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <h2 className="text-xl md:text-2xl font-bold text-slate-900">
-          Врачи
-          <span className="ml-2 text-sm font-normal text-slate-400">({sortedDoctors.length})</span>
-        </h2>
+    <div className="space-y-5 md:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-950">
+            Врачи
+            <span className="ml-2 text-sm font-normal text-slate-400">({sortedDoctors.length})</span>
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">Справочник специалистов, модальности и текущая нагрузка</p>
+        </div>
         <button
           onClick={() => handleOpenModal()}
-          className="px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 whitespace-nowrap shadow-sm self-start sm:self-auto"
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700 sm:self-auto"
         >
           <Plus size={18} /> Добавить врача
         </button>
       </div>
 
-      <div className="relative">
-        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+      <div className="relative rounded-2xl border border-slate-200/80 bg-white/90 p-2 shadow-sm shadow-slate-200/60">
+        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-5">
           <Search size={18} className="text-slate-400" />
         </div>
         <input
@@ -215,20 +218,20 @@ export const DoctorsView: React.FC = () => {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Поиск по ФИО, специализации..."
-          className="w-full pl-11 pr-10 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm"
+          className="w-full rounded-xl border border-transparent bg-slate-50 py-2.5 pl-11 pr-10 text-sm transition focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-100"
         />
         {searchQuery && (
           <button
             onClick={() => setSearchQuery('')}
-            className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors"
+            className="absolute inset-y-0 right-0 flex items-center pr-5 text-slate-400 transition-colors hover:text-slate-600"
           >
             <X size={18} />
           </button>
         )}
       </div>
 
-      <div className="hidden md:block bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <table className="w-full text-left text-sm">
+      <div className="hidden overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60 md:block">
+        <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="px-6 py-4 font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort('fio_alias')}>
@@ -299,7 +302,7 @@ export const DoctorsView: React.FC = () => {
               ))
             )}
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       <div className="md:hidden space-y-3">
@@ -309,7 +312,7 @@ export const DoctorsView: React.FC = () => {
           </div>
         ) : (
           sortedDoctors.map((doc) => (
-            <div key={doc.id} className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
+            <div key={doc.id} className="space-y-3 rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="font-semibold text-slate-900 text-sm">{doc.fio_alias || 'Не указано'}</div>
@@ -322,7 +325,7 @@ export const DoctorsView: React.FC = () => {
               {doc.modality && doc.modality.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {doc.modality.map((mod, i) => (
-                    <span key={i} className="px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-800 border border-blue-200">{mod}</span>
+                    <span key={i} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-800">{mod}</span>
                   ))}
                 </div>
               )}
@@ -348,9 +351,9 @@ export const DoctorsView: React.FC = () => {
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 sm:p-4">
-          <div className="bg-white sm:rounded-2xl shadow-2xl max-w-lg w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto rounded-t-2xl">
-            <div className="flex justify-between items-center p-5 border-b border-slate-200 sticky top-0 bg-white z-10">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4">
+          <div className="max-h-[95dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:max-h-[90vh] sm:rounded-3xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 p-5 backdrop-blur">
               <h3 className="text-lg font-bold text-slate-900">
                 {editingDoctor ? 'Редактировать врача' : 'Добавить врача'}
               </h3>
@@ -371,7 +374,7 @@ export const DoctorsView: React.FC = () => {
                   type="text"
                   value={formData.fio_alias}
                   onChange={(e) => setFormData({ ...formData, fio_alias: e.target.value })}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                   required
                 />
               </div>
@@ -383,7 +386,7 @@ export const DoctorsView: React.FC = () => {
                 <select
                   value={formData.position_type}
                   onChange={(e) => setFormData({ ...formData, position_type: e.target.value })}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                 >
                   <option value="radiologist">Рентгенолог</option>
                   <option value="diagnostician">КТ-диагност</option>
@@ -399,7 +402,7 @@ export const DoctorsView: React.FC = () => {
                   type="number"
                   value={formData.max_up_per_day}
                   onChange={(e) => setFormData({ ...formData, max_up_per_day: Number(e.target.value) || DAILY_UP_DEFAULT })}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                   min="1"
                   required
                 />
@@ -421,7 +424,7 @@ export const DoctorsView: React.FC = () => {
                         .filter(Boolean),
                     })
                   }
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                   placeholder="Например: Компьютерная томограмма, Рентгенгеновское исследование"
                 />
                 <p className="text-xs text-slate-500 mt-1.5">
@@ -435,24 +438,24 @@ export const DoctorsView: React.FC = () => {
                   id="is_active"
                   checked={formData.is_active}
                   onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                  className="w-5 h-5 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                  className="h-5 w-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 />
                 <label htmlFor="is_active" className="ml-3 text-sm font-medium text-slate-700">
                   Активен
                 </label>
               </div>
 
-              <div className="flex gap-4 pt-6">
+              <div className="flex flex-col gap-3 pt-4 sm:flex-row">
                 <button
                   type="submit"
-                  className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm"
+                  className="flex-1 rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white shadow-sm transition hover:bg-blue-700"
                 >
                   {editingDoctor ? 'Сохранить изменения' : 'Добавить врача'}
                 </button>
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  className="flex-1 px-6 py-3 bg-slate-100 text-slate-700 rounded-lg font-medium hover:bg-slate-200 transition-colors"
+                  className="flex-1 rounded-xl bg-slate-100 px-6 py-3 font-semibold text-slate-700 transition hover:bg-slate-200"
                 >
                   Отмена
                 </button>

@@ -137,9 +137,9 @@ const ConfirmDistributionModal = ({
   if (!isOpen || !distResult) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4">
-      <div className="bg-white w-full md:max-w-6xl md:rounded-2xl shadow-2xl max-h-[95vh] overflow-hidden rounded-t-2xl md:rounded-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 md:px-6 py-4">
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/50 p-0 backdrop-blur-sm md:items-center md:p-4">
+      <div className="flex max-h-[95dvh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl md:max-w-6xl md:rounded-3xl">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 md:px-6">
           <div>
             <h3 className="text-lg font-bold text-slate-900">
               Подтверждение распределения
@@ -151,21 +151,21 @@ const ConfirmDistributionModal = ({
 
           <button
             onClick={onCancel}
-            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700"
+            className="rounded-xl p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
           >
             <X size={20} />
           </button>
         </div>
 
-        <div className="px-4 md:px-6 pt-4">
-          <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-4">
+        <div className="px-4 pt-4 md:px-6">
+          <div className="flex gap-2 overflow-x-auto border-b border-slate-200 pb-4">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
-                className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${
                   activeTab === tab.key
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-200'
                     : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
               >
@@ -178,11 +178,11 @@ const ConfirmDistributionModal = ({
           </div>
         </div>
 
-        <div className="p-4 md:p-6 overflow-y-auto max-h-[calc(95vh-170px)] space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto p-4 md:p-6">
           {activeTab === 'summary' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="border rounded-xl p-4 bg-green-50">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <div className="rounded-2xl border border-green-100 bg-green-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-green-700 mb-2">
                     <CheckCircle2 size={18} />
                     <span className="font-medium">Назначено</span>
@@ -192,7 +192,7 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="border rounded-xl p-4 bg-amber-50">
+                <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-amber-700 mb-2">
                     <FileWarning size={18} />
                     <span className="font-medium">Не назначено</span>
@@ -202,7 +202,7 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="border rounded-xl p-4 bg-red-50">
+                <div className="rounded-2xl border border-red-100 bg-red-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-red-700 mb-2">
                     <AlertTriangle size={18} />
                     <span className="font-medium">CITO</span>
@@ -212,7 +212,7 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="border rounded-xl p-4 bg-blue-50">
+                <div className="rounded-2xl border border-blue-100 bg-blue-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-blue-700 mb-2">
                     <Clock size={18} />
                     <span className="font-medium">Просрочка осталась</span>
@@ -224,7 +224,7 @@ const ConfirmDistributionModal = ({
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="border rounded-xl p-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex items-center gap-2 text-slate-800 font-medium mb-3">
                     <Users size={18} />
                     Самые загруженные врачи
@@ -262,7 +262,7 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="border rounded-xl p-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex items-center gap-2 text-slate-800 font-medium mb-3">
                     <BarChart3 size={18} />
                     Общая сводка
@@ -331,7 +331,7 @@ const ConfirmDistributionModal = ({
                 </div>
               </div>
               
-            <div className="border rounded-xl p-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center gap-2 text-slate-800 font-medium mb-3">
                   <BarChart3 size={18} />
                   Детализация по срочности
@@ -404,7 +404,7 @@ const ConfirmDistributionModal = ({
                       setAssignedPage(1);
                     }}
                     placeholder="Поиск по исследованию или врачу"
-                    className="w-full border border-slate-300 rounded-lg pl-9 pr-3 py-2 text-sm"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-100"
                   />
                 </div>
 
@@ -414,7 +414,7 @@ const ConfirmDistributionModal = ({
                     setPriorityFilter(e.target.value as AssignmentFilter);
                     setAssignedPage(1);
                   }}
-                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-100"
                 >
                   <option value="all">Все приоритеты</option>
                   <option value="cito">CITO</option>
@@ -430,7 +430,7 @@ const ConfirmDistributionModal = ({
                     );
                     setAssignedPage(1);
                   }}
-                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-100"
                 >
                   <option value="all">Все врачи</option>
                   {doctors.map((doctor) => (
@@ -441,8 +441,8 @@ const ConfirmDistributionModal = ({
                 </select>
               </div>
 
-              <div className="border rounded-xl overflow-hidden">
-                <div className="max-h-[52vh] overflow-auto">
+              <div className="overflow-hidden rounded-2xl border border-slate-200">
+                <div className="max-h-[52vh] overflow-auto"><div className="min-w-[860px]">
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50 sticky top-0">
                       <tr>
@@ -506,7 +506,7 @@ const ConfirmDistributionModal = ({
                                 onChange={(e) =>
                                   handleReassignChange(assignment, e.target.value)
                                 }
-                                className="border border-slate-300 rounded-lg px-2 py-1 text-xs"
+                                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                               >
                                 {doctors.map((doctor) => (
                                   <option key={doctor.id} value={doctor.id}>
@@ -520,7 +520,7 @@ const ConfirmDistributionModal = ({
                       )}
                     </tbody>
                   </table>
-                </div>
+                </div></div>
 
                 <div className="px-4 pb-3 pt-3">
                   <Pagination
@@ -534,8 +534,8 @@ const ConfirmDistributionModal = ({
           )}
 
           {activeTab === 'unassigned' && (
-            <div className="border rounded-xl overflow-hidden">
-              <div className="max-h-[60vh] overflow-auto">
+            <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <div className="max-h-[60vh] overflow-auto"><div className="min-w-[680px]">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 sticky top-0">
                     <tr>
@@ -589,13 +589,13 @@ const ConfirmDistributionModal = ({
                     )}
                   </tbody>
                 </table>
-              </div>
+              </div></div>
             </div>
           )}
 
           {activeTab === 'doctors' && (
-            <div className="border rounded-xl overflow-hidden">
-              <div className="max-h-[60vh] overflow-auto">
+            <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <div className="max-h-[60vh] overflow-auto"><div className="min-w-[680px]">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 sticky top-0">
                     <tr>
@@ -654,15 +654,15 @@ const ConfirmDistributionModal = ({
                     )}
                   </tbody>
                 </table>
-              </div>
+              </div></div>
             </div>
           )}
         </div>
 
-        <div className="border-t border-slate-200 px-4 md:px-6 py-4 flex flex-col sm:flex-row gap-3 sm:justify-end">
+        <div className="border-t border-slate-200 px-4 py-4 md:px-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <button
             onClick={onCancel}
-            className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+            className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 sm:w-auto"
           >
             Отмена
           </button>
@@ -670,7 +670,7 @@ const ConfirmDistributionModal = ({
           <button
             onClick={onConfirm}
             disabled={confirming}
-            className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
             {confirming ? 'Сохраняем...' : 'Подтвердить распределение'}
           </button>
