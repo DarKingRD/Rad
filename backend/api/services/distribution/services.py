@@ -10,7 +10,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from django.utils import timezone
 from api.models import Study
 
-from .config import DEADLINE_HOURS, MIP_GAP_REL, MIP_TIME_LIMIT, PRIORITY_WEIGHTS
+from .config import (
+    CBC_THREADS,
+    DEADLINE_HOURS,
+    MIP_GAP_REL,
+    MIP_TIME_LIMIT,
+    PRIORITY_WEIGHTS,
+)
 from .entities import DoctorData, StudyData
 from .exact_solver import solve_exact_mip as solve_exact_mip_external
 from .loaders import load_doctors as load_doctors_external
@@ -20,27 +26,37 @@ from .objectives import (
     ObjectiveStrategy,
     PriorityTierTardinessMultiPassObjective,
     WeightedTardinessLexicographicObjective,
+    TardinessLexicographicObjective,
     MaxAssignmentsObjective,
-    TardinessLexicographicObjective
-)
-from .pool import (
-    build_candidate_pool as build_candidate_pool_external,
-    build_multipass_candidate_pool as build_multipass_candidate_pool_external,
-    candidate_priority_key,
 )
 from .result_builder import build_distribution_response, build_empty_distribution_response
 from .time_utils import (
     add_work_minutes,
     align_to_work_time,
     effective_start_after_prebook,
-    execution_segments,
-    occupied_slot_indices,
     planning_horizon_end,
-    remaining_work_minutes,
-    slot_boundaries,
 )
 
 logger = logging.getLogger(__name__)
+
+_PRIORITY_SORT_INDEX = {"cito": 0, "asap": 1, "normal": 2}
+
+
+def _study_sort_key(study: StudyData, now: datetime, target_date: date):
+    overdue_bucket = (
+        0 if study.deadline < now and study.priority == "cito"
+        else 1 if study.deadline < now and study.priority == "asap"
+        else 2 if study.deadline < now and study.priority == "normal"
+        else 3 if study.deadline.date() <= target_date
+        else 4
+    )
+    return (
+        overdue_bucket,
+        _PRIORITY_SORT_INDEX.get(study.priority, 3),
+        study.deadline,
+        study.created_at,
+        study.research_number,
+    )
 
 
 class DistributionService:
@@ -70,19 +86,14 @@ class DistributionService:
         self.set_objective(objective or WeightedTardinessLexicographicObjective.code)
 
     def set_preview_mode(self, preview: bool = True) -> None:
-        """Включить или выключить режим предпросмотра."""
         self.preview_mode = preview
 
     def _instantiate_objective(self, objective_code: str) -> ObjectiveStrategy:
-        """Создать экземпляр objective-стратегии по её коду."""
         objective_cls = OBJECTIVE_REGISTRY.get(
             objective_code,
             WeightedTardinessLexicographicObjective,
         )
-        return objective_cls(
-            priority_weights=self.priority_weights,
-            **self.objective_params,
-        )
+        return objective_cls(priority_weights=self.priority_weights, **self.objective_params)
 
     def _objective_meta(self) -> Dict[str, Any]:
         return {
@@ -93,12 +104,14 @@ class DistributionService:
             "objective_params": self.objective_params,
         }
 
+    def _mip_threads(self) -> int:
+        return CBC_THREADS
+
     def _log(self, message: str) -> None:
         logger.info(message)
         self._debug.append(message)
 
     def set_objective(self, objective_code: str) -> None:
-        """Переключить objective-стратегию."""
         self.objective = self._instantiate_objective(objective_code)
         self.objective_code = self.objective.code
         self.objective_description = self.objective.description
@@ -118,8 +131,7 @@ class DistributionService:
             "start_dt": start_dt,
             "finish_dt": finish_dt,
         }
-        for key, value in metrics.items():
-            payload[key] = float(value)
+        payload.update({key: float(value) for key, value in metrics.items()})
         payload.setdefault("objective_value", float(metrics.get("objective_value", 0.0)))
         payload.setdefault("tardiness_hours", 0.0)
         payload.setdefault(
@@ -138,9 +150,6 @@ class DistributionService:
     def _align_to_work_time(self, doctor: DoctorData, dt: datetime) -> datetime:
         return align_to_work_time(doctor, dt)
 
-    def _remaining_work_minutes(self, doctor: DoctorData, prebooked_minutes: float = 0.0) -> float:
-        return remaining_work_minutes(doctor, self.now, prebooked_minutes)
-
     def _planning_horizon_end(self, doctors: List[DoctorData]) -> datetime:
         return planning_horizon_end(doctors, self.now)
 
@@ -154,31 +163,7 @@ class DistributionService:
     ) -> datetime:
         return effective_start_after_prebook(doctor, self.now, prebooked_minutes)
 
-    def _execution_segments(
-        self,
-        doctor: DoctorData,
-        start: datetime,
-        minutes: float,
-    ) -> List[Tuple[datetime, datetime]]:
-        return execution_segments(doctor, start, minutes)
-
-    def _slot_boundaries(
-        self,
-        doctor: DoctorData,
-        prebooked_minutes: float = 0.0,
-    ) -> List[datetime]:
-        return slot_boundaries(doctor, self.now, prebooked_minutes)
-
-    def _occupied_slot_indices(self, doctor: DoctorData, segments, slot_boundaries_list):
-        return occupied_slot_indices(segments, slot_boundaries_list)
-
     def _sync_planning_now(self, doctors: List[DoctorData]) -> None:
-        """Выбрать момент времени, относительно которого строится планирование.
-
-        Для исторических и будущих дат расчёт идёт от начала смены. Для текущего
-        дня сохраняется реальное текущее время, чтобы не планировать исследования
-        в прошлое.
-        """
         self.now = self.real_now
         if not doctors:
             return
@@ -206,7 +191,7 @@ class DistributionService:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
     ) -> List[StudyData]:
-        return load_studies_external(
+        studies = load_studies_external(
             now=self.now,
             deadline_hours=self.deadline_hours,
             priority_weights=self.priority_weights,
@@ -214,25 +199,53 @@ class DistributionService:
             date_from=date_from,
             date_to=date_to,
         )
+        studies.sort(key=lambda study: _study_sort_key(study, self.now, self.target_date))
+        return studies
 
     def load_doctors(self) -> List[DoctorData]:
         return load_doctors_external(target_date=self.target_date, log=self._log)
 
-    def build_candidate_pool(
+    def _complete_unassigned_meta(
         self,
         studies: List[StudyData],
         doctors: List[DoctorData],
-        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> List[StudyData]:
-        return build_candidate_pool_external(
-            studies,
-            doctors,
-            now=self.now,
-            target_date=self.target_date,
-            modality_ok=self._modality_ok,
-            remaining_work_minutes=self._remaining_work_minutes,
-            log=self._log,
-            doc_prebooked_minutes=doc_prebooked_minutes,
+        assignment: Dict[str, int],
+        partial_unassigned_meta: Dict[str, Dict[str, float | datetime]],
+    ) -> Dict[str, Dict[str, float | datetime]]:
+        horizon_end = self._planning_horizon_end(doctors)
+        full_unassigned_meta = dict(partial_unassigned_meta)
+        for study in studies:
+            if study.research_number not in assignment and study.research_number not in full_unassigned_meta:
+                full_unassigned_meta[study.research_number] = self.objective.unassigned_metrics(study, horizon_end)
+        return full_unassigned_meta
+
+    def _baseline_unassigned_meta(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+    ) -> Dict[str, Dict[str, float | datetime]]:
+        return self._build_unassigned_meta(studies, doctors)
+
+    def _build_unassigned_meta(
+        self,
+        studies: List[StudyData],
+        doctors: List[DoctorData],
+        assignment: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Dict[str, float | datetime]]:
+        assigned_studies = assignment or {}
+        horizon_end = self._planning_horizon_end(doctors)
+        return {
+            study.research_number: self.objective.unassigned_metrics(study, horizon_end)
+            for study in studies
+            if study.research_number not in assigned_studies
+        }
+
+    @staticmethod
+    def _sum_objective_values(*collections: Dict[str, Dict[str, float | datetime]]) -> float:
+        return sum(
+            float(item.get("objective_value", 0.0))
+            for collection in collections
+            for item in collection.values()
         )
 
     def _make_pass_doctors(
@@ -246,64 +259,19 @@ class DistributionService:
             for doctor in doctors
         ]
 
-    def _build_multipass_candidate_pool(
-        self,
-        studies: List[StudyData],
-        doctors: List[DoctorData],
-        priority: str,
-        doc_prebooked_minutes: Optional[Dict[int, float]] = None,
-    ) -> List[StudyData]:
-        return build_multipass_candidate_pool_external(
-            studies,
-            doctors,
-            priority=priority,
-            now=self.now,
-            target_date=self.target_date,
-            modality_ok=self._modality_ok,
-            remaining_work_minutes=self._remaining_work_minutes,
-            log=self._log,
-            doc_prebooked_minutes=doc_prebooked_minutes,
-        )
-
-    def _complete_unassigned_meta(
-        self,
-        studies: List[StudyData],
-        doctors: List[DoctorData],
-        assignment: Dict[str, int],
-        partial_unassigned_meta: Dict[str, Dict[str, float | datetime]],
-    ) -> Dict[str, Dict[str, float | datetime]]:
-        horizon_end = self._planning_horizon_end(doctors)
-        full_unassigned_meta = dict(partial_unassigned_meta)
-        for study in studies:
-            if study.research_number in assignment:
-                continue
-            if study.research_number not in full_unassigned_meta:
-                full_unassigned_meta[study.research_number] = self.objective.unassigned_metrics(
-                    study,
-                    horizon_end,
-                )
-        return full_unassigned_meta
-
     def solve_priority_tier_multipass(
         self,
         studies: List[StudyData],
         doctors: List[DoctorData],
         *,
         use_mip: bool = True,
-    ) -> Tuple[
-        Dict[str, int],
-        Dict[str, Dict],
-        float,
-        Dict[str, Dict[str, float | datetime]],
-        List[StudyData],
-    ]:
+    ) -> Tuple[Dict[str, int], Dict[str, Dict], float, Dict[str, Dict[str, float | datetime]]]:
         priority_order = ["cito", "asap", "normal"]
         study_map = {study.research_number: study for study in studies}
         assignment: Dict[str, int] = {}
         details: Dict[str, Dict] = {}
         unassigned_meta: Dict[str, Dict[str, float | datetime]] = {}
         total_solver_obj = 0.0
-        multipass_pool: List[StudyData] = []
         doctor_prebooked_minutes: Dict[int, float] = {doctor.id: 0.0 for doctor in doctors}
         doctor_used_up: Dict[int, float] = {doctor.id: 0.0 for doctor in doctors}
 
@@ -314,49 +282,30 @@ class DistributionService:
                 continue
 
             pass_doctors = self._make_pass_doctors(doctors, doctor_used_up)
-            tier_pool = self._build_multipass_candidate_pool(
-                tier_studies,
-                pass_doctors,
-                priority,
-                doc_prebooked_minutes=doctor_prebooked_minutes,
-            )
-            multipass_pool.extend(tier_pool)
-
-            if not tier_pool:
-                self._log(f"Multi-pass [{priority.upper()}]: candidate pool пуст")
-                continue
-
             self._log(
-                f"Multi-pass [{priority.upper()}]: старт прохода, pool={len(tier_pool)}, "
+                f"Multi-pass [{priority.upper()}]: старт прохода, studies={len(tier_studies)}, "
                 f"already_booked_minutes={sum(doctor_prebooked_minutes.values()):.1f}, "
                 f"already_used_up={sum(doctor_used_up.values()):.3f}"
             )
 
             if use_mip:
                 pass_assignment, pass_details, pass_solver_obj, pass_unassigned_meta = self.solve_exact_mip(
-                    tier_pool,
+                    tier_studies,
                     pass_doctors,
                     doc_prebooked_minutes=doctor_prebooked_minutes,
                 )
             else:
                 pass_assignment, pass_details = self.solve_greedy(
-                    tier_pool,
+                    tier_studies,
                     pass_doctors,
                     doc_prebooked_minutes=doctor_prebooked_minutes,
                 )
-                horizon_end = self._planning_horizon_end(pass_doctors)
-                pass_unassigned_meta = {
-                    study.research_number: self.objective.unassigned_metrics(study, horizon_end)
-                    for study in tier_pool
-                    if study.research_number not in pass_assignment
-                }
-                pass_solver_obj = (
-                    sum(float(item.get("objective_value", 0.0)) for item in pass_details.values())
-                    + sum(
-                        float(item.get("objective_value", 0.0))
-                        for item in pass_unassigned_meta.values()
-                    )
+                pass_unassigned_meta = self._build_unassigned_meta(
+                    tier_studies,
+                    pass_doctors,
+                    pass_assignment,
                 )
+                pass_solver_obj = self._sum_objective_values(pass_details, pass_unassigned_meta)
 
             total_solver_obj += float(pass_solver_obj)
             assignment.update(pass_assignment)
@@ -365,22 +314,17 @@ class DistributionService:
 
             for study_id, doctor_id in pass_assignment.items():
                 study = study_map[study_id]
-                doctor_prebooked_minutes[doctor_id] = (
-                    doctor_prebooked_minutes.get(doctor_id, 0.0) + study.duration_minutes
-                )
+                doctor_prebooked_minutes[doctor_id] = doctor_prebooked_minutes.get(doctor_id, 0.0) + study.duration_minutes
                 doctor_used_up[doctor_id] = doctor_used_up.get(doctor_id, 0.0) + study.up_value
 
             self._log(
-                f"Multi-pass [{priority.upper()}]: назначено {len(pass_assignment)} / {len(tier_pool)}, "
-                f"неназначено {len(pass_unassigned_meta)} / {len(tier_pool)}, "
+                f"Multi-pass [{priority.upper()}]: назначено {len(pass_assignment)} / {len(tier_studies)}, "
+                f"неназначено {len(pass_unassigned_meta)} / {len(tier_studies)}, "
                 f"obj={float(pass_solver_obj):.6f}"
             )
 
-        self._log(
-            f"Multi-pass ИТОГО: назначено {len(assignment)} / {len(studies)}, "
-            f"pool={len(multipass_pool)}, obj_sum={float(total_solver_obj):.6f}"
-        )
-        return assignment, details, float(total_solver_obj), unassigned_meta, multipass_pool
+        self._log(f"Multi-pass ИТОГО: назначено {len(assignment)} / {len(studies)}, obj_sum={float(total_solver_obj):.6f}")
+        return assignment, details, float(total_solver_obj), unassigned_meta
 
     def solve_greedy(
         self,
@@ -388,11 +332,8 @@ class DistributionService:
         doctors: List[DoctorData],
         doc_prebooked_minutes: Optional[Dict[int, float]] = None,
     ) -> Tuple[Dict[str, int], Dict[str, Dict]]:
-        self._log(f"Запуск: жадный fallback по candidate pool (objective={self.objective_code})...")
-        ordered = sorted(
-            studies,
-            key=lambda study: candidate_priority_key(study, self.now, self.target_date),
-        )
+        self._log(f"Запуск: жадный fallback (objective={self.objective_code})...")
+        ordered = sorted(studies, key=lambda study: _study_sort_key(study, self.now, self.target_date))
 
         doctor_state: Dict[int, Dict[str, float | datetime]] = {}
         for doctor in doctors:
@@ -463,13 +404,10 @@ class DistributionService:
             priority_weights=self.priority_weights,
             mip_time_limit=MIP_TIME_LIMIT,
             mip_gap_rel=MIP_GAP_REL,
+            mip_threads=self._mip_threads(),
+            planning_now=self.now,
             solve_greedy_fn=self.solve_greedy,
             planning_horizon_end_fn=self._planning_horizon_end,
-            modality_ok=self._modality_ok,
-            slot_boundaries_fn=self._slot_boundaries,
-            add_work_minutes_fn=self._add_work_minutes,
-            execution_segments_fn=self._execution_segments,
-            occupied_slot_indices_fn=self._occupied_slot_indices,
             log=self._log,
             doc_prebooked_minutes=doc_prebooked_minutes,
         )
@@ -516,11 +454,7 @@ class DistributionService:
             to_update.append(study)
 
         if to_update:
-            Study.objects.bulk_update(
-                to_update,
-                ["diagnostician_id", "status", "planned_at"],
-                batch_size=500,
-            )
+            Study.objects.bulk_update(to_update, ["diagnostician_id", "status", "planned_at"], batch_size=500)
 
     def distribute(
         self,
@@ -534,6 +468,9 @@ class DistributionService:
         self._log(f"Целевая дата: {self.target_date}")
         self._log(f"Режим предпросмотра: {self.preview_mode}")
         self._log(f"Целевая функция: {self.objective_code} | {self.objective_description}")
+        self._log(
+            f"Exact solver backend: CBC; CBC threads={CBC_THREADS}"
+        )
         self._log("=" * 60)
 
         doctors = self.load_doctors()
@@ -546,45 +483,20 @@ class DistributionService:
             return self._empty("Нет исследований без назначения", studies)
 
         if self.objective_code == PriorityTierTardinessMultiPassObjective.code:
-            assignment, details, solver_obj, unassigned_meta, candidate_pool = self.solve_priority_tier_multipass(
+            assignment, details, solver_obj, unassigned_meta = self.solve_priority_tier_multipass(
                 studies,
                 doctors,
                 use_mip=use_mip,
             )
-            if not candidate_pool:
-                return self._empty(
-                    "Не удалось сформировать candidate pool ни на одном проходе multi-pass",
-                    studies,
-                )
+        elif use_mip:
+            assignment, details, solver_obj, unassigned_meta = self.solve_exact_mip(studies, doctors)
         else:
-            candidate_pool = self.build_candidate_pool(studies, doctors)
-            if not candidate_pool:
-                return self._empty("Не удалось сформировать candidate pool на текущий день", studies)
+            assignment, details = self.solve_greedy(studies, doctors)
+            unassigned_meta = self._build_unassigned_meta(studies, doctors, assignment)
+            solver_obj = self._sum_objective_values(details, unassigned_meta)
 
-            if use_mip:
-                assignment, details, solver_obj, unassigned_meta = self.solve_exact_mip(
-                    candidate_pool,
-                    doctors,
-                )
-            else:
-                assignment, details = self.solve_greedy(candidate_pool, doctors)
-                horizon_end = self._planning_horizon_end(doctors)
-                unassigned_meta = {
-                    study.research_number: self.objective.unassigned_metrics(study, horizon_end)
-                    for study in candidate_pool
-                    if study.research_number not in assignment
-                }
-                solver_obj = (
-                    sum(float(item.get("objective_value", 0.0)) for item in details.values())
-                    + sum(float(item.get("objective_value", 0.0)) for item in unassigned_meta.values())
-                )
-
-        full_unassigned_meta = self._complete_unassigned_meta(
-            studies,
-            doctors,
-            assignment,
-            unassigned_meta,
-        )
+        full_unassigned_meta = self._complete_unassigned_meta(studies, doctors, assignment, unassigned_meta)
+        baseline_unassigned_meta = self._baseline_unassigned_meta(studies, doctors)
 
         result = build_distribution_response(
             studies=studies,
@@ -592,7 +504,7 @@ class DistributionService:
             assignment=assignment,
             details=details,
             unassigned_meta=full_unassigned_meta,
-            candidate_pool=candidate_pool,
+            baseline_unassigned_meta=baseline_unassigned_meta,
             solver_obj=solver_obj,
             now=self.now,
             preview_mode=self.preview_mode,
@@ -603,21 +515,20 @@ class DistributionService:
         )
 
         self.save_to_db(assignment)
+        summary = result["summary"]
+        priority = result["priority_breakdown"]
+        objective = result["objective"]
+
         self._log(
-            f"Итого: candidate_pool={result['candidate_pool_size']}/{len(studies)}, "
-            f"назначено={result['assigned']}/{len(studies)} ({result['assignment_rate_percent']:.2f}%) | "
-            f"CITO: {result['cito_assigned']}/{result['cito_total']} | "
-            f"ASAP: {result['priority_breakdown']['asap']['assigned']}/{result['priority_breakdown']['asap']['total']} | "
-            f"NORMAL: {result['priority_breakdown']['plan']['assigned']}/{result['priority_breakdown']['plan']['total']} | "
-            f"Backlog вне candidate_pool: {result['backlog_outside_pool']} | "
-            f"Obj={result['reported_objective_value']}"
+            f"Итого: назначено={summary['assigned']}/{len(studies)} "
+            f"({summary['assignment_rate_percent']:.2f}%) | "
+            f"CITO: {priority['cito']['assigned']}/{priority['cito']['total']} | "
+            f"ASAP: {priority['asap']['assigned']}/{priority['asap']['total']} | "
+            f"NORMAL: {priority['plan']['assigned']}/{priority['plan']['total']} | "
+            f"Obj={objective['reported_objective_value']}"
         )
 
-        if self.preview_mode:
-            self._log("Данные НЕ сохранены в БД (режим предпросмотра)")
-        else:
-            self._log("Данные сохранены в БД")
-
+        self._log("Данные НЕ сохранены в БД (режим предпросмотра)" if self.preview_mode else "Данные сохранены в БД")
         return result
 
     def _empty(self, message: str, studies: Optional[List[StudyData]] = None) -> Dict[str, Any]:

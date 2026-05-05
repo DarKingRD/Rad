@@ -1,11 +1,15 @@
 from datetime import datetime, timedelta
+import logging
 import uuid
 
 from django.core.cache import cache
 from django.db.models import Case, F, IntegerField, Max, Min, Sum, When
+from django.contrib.auth import authenticate
 from django.utils import timezone
 from rest_framework import status, viewsets
-from rest_framework.decorators import action, api_view
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .models import Doctor, Schedule, Study, StudyType
@@ -20,6 +24,9 @@ from .serializers import (
     DoctorWithLoadSerializer,
     ScheduleSerializer,
     ScheduleWithDoctorSerializer,
+    ShiftForecastQuerySerializer,
+    ShiftForecastResponseSerializer,
+    ForecastCompareQuerySerializer,
     StudyAssignSerializer,
     StudySerializer,
     StudyStatusUpdateSerializer,
@@ -45,6 +52,15 @@ from .services.distribution_api import (
     parse_distribution_datetime_start,
     run_distribution,
 )
+from .services.shift_forecast_multi_method import (
+    FORECAST_COMPARE_METHODS,
+    FORECAST_METHODS,
+    build_shift_forecast,
+    evaluate_forecast_methods,
+)
+
+logger = logging.getLogger(__name__)
+
 
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.all()
@@ -112,6 +128,27 @@ class ScheduleViewSet(viewsets.ModelViewSet):
         serializer = ScheduleWithDoctorSerializer(schedules, many=True)
         return Response(serializer.data)
 
+    @action(detail=False, methods=["get"])
+    def forecast(self, request):
+        """
+        Прогноз входящего потока исследований и потребности во врачах по выбранному диапазону дат.
+        """
+        query_serializer = ShiftForecastQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+
+        validated = query_serializer.validated_data
+        result = build_shift_forecast(
+            date_from=validated.get("date_from"),
+            date_to=validated.get("date_to"),
+            method=validated.get("method", "weekday_mean"),
+            recent_weeks=validated.get("recent_weeks", 4),
+            moving_window_days=validated.get("moving_window_days", 14),
+            history_start_override=validated.get("history_start_date"),
+            history_end_override=validated.get("history_end_date"),
+        )
+        serializer = ShiftForecastResponseSerializer(result)
+        return Response(serializer.data)
+
 
 class StudyViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = None
@@ -144,7 +181,17 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
         page = max(int(request.query_params.get("page", 1)), 1)
         offset = (page - 1) * page_size
 
-        qs = get_pending_studies_queryset()
+        priority = request.query_params.get("priority")
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        modality = request.query_params.get("modality")
+
+        qs = get_pending_studies_queryset(
+            priority=priority or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+            modality=modality or None,
+        )
 
         total = qs.count()
         studies = qs[offset : offset + page_size]
@@ -304,6 +351,7 @@ def distribute_studies_view(request):
     date_from = validated.get("date_from")
     date_to = validated.get("date_to")
     use_mip = validated.get("use_mip", True)
+    objective = validated.get("objective", "weighted_tardiness_lexicographic")
 
     date_from_dt = parse_distribution_datetime_start(
         date_from.isoformat() if date_from else None
@@ -319,6 +367,7 @@ def distribute_studies_view(request):
             date_from=date_from_dt,
             date_to=date_to_dt,
             use_mip=use_mip,
+            objective=objective,
         )
         return Response(result, status=status.HTTP_200_OK)
     except Exception as e:
@@ -378,3 +427,152 @@ def distribution_preview(request):
     serializer = DistributionPreviewInfoSerializer(data)
     return Response(serializer.data)
 
+
+@api_view(["GET"])
+def forecast_compare_methods(request):
+    """
+    Сравнение методов прогнозирования на holdout-периоде.
+
+    По умолчанию оцениваем последнюю неделю истории, а обучаем методы только
+    на данных до этой недели.
+    """
+    query_serializer = ForecastCompareQuerySerializer(data=request.query_params)
+    query_serializer.is_valid(raise_exception=True)
+
+    validated = query_serializer.validated_data
+    methods = validated.get("methods") or None
+
+    try:
+        result = evaluate_forecast_methods(
+            methods=methods,
+            evaluation_start_date=validated.get("evaluation_start_date"),
+            evaluation_end_date=validated.get("evaluation_end_date"),
+            evaluation_days=validated.get("evaluation_days", 7),
+            recent_weeks=validated.get("recent_weeks", 4),
+            moving_window_days=validated.get("moving_window_days", 14),
+            min_train_days=validated.get("min_train_days", 21),
+        )
+    except ValueError as exc:
+        logger.warning("Forecast comparison validation failed", exc_info=True)
+        return Response(
+            {"detail": "Invalid forecast comparison parameters."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    response_payload = {
+        **result,
+        "available_methods": [
+            {"key": key, "label": FORECAST_METHODS[key]}
+            for key in FORECAST_COMPARE_METHODS
+        ],
+        "params": {
+            "methods": methods or list(FORECAST_COMPARE_METHODS),
+            "evaluation_start_date": (
+                validated["evaluation_start_date"].isoformat()
+                if validated.get("evaluation_start_date")
+                else None
+            ),
+            "evaluation_end_date": (
+                validated["evaluation_end_date"].isoformat()
+                if validated.get("evaluation_end_date")
+                else None
+            ),
+            "evaluation_days": validated.get("evaluation_days", 7),
+            "recent_weeks": validated.get("recent_weeks", 4),
+            "moving_window_days": validated.get("moving_window_days", 14),
+            "min_train_days": validated.get("min_train_days", 21),
+        },
+    }
+    return Response(response_payload)
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def login_view(request):
+    username = request.data.get("username")
+    password = request.data.get("password")
+
+    if not username or not password:
+        return Response({"detail": "Введите логин и пароль."}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = authenticate(username=username, password=password)
+    if user is None:
+        return Response({"detail": "Неверные учетные данные."}, status=status.HTTP_401_UNAUTHORIZED)
+
+    token, _ = Token.objects.get_or_create(user=user)
+    return Response(
+        {
+            "token": token.key,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "full_name": user.get_full_name() or user.username,
+            },
+        }
+    )
+
+@api_view(["GET", "PATCH"])
+def profile_view(request):
+    user = request.user
+
+    if request.method == "GET":
+        return Response(
+            {
+                "id": user.id,
+                "username": user.username,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "full_name": user.get_full_name() or user.username,
+            }
+        )
+
+    first_name = request.data.get("first_name")
+    last_name = request.data.get("last_name")
+
+    update_fields = []
+    if first_name is not None:
+        user.first_name = str(first_name).strip()
+        update_fields.append("first_name")
+    if last_name is not None:
+        user.last_name = str(last_name).strip()
+        update_fields.append("last_name")
+
+    if not update_fields:
+        return Response(
+            {"detail": "Передайте first_name и/или last_name."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user.save(update_fields=update_fields)
+    return Response(
+        {
+            "id": user.id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "full_name": user.get_full_name() or user.username,
+        }
+    )
+
+
+@api_view(["POST"])
+def change_password_view(request):
+    old_password = request.data.get("old_password")
+    new_password = request.data.get("new_password")
+
+    if not old_password or not new_password:
+        return Response(
+            {"detail": "Передайте old_password и new_password."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user = request.user
+    if not user.check_password(old_password):
+        return Response(
+            {"detail": "Старый пароль указан неверно."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+
+    return Response({"detail": "Пароль успешно изменён."})

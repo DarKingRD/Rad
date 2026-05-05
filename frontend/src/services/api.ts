@@ -8,6 +8,11 @@ import type {
   StudyType,
   DashboardStats,
   ChartPoint,
+  ForecastCompareResponse,
+  ShiftForecastResponse,
+  DistributionConfirmResponse,
+  DistributionInfo,
+  DistributionPreviewPayload,
 } from '../types';
 
 type ApiListResponse<T> = T[] | { results: T[] };
@@ -19,7 +24,8 @@ type SchedulePayload = {
   time_end: string | null;
   break_start?: string | null;
   break_end?: string | null;
-  is_day_off: number;
+  is_day_off?: number;
+  day_status?: number;
   planned_up: number;
 };
 
@@ -31,22 +37,25 @@ type DoctorPayload = {
   modality: string[];
 };
 
+type ShiftForecastParams = {
+  date_from?: string;
+  date_to?: string;
+  history_start_date?: string;
+  history_end_date?: string;
+};
+
+type ForecastCompareParams = {
+  evaluation_days?: number;
+  evaluation_start_date?: string;
+  evaluation_end_date?: string;
+  recent_weeks?: number;
+  moving_window_days?: number;
+  min_train_days?: number;
+  methods?: string;
+};
+
 type StudyAssignResponse = Study;
 type StudyStatusResponse = Study;
-
-type DistributionInfo = {
-  pending_studies: number;
-  available_doctors: number;
-  study_date_range: {
-    min: string | null;
-    max: string | null;
-  };
-  schedule_date_range: {
-    min: string | null;
-    max: string | null;
-  };
-  message: string;
-};
 
 type DistributionPreviewInfo = {
   pending_studies: number;
@@ -55,22 +64,15 @@ type DistributionPreviewInfo = {
   message: string;
 };
 
-type DistributionPreviewPayload = {
-  date: string;
-  preview?: boolean;
-  date_from?: string;
-  date_to?: string;
-  use_mip?: boolean;
-};
+const API_BASE_URL = 'http://localhost:8000/api';
+const AUTH_TOKEN_KEY = 'radplan_auth_token';
+const AUTH_USER_KEY = 'radplan_auth_user';
 
-type DistributionConfirmResponse = {
-  status: string;
-  assigned: number;
-  distribution_id: string;
-  message: string;
+type AuthUser = {
+  id: number;
+  username: string;
+  full_name: string;
 };
-
-const API_BASE_URL = 'http://localhost:8000/api'; // Здесь потом нужно этот хардкод убрать
 
 export class ApiClientError extends Error {
   status?: number;
@@ -89,8 +91,13 @@ const api: AxiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 1000000,
+  timeout: 10000000000,
 });
+
+const savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
+if (savedToken) {
+  api.defaults.headers.common.Authorization = `Token ${savedToken}`;
+}
 
 api.interceptors.response.use(
   (response) => response,
@@ -213,10 +220,60 @@ export const schedulesApi = {
     getList<Schedule>('/schedules/', params),
   getByDate: (date: string) => getList<Schedule>('/schedules/by_date/', { date }),
   getById: (id: number) => getOne<Schedule>(`/schedules/${id}/`),
+  getForecast: (params?: ShiftForecastParams) =>
+    getOne<ShiftForecastResponse>('/schedules/forecast/', params),
   create: (data: SchedulePayload) => postOne<Schedule, SchedulePayload>('/schedules/', data),
   update: (id: number, data: SchedulePayload) =>
     putOne<Schedule, SchedulePayload>(`/schedules/${id}/`, data),
   delete: (id: number) => deleteOne(`/schedules/${id}/`),
+};
+
+export const forecastApi = {
+  compareMethods: (params?: ForecastCompareParams) =>
+    getOne<ForecastCompareResponse>('/forecast/compare-methods/', params),
+};
+
+export const authApi = {
+  login: async (username: string, password: string) => {
+    const response = await postOne<{ token: string; user: AuthUser }, { username: string; password: string }>(
+      '/auth/login/',
+      { username, password }
+    );
+    localStorage.setItem(AUTH_TOKEN_KEY, response.token);
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(response.user));
+    api.defaults.headers.common.Authorization = `Token ${response.token}`;
+    return response;
+  },
+  logout: () => {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    delete api.defaults.headers.common.Authorization;
+  },
+  getCurrentUser: (): AuthUser | null => {
+    const rawUser = localStorage.getItem(AUTH_USER_KEY);
+    if (!rawUser) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(rawUser) as AuthUser;
+    } catch {
+      localStorage.removeItem(AUTH_USER_KEY);
+      return null;
+    }
+  },
+  getProfile: () => getOne<AuthUser & { first_name: string; last_name: string }>('/auth/profile/'),
+  updateProfile: (payload: { first_name?: string; last_name?: string }) =>
+    patchOne<AuthUser & { first_name: string; last_name: string }, { first_name?: string; last_name?: string }>(
+      '/auth/profile/',
+      payload
+    ),
+  changePassword: (old_password: string, new_password: string) =>
+    postOne<{ detail: string }, { old_password: string; new_password: string }>(
+      '/auth/change-password/',
+      { old_password, new_password }
+    ),
+  isAuthenticated: () => Boolean(localStorage.getItem(AUTH_TOKEN_KEY)),
 };
 
 export const studiesApi = {
@@ -228,7 +285,11 @@ export const studiesApi = {
     diagnostician_id?: number;
   }) => getList<Study>('/studies/', params),
 
-  getPending: async (page = 1, pageSize = 100) => {
+  getPending: async (
+    page = 1,
+    pageSize = 100,
+    params?: { priority?: string; date_from?: string; date_to?: string; modality?: string }
+  ) => {
     const response = await retryGetRequest(() =>
       api.get<{
         results: Study[];
@@ -237,7 +298,7 @@ export const studiesApi = {
         page_size: number;
         total_pages: number;
       }>('/studies/pending/', {
-        params: { page, page_size: pageSize },
+        params: { page, page_size: pageSize, ...params },
       })
     );
     return response.data;

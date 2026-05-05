@@ -107,7 +107,10 @@ Thumbs.db
 *.tmp
 
 
-// файлы данных
+# файлы данных
 *.csv
 *.xlsx
 backend/exports/
+
+# разное
+docs/

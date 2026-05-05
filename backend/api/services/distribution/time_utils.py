@@ -240,12 +240,14 @@ def slot_boundaries(
 def occupied_slot_indices(
     segments,
     slot_boundaries_list,
+    slot_ends=None,
 ):
     if not segments or not slot_boundaries_list:
         return []
 
-    slot_delta = timedelta(minutes=TIME_SLOT_MINUTES)
-    slot_ends = [slot_start + slot_delta for slot_start in slot_boundaries_list]
+    if slot_ends is None:
+        slot_delta = timedelta(minutes=TIME_SLOT_MINUTES)
+        slot_ends = [slot_start + slot_delta for slot_start in slot_boundaries_list]
 
     occupied = []
     last_added = -1

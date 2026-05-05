@@ -14,10 +14,10 @@ const safelyReadDrafts = (): DistributionDraft[] => {
 };
 
 const saveDrafts = (drafts: DistributionDraft[]) => {
-  try{
+  try {
     localStorage.setItem(DRAFTS_STORAGE_KEY, JSON.stringify(drafts.slice(0, 20)));
-  } catch (e) {
-    console.error('Не удалось сохранить черновик preview в localStorage', e);
+  } catch (error) {
+    console.error('Не удалось сохранить черновик preview в localStorage', error);
   }
 };
 
@@ -34,6 +34,7 @@ export const useDistributionDrafts = () => {
     const now = new Date();
     const nextDraft: DistributionDraft = {
       ...result,
+      distribution_id: result.distribution_id,
       _savedAt: now.toISOString(),
       _savedDate: result.target_date || now.toISOString().split('T')[0],
     };

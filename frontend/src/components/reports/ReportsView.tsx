@@ -1,6 +1,16 @@
 import React, { useState, useEffect } from "react";
 import { dashboardApi } from "../../services/api";
-import { Filter, TrendingUp, CheckCircle2, Target, Clock } from "lucide-react";
+import type { DashboardStats } from "../../types";
+import {
+  Activity,
+  BarChart3,
+  CheckCircle2,
+  Clock,
+  Filter,
+  Target,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
 
 import {
   BarChart,
@@ -16,23 +26,6 @@ import {
   Cell,
 } from "recharts";
 
-interface KPIData {
-  total_studies: number;
-  completed_studies: number;
-  pending_studies: number;
-  active_doctors: number;
-  avg_load_per_doctor: number;
-  cito_studies: number;
-  asap_studies: number;
-}
-
-interface DepartmentSummary {
-  department: string;
-  planUp: number;
-  actualUp: number;
-  fulfillment: number;
-  studies: number;
-}
 
 export const ReportsView: React.FC = () => {
   const today = new Date();
@@ -51,12 +44,20 @@ export const ReportsView: React.FC = () => {
   const [appliedDateFrom, setAppliedDateFrom] = useState<string>(initialDateFrom);
   const [appliedDateTo, setAppliedDateTo] = useState<string>(initialDateTo);
 
-  const [kpiData, setKpiData] = useState<KPIData | null>(null);
+  const [kpiData, setKpiData] = useState<DashboardStats | null>(null);
   const [chartData, setChartData] = useState<any[]>([]);
   const [pieData, setPieData] = useState<any[]>([]);
-  const [departmentSummary, setDepartmentSummary] = useState<DepartmentSummary[]>([]);
 
   const COLORS = ["#3b82f6", "#22c55e", "#f97316"];
+  const dailyUpStats = kpiData?.doctor_daily_up_stats ?? { median: 0, min: 0, max: 0 };
+
+  const formatUp = (value?: number | null) => {
+    if (value === null || value === undefined || Number.isNaN(value)) {
+      return "—";
+    }
+    return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value);
+  };
+
 
   useEffect(() => {
     if (appliedDateFrom && appliedDateTo) {
@@ -92,24 +93,11 @@ export const ReportsView: React.FC = () => {
         { name: "Обычные", value: normalStudies },
       ]);
 
-      setDepartmentSummary([
-        {
-          department: "Все исследования",
-          planUp: stats.total_studies,
-          actualUp: stats.completed_studies,
-          fulfillment:
-            stats.total_studies > 0
-              ? Math.round((stats.completed_studies / stats.total_studies) * 100)
-              : 0,
-          studies: stats.total_studies,
-        },
-      ]);
     } catch (err) {
       console.error("Error loading reports:", err);
       setKpiData(null);
       setChartData([]);
       setPieData([]);
-      setDepartmentSummary([]);
     } finally {
       setLoading(false);
     }
@@ -221,6 +209,50 @@ export const ReportsView: React.FC = () => {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-cyan-50 flex items-center justify-center text-cyan-600">
+                  <BarChart3 size={22} />
+                </div>
+                <div>
+                  <div className="text-sm text-slate-500">Медиана УП в день</div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    {formatUp(dailyUpStats.median)}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600">
+                  <TrendingDown size={22} />
+                </div>
+                <div>
+                  <div className="text-sm text-slate-500">Минимум УП в день</div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    {formatUp(dailyUpStats.min)}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                  <Activity size={22} />
+                </div>
+                <div>
+                  <div className="text-sm text-slate-500">Максимум УП в день</div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    {formatUp(dailyUpStats.max)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
               <h3 className="text-lg font-semibold text-slate-900 mb-4">
@@ -269,43 +301,28 @@ export const ReportsView: React.FC = () => {
               </div>
             </div>
           </div>
-
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">
-              Сводка по отделению
+              Выполненные исследования по врачам
             </h3>
 
-            <div className="overflow-auto">
+            <div className="overflow-auto max-h-[420px]">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50">
                   <tr>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Отделение
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      План
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Факт
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Выполнение
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">
-                      Исследований
-                    </th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Врач</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Исследований</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">УП</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Среднее УП/день</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {departmentSummary.map((row) => (
-                    <tr key={row.department} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-slate-800 font-medium">
-                        {row.department}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">{row.planUp}</td>
-                      <td className="px-4 py-3 text-slate-600">{row.actualUp}</td>
-                      <td className="px-4 py-3 text-slate-600">{row.fulfillment}%</td>
-                      <td className="px-4 py-3 text-slate-600">{row.studies}</td>
+                  {kpiData.doctor_performance.map((row) => (
+                    <tr key={row.doctor_id} className="border-t border-slate-100">
+                      <td className="px-4 py-3 text-slate-800 font-medium">{row.doctor_name}</td>
+                      <td className="px-4 py-3 text-slate-600">{row.completed_studies}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatUp(row.completed_up)}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatUp(row.avg_up_per_day)}</td>
                     </tr>
                   ))}
                 </tbody>

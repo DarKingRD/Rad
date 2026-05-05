@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { doctorsApi } from '../../services/api';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, X, Search, ArrowUpDown } from 'lucide-react';
+import { doctorsApi } from '../../services/api';
 import { Doctor, DoctorWithLoad } from '../../types';
+
+const DAILY_UP_DEFAULT = 8;
 
 interface DoctorFormData {
   fio_alias: string;
@@ -23,7 +25,6 @@ export const DoctorsView: React.FC = () => {
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
 
-  // Фильтрация и сортировка через useMemo — без лишних стейтов
   const sortedDoctors = useMemo(() => {
     let result = [...doctors];
 
@@ -90,7 +91,7 @@ export const DoctorsView: React.FC = () => {
   const [formData, setFormData] = useState<DoctorFormData>({
     fio_alias: '',
     position_type: 'radiologist',
-    max_up_per_day: 120,
+    max_up_per_day: DAILY_UP_DEFAULT,
     is_active: true,
     modality: [],
   });
@@ -123,21 +124,21 @@ export const DoctorsView: React.FC = () => {
   };
 
   const loadDoctors = async () => {
-  try {
-    setLoading(true);
-    const doctorsData = await doctorsApi.getWithLoad();
-    setDoctors(doctorsData);
-  } catch (err) {
-    console.error('Error loading doctors:', err);
-  } finally {
-    setLoading(false);
-  }
-};
+    try {
+      setLoading(true);
+      const doctorsData = await doctorsApi.getWithLoad();
+      setDoctors(doctorsData);
+    } catch (err) {
+      console.error('Error loading doctors:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const getDefaultFormData = (): DoctorFormData => ({
     fio_alias: '',
     position_type: 'radiologist',
-    max_up_per_day: 120,
+    max_up_per_day: DAILY_UP_DEFAULT,
     is_active: true,
     modality: [],
   });
@@ -148,7 +149,7 @@ export const DoctorsView: React.FC = () => {
       setFormData({
         fio_alias: doctor.fio_alias || '',
         position_type: doctor.position_type || 'radiologist',
-        max_up_per_day: doctor.max_up_per_day || 50,
+        max_up_per_day: doctor.max_up_per_day || DAILY_UP_DEFAULT,
         modality: doctor.modality || [],
         is_active: doctor.is_active !== undefined ? doctor.is_active : true,
       });
@@ -166,21 +167,21 @@ export const DoctorsView: React.FC = () => {
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  try {
-    if (editingDoctor) {
-      await doctorsApi.update(editingDoctor.id, formData);
-    } else {
-      await doctorsApi.create(formData);
+    e.preventDefault();
+    try {
+      if (editingDoctor) {
+        await doctorsApi.update(editingDoctor.id, formData);
+      } else {
+        await doctorsApi.create(formData);
+      }
+      await loadDoctors();
+      handleCloseModal();
+    } catch (error) {
+      console.error('Error saving doctor:', error);
+      const message = error instanceof Error ? error.message : 'Ошибка при сохранении врача';
+      alert(message);
     }
-    await loadDoctors();
-    handleCloseModal();
-  } catch (error) {
-    console.error('Error saving doctor:', error);
-    const message = error instanceof Error ? error.message : 'Ошибка при сохранении врача';
-    alert(message);
-  }
-};
+  };
 
   if (loading) {
     return (
@@ -192,7 +193,6 @@ export const DoctorsView: React.FC = () => {
 
   return (
     <div className="space-y-6 p-6">
-      {/* Заголовок + кнопка добавления */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <h2 className="text-xl md:text-2xl font-bold text-slate-900">
           Врачи
@@ -206,7 +206,6 @@ export const DoctorsView: React.FC = () => {
         </button>
       </div>
 
-      {/* Поиск */}
       <div className="relative">
         <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
           <Search size={18} className="text-slate-400" />
@@ -228,7 +227,6 @@ export const DoctorsView: React.FC = () => {
         )}
       </div>
 
-      {/* Таблица — только десктоп */}
       <div className="hidden md:block bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
@@ -266,7 +264,7 @@ export const DoctorsView: React.FC = () => {
                 <tr key={doc.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-4 font-medium text-slate-900">{doc.fio_alias || 'Не указано'}</td>
                   <td className="px-6 py-4 text-slate-600">{doc.specialty || doc.position_type || '—'}</td>
-                  <td className="px-6 py-4 text-slate-600">{doc.max_up_per_day || 120}</td>
+                  <td className="px-6 py-4 text-slate-600">{doc.max_up_per_day || DAILY_UP_DEFAULT}</td>
                   <td className="px-6 py-4 text-slate-600">
                     {doc.modality && doc.modality.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5">
@@ -304,7 +302,6 @@ export const DoctorsView: React.FC = () => {
         </table>
       </div>
 
-      {/* Карточки — только мобиле */}
       <div className="md:hidden space-y-3">
         {sortedDoctors.length === 0 ? (
           <div className="text-center py-12 text-slate-500">
@@ -340,7 +337,7 @@ export const DoctorsView: React.FC = () => {
                 </div>
               </div>
               <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-                <span className="text-xs text-slate-500">Макс. <span className="font-medium text-slate-700">{doc.max_up_per_day || 120}</span> УП/день</span>
+                <span className="text-xs text-slate-500">Макс. <span className="font-medium text-slate-700">{doc.max_up_per_day || DAILY_UP_DEFAULT}</span> УП/день</span>
                 <button onClick={() => handleOpenModal(doc)} className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors">
                   Редактировать
                 </button>
@@ -350,7 +347,6 @@ export const DoctorsView: React.FC = () => {
         )}
       </div>
 
-      {/* Модальное окно добавления/редактирования врача */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 sm:p-4">
           <div className="bg-white sm:rounded-2xl shadow-2xl max-w-lg w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto rounded-t-2xl">
@@ -402,7 +398,7 @@ export const DoctorsView: React.FC = () => {
                 <input
                   type="number"
                   value={formData.max_up_per_day}
-                  onChange={(e) => setFormData({ ...formData, max_up_per_day: Number(e.target.value) || 120 })}
+                  onChange={(e) => setFormData({ ...formData, max_up_per_day: Number(e.target.value) || DAILY_UP_DEFAULT })}
                   className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                   min="1"
                   required
@@ -426,8 +422,11 @@ export const DoctorsView: React.FC = () => {
                     })
                   }
                   className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                  placeholder="КТ, МРТ, Рентген"
+                  placeholder="Например: Компьютерная томограмма, Рентгенгеновское исследование"
                 />
+                <p className="text-xs text-slate-500 mt-1.5">
+                  Лучше использовать полные названия модальностей из положения ОМС.
+                </p>
               </div>
 
               <div className="flex items-center">

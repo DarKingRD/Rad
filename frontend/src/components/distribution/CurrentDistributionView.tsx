@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
   Calendar,
@@ -8,7 +8,7 @@ import {
   UserCheck,
   Zap,
 } from 'lucide-react';
-import { distributionApi, doctorsApi, studiesApi } from '../../services/api';
+import { distributionApi, doctorsApi, studiesApi, studyTypesApi } from '../../services/api';
 import type {
   Assignment,
   DistResult,
@@ -16,7 +16,9 @@ import type {
   DoctorDistStat,
   DoctorWithLoad,
   DistributionInfo,
+  DistributionObjective,
   Study,
+  StudyType,
 } from '../../types';
 
 import DoctorCard from './components/DoctorCard';
@@ -35,10 +37,32 @@ import {
 } from './utils/distributionConstants';
 import { getPriorityColor, getPriorityLabel, getTodayString } from './utils/distributionFormatters';
 
-const CurrentDistributionView: React.FC = () => {
+const OBJECTIVE_OPTIONS: Array<{ value: DistributionObjective; label: string }> = [
+  {
+    value: 'weighted_tardiness_lexicographic',
+    label: 'Взвешенная просрочка',
+  },
+  {
+    value: 'tardiness_lexicographic',
+    label: 'Обычная просрочка',
+  },
+  {
+    value: 'priority_tier_tardiness_multipass',
+    label: 'CITO → ASAP → normal',
+  },
+  {
+    value: 'max_assignments',
+    label: 'Максимум назначений',
+  },
+];
+
+const CurrentDistributionView = () => {
+  const formatModalityOptionLabel = (value: string) =>
+    value.length > 28 ? `${value.slice(0, 28)}...` : value;
   const [studiesTotal, setStudiesTotal] = useState(0);
   const [studies, setStudies] = useState<Study[]>([]);
   const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
+  const [studyTypes, setStudyTypes] = useState<StudyType[]>([]);
   const [loading, setLoading] = useState(true);
   const [studiesLoading, setStudiesLoading] = useState(false);
   const [distributing, setDistributing] = useState(false);
@@ -58,10 +82,15 @@ const CurrentDistributionView: React.FC = () => {
   const [distributionDateFrom, setDistributionDateFrom] = useState('');
   const [distributionDateTo, setDistributionDateTo] = useState('');
   const [useMip, setUseMip] = useState(true);
+  const [objective, setObjective] = useState<DistributionObjective>('weighted_tardiness_lexicographic');
 
   const [mobileTab, setMobileTab] = useState<MobileTab>('studies');
   const [currentPage, setCurrentPage] = useState(1);
   const [doctorPage, setDoctorPage] = useState(1);
+  const [priorityFilter, setPriorityFilter] = useState<'all' | 'cito' | 'asap' | 'normal'>('all');
+  const [createdFromFilter, setCreatedFromFilter] = useState('');
+  const [createdToFilter, setCreatedToFilter] = useState('');
+  const [modalityFilter, setModalityFilter] = useState('');
 
   const { drafts, loadDrafts, persistDraft, removeDraft } = useDistributionDrafts();
   const { expandedDoctor, doctorStudies, handleToggleExpand } = useDoctorStudies();
@@ -88,7 +117,12 @@ const CurrentDistributionView: React.FC = () => {
     setError(null);
 
     try {
-      const pendingData = await studiesApi.getPending(currentPage, ITEMS_PER_PAGE);
+      const pendingData = await studiesApi.getPending(currentPage, ITEMS_PER_PAGE, {
+        ...(priorityFilter !== 'all' ? { priority: priorityFilter } : {}),
+        ...(createdFromFilter ? { date_from: createdFromFilter } : {}),
+        ...(createdToFilter ? { date_to: createdToFilter } : {}),
+        ...(modalityFilter ? { modality: modalityFilter } : {}),
+      });
       const pendingResults = pendingData.results || [];
 
       const sortedStudies = [...pendingResults].sort((a, b) => {
@@ -116,13 +150,15 @@ const CurrentDistributionView: React.FC = () => {
     setError(null);
 
     try {
-      const [doctorsData, infoData] = await Promise.all([
+      const [doctorsData, infoData, studyTypesData] = await Promise.all([
         doctorsApi.getWithLoad(),
         distributionApi.getInfo(),
+        studyTypesApi.getAll(),
       ]);
 
       setDoctors(doctorsData || []);
       setDistInfo(infoData || null);
+      setStudyTypes(studyTypesData || []);
       loadDrafts();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Ошибка загрузки данных';
@@ -138,7 +174,11 @@ const CurrentDistributionView: React.FC = () => {
 
   useEffect(() => {
     loadStudies();
-  }, [currentPage]);
+  }, [currentPage, priorityFilter, createdFromFilter, createdToFilter, modalityFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [priorityFilter, createdFromFilter, createdToFilter, modalityFilter]);
 
   const handleSelectForAssign = (doctorId: number) => {
     setSelectedDoctor((prev) => (prev === doctorId ? null : doctorId));
@@ -171,6 +211,7 @@ const CurrentDistributionView: React.FC = () => {
         date_from: distributionDateFrom || undefined,
         date_to: distributionDateTo || undefined,
         use_mip: useMip,
+        objective,
       });
 
       setDistResult(result);
@@ -233,7 +274,17 @@ const CurrentDistributionView: React.FC = () => {
   };
 
   const selectedDoctorObject = doctors.find((doctor) => doctor.id === selectedDoctor);
-
+  const modalityOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          studyTypes
+            .map((studyType) => studyType.name?.trim())
+            .filter((value): value is string => Boolean(value))
+        )
+      ).sort((a, b) => a.localeCompare(b, 'ru')),
+    [studyTypes]
+  );
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -360,6 +411,23 @@ const CurrentDistributionView: React.FC = () => {
               <span className="text-sm text-slate-700">Использовать MIP</span>
             </label>
 
+            <div className="min-w-[220px]">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Objective
+              </label>
+              <select
+                value={objective}
+                onChange={(e) => setObjective(e.target.value as DistributionObjective)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+              >
+                {OBJECTIVE_OPTIONS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <button
               onClick={handleRunDistribution}
               disabled={distributing}
@@ -466,6 +534,44 @@ const CurrentDistributionView: React.FC = () => {
             </div>
 
             <div className="divide-y divide-slate-100 max-h-[720px] overflow-y-auto">
+              <div className="px-5 py-4 border-b border-slate-100 bg-slate-50">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <select
+                    value={priorityFilter}
+                    onChange={(e) => setPriorityFilter(e.target.value as typeof priorityFilter)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  >
+                    <option value="all">Все приоритеты</option>
+                    <option value="cito">CITO</option>
+                    <option value="asap">ASAP</option>
+                    <option value="normal">Плановые</option>
+                  </select>
+                  <select
+                    value={modalityFilter}
+                    onChange={(e) => setModalityFilter(e.target.value)}
+                    className="min-w-0 max-w-full border border-slate-300 rounded-lg px-3 py-2 pr-8 text-sm bg-white overflow-hidden text-ellipsis whitespace-nowrap"
+                  >
+                    <option value="">Все модальности</option>
+                    {modalityOptions.map((modality) => (
+                      <option key={modality} value={modality} title={modality}>
+                        {formatModalityOptionLabel(modality)}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="date"
+                    value={createdFromFilter}
+                    onChange={(e) => setCreatedFromFilter(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                  <input
+                    type="date"
+                    value={createdToFilter}
+                    onChange={(e) => setCreatedToFilter(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+              </div>
               {studies.length === 0 && !studiesLoading ? (
                 <div className="px-5 py-12 text-center text-slate-500">
                   Нет исследований для распределения

@@ -39,6 +39,8 @@ export interface Schedule {
   break_end: string | null;
   break_duration_minutes: number;
   is_day_off: number;
+  day_status: number;
+  day_status_label?: string;
   planned_up: number;
   doctor_name?: string;
   doctor?: Doctor;
@@ -64,6 +66,26 @@ export interface DashboardStats {
   avg_load_per_doctor: number;
   cito_studies: number;
   asap_studies: number;
+  doctor_daily_up_stats: DoctorDailyUpStats;
+  doctor_performance: DoctorPerformance[];
+}
+
+export interface DoctorDailyUpStats {
+  median: number;
+  min: number;
+  max: number;
+}
+
+export interface DoctorPerformance {
+  doctor_id: number;
+  doctor_name: string;
+  completed_studies: number;
+  completed_up: number;
+  completed_days: number;
+  avg_up_per_day: number;
+  median_up_per_day: number;
+  min_daily_completed_up: number;
+  max_daily_completed_up: number;
 }
 
 export interface ChartData {
@@ -72,11 +94,104 @@ export interface ChartData {
   actual: string | number;
 }
 
+export type ChartPoint = ChartData;
+
 export interface KPICardProps {
   title: string;
   value: string | number;
   subtext: string;
   trend?: number;
+}
+
+// === ПРОГНОЗ СМЕН ===
+
+export interface ForecastModalityItem {
+  modality: string;
+  expected_studies: number;
+  expected_up: number;
+  recommended_doctors: number;
+}
+
+export interface ForecastChartPoint {
+  date: string;
+  label: string;
+  expected_studies_total: number;
+  expected_up_total?: number;
+  min_doctors: number;
+}
+
+export interface ForecastDay {
+  date: string;
+  label: string;
+  weekday: string;
+  scheduled_doctors: number;
+  expected_studies_total: number;
+  expected_up_total: number;
+  min_doctors: number;
+  gap_to_schedule: number;
+  required_modalities: ForecastModalityItem[];
+}
+
+export interface ShiftForecastSummary {
+  total_expected_studies: number;
+  total_expected_up: number;
+  max_min_doctors_per_shift: number;
+  modalities: string[];
+}
+
+export interface ShiftForecastResponse {
+  date_from: string;
+  date_to: string;
+  history_start_date: string | null;
+  history_end_date: string | null;
+  generated_at: string;
+  summary: ShiftForecastSummary;
+  chart: ForecastChartPoint[];
+  days: ForecastDay[];
+  message: string;
+}
+
+export interface ForecastCompareDayDetail {
+  date: string;
+  forecast_studies: number;
+  actual_studies: number;
+  forecast_up: number;
+  actual_up: number;
+  abs_error_studies: number;
+  abs_error_up: number;
+}
+
+export interface ForecastCompareResult {
+  method: string;
+  method_label: string;
+  days_evaluated: number;
+  mae_studies: number;
+  mae_up: number;
+  mape_studies_pct: number | null;
+  mape_up_pct: number | null;
+  day_details: ForecastCompareDayDetail[];
+}
+
+export interface ForecastCompareResponse {
+  history_start_date: string | null;
+  history_end_date: string | null;
+  training_start_date: string | null;
+  training_end_date: string | null;
+  evaluation_start_date: string | null;
+  evaluation_end_date: string | null;
+  comparison_mode: string;
+  results: ForecastCompareResult[];
+  message: string;
+  available_methods: Array<{ key: string; label: string }>;
+  params: {
+    methods: string[];
+    evaluation_start_date: string | null;
+    evaluation_end_date: string | null;
+    evaluation_days: number;
+    recent_weeks: number;
+    moving_window_days: number;
+    min_train_days: number;
+  };
 }
 
 // === РАСПРЕДЕЛЕНИЕ ===
@@ -101,6 +216,11 @@ export interface Assignment {
   deadline: string;
   completion_time: string;
   tardiness_hours: number;
+  weighted_tardiness?: number;
+  baseline_tardiness_hours?: number;
+  baseline_weighted_tardiness?: number;
+  tardiness_reduction?: number;
+  weighted_tardiness_reduction?: number;
   up_value: number;
   is_overdue: boolean;
 }
@@ -116,23 +236,50 @@ export interface PriorityBreakdownStat {
   overdue_assigned: number;
   overdue_unassigned: number;
   overdue_rate_percent: number;
+  overdue_cleared?: number;
+  overdue_remaining?: number;
+  overdue_cleared_percent?: number;
+  queue_overdue_hours_total?: number;
+  queue_overdue_hours_assigned?: number;
+  queue_overdue_hours_remaining?: number;
+  queue_overdue_hours_cleared_percent?: number;
+  scheduled_overdue_total?: number;
+  scheduled_overdue_assigned?: number;
+  scheduled_overdue_unassigned?: number;
+  scheduled_overdue_hours_total?: number;
+  scheduled_overdue_hours_assigned?: number;
+  scheduled_overdue_hours_unassigned?: number;
   overdue_hours_total?: number;
   overdue_hours_avg?: number;
+  projected_tardiness_total?: number;
+  projected_weighted_tardiness_total?: number;
+  baseline_tardiness_total?: number;
+  baseline_weighted_tardiness_total?: number;
+  tardiness_reduction?: number;
+  weighted_tardiness_reduction?: number;
+  tardiness_reduction_percent?: number;
+  weighted_tardiness_reduction_percent?: number;
   tardiness_p50?: number;
   tardiness_p95?: number;
   tardiness_p99?: number;
 }
 
-export interface DistResult {
-  doctor_stats: DoctorDistStat[];
+export interface DistributionSummary {
+  total?: number;
   assigned: number;
   unassigned: number;
   cito_assigned?: number;
   cito_total?: number;
   total_tardiness: number;
   total_weighted_tardiness: number;
+  baseline_total_tardiness?: number;
+  baseline_total_weighted_tardiness?: number;
+  tardiness_reduction?: number;
+  weighted_tardiness_reduction?: number;
+  tardiness_reduction_percent?: number;
+  weighted_tardiness_reduction_percent?: number;
   avg_tardiness: number;
- assignment_rate_percent?: number;
+  assignment_rate_percent?: number;
   tardiness_p50?: number;
   tardiness_p95?: number;
   tardiness_p99?: number;
@@ -140,6 +287,24 @@ export interface DistResult {
   overdue_assigned?: number;
   overdue_unassigned?: number;
   overdue_rate_percent?: number;
+  overdue_cleared?: number;
+  overdue_remaining?: number;
+  overdue_cleared_percent?: number;
+  queue_overdue_hours_total?: number;
+  queue_overdue_hours_assigned?: number;
+  queue_overdue_hours_remaining?: number;
+  queue_overdue_hours_cleared_percent?: number;
+  scheduled_overdue_total?: number;
+  scheduled_overdue_assigned?: number;
+  scheduled_overdue_unassigned?: number;
+  scheduled_overdue_hours_total?: number;
+  scheduled_overdue_hours_assigned?: number;
+  scheduled_overdue_hours_unassigned?: number;
+}
+
+export interface DistResult extends DistributionSummary {
+  summary?: DistributionSummary;
+  doctor_stats: DoctorDistStat[];
   priority_breakdown?: {
     plan?: PriorityBreakdownStat;
     asap?: PriorityBreakdownStat;
@@ -153,6 +318,28 @@ export interface DistResult {
   _debug?: string[];
   _savedAt?: string;
   _savedDate?: string;
+}
+
+export type DistributionObjective =
+  | 'weighted_tardiness_lexicographic'
+  | 'tardiness_lexicographic'
+  | 'max_assignments'
+  | 'priority_tier_tardiness_multipass';
+
+export interface DistributionPreviewPayload {
+  date: string;
+  preview?: boolean;
+  date_from?: string;
+  date_to?: string;
+  use_mip?: boolean;
+  objective?: DistributionObjective;
+}
+
+export interface DistributionConfirmResponse {
+  status: string;
+  assigned: number;
+  distribution_id: string;
+  message: string;
 }
 
 export interface DateRange {

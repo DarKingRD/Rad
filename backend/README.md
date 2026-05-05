@@ -1,154 +1,187 @@
-# Backend часть RadPlan
+# Backend RadPlan
 
-Это серверная часть приложения RadPlan, реализованная на Python с использованием фреймворка Django и Django REST Framework.
+Backend RadPlan - Django REST API для хранения данных рентгенологической службы, планирования смен, расчета нагрузки, распределения исследований и прогнозирования потребности во врачах.
 
 ## Технологический стек
 
-- **Django 5.0.1** - мощный веб-фреймворк Python
-- **Django REST Framework** - инструмент для создания REST API
-- **drf-spectacular** - генерация документации API
-- **django-cors-headers** - поддержка CORS
-- **django-filter** - фильтрация данных
-- **python-decouple** - управление конфигурацией
-- **psycopg2-binary** - драйвер для PostgreSQL
+- Django 6.0
+- Django REST Framework
+- drf-spectacular
+- django-cors-headers
+- django-filter
+- django-unfold
+- PostgreSQL и `django.contrib.postgres`
+- pandas, openpyxl
+- OR-Tools, PuLP
+- python-decouple
 
-## Структура проекта
+## Запуск
 
-```
-backend/
-├── api/                 # Основное приложение с API
-│   ├── models.py        # Модели данных
-│   ├── views.py         # Представления и API эндпоинты
-│   ├── serializers.py  # Сериализаторы для API
-│   ├── urls.py          # Маршруты API
-│   └── ...
-├── rengenols/           # Основной проект Django
-│   ├── settings.py     # Конфигурация проекта
-│   ├── urls.py          # Основные маршруты
-│   └── ...
-├── manage.py           # Утилита управления Django
-└── requirements.txt     # Зависимости проекта
-```
-
-## Модели данных
-
-### Doctor (Врач)
-- `fio_alias` - ФИО или псевдоним врача
-- `position_type` - тип позиции (radiologist/ct)
-- `max_up_per_day` - максимальная нагрузка в УП в день
-- `is_active` - активен ли врач
-- `created_at` - дата создания
-- `updated_at` - дата обновления
-
-### StudyType (Тип исследования)
-- `name` - название типа исследования
-- `default_up` - стандартная нагрузка в УП
-- `is_active` - активен ли тип исследования
-
-### Schedule (Расписание)
-- `doctor` - ссылка на врача
-- `work_date` - дата работы
-- `is_day_off` - выходной день
-- `shift_type` - тип смены
-
-### Study (Исследование)
-- `study_type` - тип исследования
-- `patient_name` - имя пациента
-- `priority` - приоритет (normal/cito/asap)
-- `status` - статус (pending/confirmed/signed)
-- `diagnostician` - врач-диагност
-- `created_at` - дата создания
-- `signed_at` - дата подписания
-
-## API эндпоинты
-
-### Врачи
-- `GET /api/doctors/` - список всех врачей
-- `GET /api/doctors/with_load/` - врачи с текущей нагрузкой
-- `POST /api/doctors/` - создание врача
-- `PUT /api/doctors/{id}/` - обновление врача
-- `DELETE /api/doctors/{id}/` - удаление врача
-
-### Типы исследований
-- `GET /api/study-types/` - список типов исследований
-
-### Расписание
-- `GET /api/schedule/` - расписание
-- `GET /api/schedule/by_date/?date=YYYY-MM-DD` - расписание на дату
-- `POST /api/schedule/` - создание записи в расписании
-- `PUT /api/schedule/{id}/` - обновление записи
-- `DELETE /api/schedule/{id}/` - удаление записи
-
-### Исследования
-- `GET /api/studies/` - список исследований
-- `GET /api/studies/pending/` - ожидающие исследования
-- `GET /api/studies/cito/` - CITO исследования
-- `GET /api/studies/asap/` - ASAP исследования
-- `POST /api/studies/{id}/assign/` - назначение исследования врачу
-- `PUT /api/studies/{id}/update_status/` - обновление статуса
-
-### Дашборд
-- `GET /api/dashboard/stats/` - статистика для дашборда
-- `GET /api/chart/data/` - данные для графиков
-
-## Логика работы
-
-### Расчет нагрузки
-Нагрузка врача рассчитывается в условных единицах (УП) на основе количества назначенных исследований. Каждое исследование имеет базовую нагрузку в 1.5 УП.
-
-### Статусы исследований
-- `pending` - исследование создано, но не назначено врачу
-- `confirmed` - исследование назначено врачу, но еще не выполнено
-- `signed` - исследование выполнено и подписано врачом
-
-### Приоритеты исследований
-- `normal` - плановое исследование
-- `cito` - срочное исследование
-- `asap` - немедленное исследование
-
-## Настройка и запуск
-
-1. Создайте виртуальное окружение:
 ```bash
-python -m venv venv
-```
-
-2. Активируйте виртуальное окружение:
-```bash
-# Linux/Mac:
-source venv/bin/activate
-# Windows:
-venv\Scripts\activate
-```
-
-3. Установите зависимости:
-```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
 ```
 
-4. Создайте файл `.env` в корне backend с необходимыми переменными окружения:
-```
-SECRET_KEY=ваш_секретный_ключ
+Минимальный `backend/.env`:
+
+```env
+SECRET_KEY=change-me
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
-DB_NAME=название_базы
-DB_USER=пользователь
-DB_PASSWORD=пароль
+DB_NAME=radplan
+DB_USER=postgres
+DB_PASSWORD=postgres
 DB_HOST=localhost
 DB_PORT=5432
 CORS_ALLOWED_ORIGINS=http://localhost:5173
 ```
 
-5. Выполните миграции:
-```bash
-python manage.py migrate
+## Структура
+
+```text
+backend/
+├── api/
+│   ├── management/commands/      # Импорт, экспорт и аналитические команды
+│   ├── services/                 # Бизнес-логика, запросы, распределение, прогнозы
+│   ├── models.py                 # Модели БД
+│   ├── serializers.py            # DRF-сериализаторы и валидация
+│   ├── urls.py                   # API-маршруты
+│   └── views.py                  # ViewSet и function-based endpoints
+├── rengenols/
+│   ├── settings.py
+│   └── urls.py
+├── manage.py
+└── requirements.txt
 ```
 
-6. Запустите сервер разработки:
-```bash
-python manage.py runserver
-```
+## Модели данных
+
+### Doctor
+
+Врач или диагност.
+
+- `id` - внешний идентификатор врача.
+- `fio_alias` - ФИО или отображаемое имя.
+- `position_type` - должность.
+- `max_up_per_day` - дневной лимит УП, по умолчанию 8.
+- `is_active` - активность врача.
+- `modality` - список модальностей врача.
+
+### StudyType
+
+Тип исследования.
+
+- `id` - внешний идентификатор типа исследования.
+- `name` - название исследования.
+- `modality` - модальность.
+- `up_value` - стоимость исследования в УП.
+
+### Schedule
+
+Смена врача.
+
+- `doctor` - врач.
+- `work_date` - дата смены.
+- `time_start`, `time_end` - начало и конец работы.
+- `break_start`, `break_end` - начало и конец перерыва.
+- `is_day_off` - признак нерабочего дня.
+- `day_status` - исходный статус дня из графика.
+- `planned_up` - план УП на смену.
+
+### Study
+
+Исследование.
+
+- `research_number` - номер исследования, primary key.
+- `study_type` - тип исследования.
+- `status` - `pending`, `confirmed` или `signed`.
+- `priority` - `normal`, `cito` или `asap`.
+- `created_at` - дата создания.
+- `planned_at` - плановая дата исследования.
+- `diagnostician` - назначенный врач.
+
+## API
+
+Базовый префикс: `/api/`.
+
+### Врачи
+
+- `GET /api/doctors/`
+- `GET /api/doctors/with_load/`
+- `GET /api/doctors/{id}/`
+- `POST /api/doctors/`
+- `PUT /api/doctors/{id}/`
+- `DELETE /api/doctors/{id}/`
+
+### Типы исследований
+
+- `GET /api/study-types/`
+- `GET /api/study-types/{id}/`
+
+### Расписание
+
+- `GET /api/schedules/`
+- `GET /api/schedules/by_date/?date=YYYY-MM-DD`
+- `GET /api/schedules/forecast/?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`
+- `GET /api/schedules/{id}/`
+- `POST /api/schedules/`
+- `PUT /api/schedules/{id}/`
+- `DELETE /api/schedules/{id}/`
+
+### Исследования
+
+- `GET /api/studies/`
+- `GET /api/studies/pending/?page=1&page_size=100`
+- `GET /api/studies/cito/?limit=100`
+- `GET /api/studies/asap/?limit=100`
+- `GET /api/studies/{research_number}/`
+- `POST /api/studies/{research_number}/assign/`
+- `PUT /api/studies/{research_number}/update_status/`
+
+### Дашборд и графики
+
+- `GET /api/dashboard/stats/`
+- `GET /api/dashboard/chart/`
+
+### Распределение
+
+- `GET /api/distribute/` - входная информация.
+- `POST /api/distribute/` - расчет распределения.
+- `POST /api/distribute/confirm/` - применение сохраненного результата.
+- `GET /api/distribute/preview/?date=YYYY-MM-DD` - быстрый предпросмотр.
+
+### Прогноз
+
+- `GET /api/forecast/compare-methods/` - сравнение методов прогноза.
 
 ## Документация API
 
-Документация API доступна по адресу `/api/schema/swagger/` или `/api/schema/redoc/` при запущенном сервере.
+- `GET /api/schema/` - OpenAPI-схема.
+- `GET /api/docs/` - Swagger UI.
+- `GET /admin/` - Django admin с темой Unfold.
+
+## Management-команды
+
+Команды импорта, экспорта и аналитики лежат в `api/management/commands/`.
+
+```bash
+python manage.py import_data --data-dir .
+python manage.py import_miac_data --data-dir .
+python manage.py import_n_pers_data --file .\n_pers_01_10_2025-31_12_2025.xlsx
+python manage.py export_data --format json --output exports
+python manage.py count_doctors_by_weekday --date-from 2025-10-01 --date-to 2025-11-17
+```
+
+Подробнее: `api/management/commands/README.md`.
+
+## Особенности бизнес-логики
+
+- Нагрузка считается в УП, значение берется из `StudyType.up_value`.
+- Модальности нормализуются через сервис `modality_catalog`.
+- В расписании `day_status` приводит `is_day_off` к единой логике.
+- Распределение учитывает доступных врачей, модальности, приоритеты и плановые даты.
+- Прогноз смен поддерживает несколько методов и endpoint для их сравнения.
