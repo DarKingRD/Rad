@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import logging
 import uuid
 
 from django.core.cache import cache
@@ -57,6 +58,8 @@ from .services.shift_forecast_multi_method import (
     build_shift_forecast,
     evaluate_forecast_methods,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -450,7 +453,11 @@ def forecast_compare_methods(request):
             min_train_days=validated.get("min_train_days", 21),
         )
     except ValueError as exc:
-        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.warning("Forecast comparison validation failed", exc_info=True)
+        return Response(
+            {"detail": "Invalid forecast comparison parameters."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     response_payload = {
         **result,
