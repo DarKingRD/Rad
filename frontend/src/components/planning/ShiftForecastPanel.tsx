@@ -3,10 +3,11 @@ import { RefreshCw } from 'lucide-react';
 import { ResponsiveContainer, CartesianGrid, Tooltip, XAxis, YAxis, BarChart, Bar, LineChart, Line } from 'recharts';
 
 import { schedulesApi } from '../../services/api';
-import type { ShiftForecastResponse } from '../../types';
+import type { Doctor, ShiftForecastResponse } from '../../types';
 
 interface ShiftForecastPanelProps {
   refreshKey?: number;
+  doctors?: Doctor[];
 }
 
 const formatLocalDate = (d: Date) => {
@@ -33,6 +34,160 @@ const formatDateFullLabel = (value?: string | null) => {
   });
 };
 
+const normalizeModality = (value?: string | null) =>
+  (value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const modalityToKey = (value?: string | null) => {
+  const normalized = normalizeModality(value);
+  if (!normalized) return 'other';
+
+  if (normalized.includes('флюор') || normalized.includes('flg') || normalized.includes('fluoro')) {
+    return 'fluorography';
+  }
+
+  if (normalized.includes('рентген') || normalized.includes('xray') || normalized.includes('x-ray')) {
+    return 'xray';
+  }
+
+  const isCt =
+    normalized.includes('кт') ||
+    (normalized.includes('компьютерн') &&
+      (normalized.includes('томограф') || normalized.includes('томограм')));
+
+  if (isCt) {
+    return normalized.includes('контраст') ? 'ct_contrast' : 'ct';
+  }
+
+  const isMri =
+    normalized.includes('мрт') ||
+    normalized.includes('магнитно-резонанс') ||
+    (normalized.includes('магнитно') && normalized.includes('резонанс'));
+
+  if (isMri) {
+    return normalized.includes('контраст') ? 'mri_contrast' : 'mri';
+  }
+
+  if (normalized.includes('проч') || normalized.includes('other')) return 'other';
+
+  return normalized;
+};
+
+const getStringField = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const item = value as Record<string, unknown>;
+    return String(item.name ?? item.title ?? item.label ?? item.modality ?? item.modality_name ?? item.code ?? '');
+  }
+  return '';
+};
+
+const getDoctorModalities = (doctor: Doctor): string[] => {
+  const rawValues = [
+    (doctor as any).modality,
+    (doctor as any).modalities,
+    (doctor as any).modality_names,
+    (doctor as any).available_modalities,
+    (doctor as any).specializations,
+  ];
+
+  return rawValues
+    .flatMap((value) => (Array.isArray(value) ? value : value ? [value] : []))
+    .map(getStringField)
+    .map((value) => value.trim())
+    .filter(Boolean);
+};
+
+const getDoctorModalityKeys = (doctor: Doctor): string[] => {
+  const keys = new Set<string>();
+  getDoctorModalities(doctor).forEach((item) => keys.add(modalityToKey(item)));
+
+  // Fallback используем только если API вообще не вернул модальности.
+  // Иначе поле должности «врач-рентгенолог» ошибочно добавит всем врачам рентген и флюорографию.
+  if (keys.size === 0) {
+    const specialty = normalizeModality((doctor as any).specialty || (doctor as any).position_type || (doctor as any).position);
+    if (specialty.includes('рентген')) {
+      keys.add('xray');
+      keys.add('fluorography');
+    }
+  }
+
+  return [...keys];
+};
+
+const isDoctorActive = (doctor: Doctor): boolean => {
+  const value = (doctor as any).is_active ?? (doctor as any).active ?? true;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    return !['false', '0', 'no', 'нет', 'ложь'].includes(value.toLowerCase().trim());
+  }
+  return true;
+};
+
+const getDoctorName = (doctor: Doctor): string =>
+  String((doctor as any).fio_alias ?? (doctor as any).full_name ?? (doctor as any).fio ?? (doctor as any).name ?? 'Без имени');
+
+const getDoctorStableId = (doctor: Doctor): string =>
+  String((doctor as any).id ?? (doctor as any).doctor_id ?? (doctor as any).external_id ?? getDoctorName(doctor));
+
+const modalityMatchesDoctor = (forecastModality: string, doctor: Doctor): boolean => {
+  const target = modalityToKey(forecastModality);
+  const doctorKeys = getDoctorModalityKeys(doctor);
+
+  if (doctorKeys.includes(target)) return true;
+
+  // Врач с контрастной модальностью может закрывать обычную КТ/МРТ.
+  // Обратное не делаем: обычная КТ/МРТ не должна автоматически закрывать контраст.
+  if (target === 'ct' && doctorKeys.includes('ct_contrast')) return true;
+  if (target === 'mri' && doctorKeys.includes('mri_contrast')) return true;
+
+  return false;
+};
+
+type ForecastDay = ShiftForecastResponse['days'][number];
+
+const buildDayDoctorRecommendations = (day: ForecastDay, doctors: Doctor[]) => {
+  const activeDoctors = doctors.filter(isDoctorActive);
+  const availableByModality = new Map<string, Doctor[]>();
+
+  day.required_modalities.forEach((modality) => {
+    availableByModality.set(
+      modality.modality,
+      activeDoctors.filter((doctor) => modalityMatchesDoctor(modality.modality, doctor))
+    );
+  });
+
+  const sortedModalities = [...day.required_modalities].sort((a, b) => {
+    const aAvailable = availableByModality.get(a.modality)?.length ?? 0;
+    const bAvailable = availableByModality.get(b.modality)?.length ?? 0;
+
+    // Сначала закрываем дефицитные модальности, чтобы рентген/флюорография
+    // не забирали врачей, которые нужны для КТ/МРТ.
+    if (aAvailable !== bAvailable) return aAvailable - bAvailable;
+
+    return (b.recommended_doctors || 0) - (a.recommended_doctors || 0);
+  });
+
+  const usedDoctors = new Set<string>();
+  const recommendations = new Map<string, Doctor[]>();
+
+  sortedModalities.forEach((modality) => {
+    const needCount = modality.recommended_doctors || 0;
+    const selected = (availableByModality.get(modality.modality) || [])
+      .filter((doctor) => !usedDoctors.has(getDoctorStableId(doctor)))
+      .slice(0, needCount);
+
+    selected.forEach((doctor) => usedDoctors.add(getDoctorStableId(doctor)));
+    recommendations.set(modality.modality, selected);
+  });
+
+  return recommendations;
+};
+
 const getDefaultRange = () => {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
@@ -44,7 +199,7 @@ const getDefaultRange = () => {
   };
 };
 
-export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshKey = 0 }) => {
+export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshKey = 0, doctors = []}) => {
   const defaults = useMemo(() => getDefaultRange(), []);
   const [inputDateFrom, setInputDateFrom] = useState(defaults.dateFrom);
   const [inputDateTo, setInputDateTo] = useState(defaults.dateTo);
@@ -255,7 +410,46 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
           </div>
         </div>
       )}
+      {!loading && !error && days.length > 0 && (
+        <div className="rounded-xl border border-slate-200 p-4">
+          <div className="font-semibold text-slate-900 mb-1">Рекомендации по вызову врачей на смену</div>
+          <div className="text-xs text-slate-500 mb-3">
+            Базовый подбор: для каждой модальности выбираются все активные врачи с этой модальностью.
+          </div>
+          <div className="space-y-3">
+            {days.map((day) => {
+              const recommendations = buildDayDoctorRecommendations(day, doctors);
 
+              return (
+                <div key={day.date} className="border border-slate-200 rounded-lg p-3">
+                  <div className="text-sm font-medium text-slate-900 mb-2">{day.weekday}, {day.label}</div>
+                  <div className="space-y-2">
+                    {day.required_modalities.map((modality) => {
+                      const needCount = modality.recommended_doctors || 0;
+                      const selected = recommendations.get(modality.modality) || [];
+                      const missingCount = Math.max(0, needCount - selected.length);
+
+                      return (
+                        <div key={`${day.date}-${modality.modality}`} className="text-sm">
+                          <span className="font-medium text-slate-800">{modality.modality}</span>: нужно <span className="font-semibold">{needCount}</span>
+                          {selected.length > 0 ? (
+                            <span className="text-slate-600"> · желательно вызвать: {selected.map(getDoctorName).join(', ')}</span>
+                          ) : (
+                            <span className="text-amber-700"> · нет подходящих активных врачей</span>
+                          )}
+                          {missingCount > 0 && selected.length > 0 && (
+                            <span className="text-amber-700"> · не хватает: {missingCount}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {!loading && !error && days.length === 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
           Для выбранного диапазона не удалось построить прогноз.

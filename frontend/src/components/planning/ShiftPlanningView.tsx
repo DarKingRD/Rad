@@ -388,7 +388,7 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      <ShiftForecastPanel refreshKey={forecastRefreshKey} />
+      <ShiftForecastPanel refreshKey={forecastRefreshKey} doctors={doctors}/>
 
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
@@ -405,9 +405,6 @@ export const ShiftPlanningView: React.FC = () => {
         <div className="flex items-center gap-2">
           <button className="hidden md:flex px-4 py-2 bg-white border border-slate-300 rounded-md text-sm hover:bg-slate-50 items-center gap-1.5">
             <Copy size={16} />Копировать неделю
-          </button>
-          <button className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 font-medium whitespace-nowrap">
-            Сгенерировать план
           </button>
         </div>
       </div>
