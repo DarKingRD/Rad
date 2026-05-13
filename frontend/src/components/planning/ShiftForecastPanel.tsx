@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { ResponsiveContainer, CartesianGrid, Tooltip, XAxis, YAxis, BarChart, Bar, LineChart, Line } from 'recharts';
 
 import { schedulesApi } from '../../services/api';
@@ -212,6 +212,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const [forecast, setForecast] = useState<ShiftForecastResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const loadForecast = async (
     dateFrom: string,
@@ -271,72 +272,90 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const days = forecast?.days || [];
 
   return (
-    <div className="space-y-4 rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+    <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="text-lg font-semibold text-slate-950">Прогноз потребности в специалистах</div>
-          <div className="mt-1 max-w-3xl text-sm text-slate-600">
-            Выберите диапазон дат прогноза. Расчёт строится по всем доступным исследованиям в БД и показывает ожидаемое число исследований,
-            рекомендуемое количество врачей и ключевые модальности по дням.
-          </div>
+          {!isExpanded && (
+            <div className="mt-3 text-xs text-slate-500">
+              {forecast
+                ? `Последний диапазон: ${formatDateFullLabel(forecast.date_from)} — ${formatDateFullLabel(forecast.date_to)}`
+                : 'Прогноз будет доступен после раскрытия раздела.'}
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-col gap-3 xl:min-w-[680px]">
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
-              Прогноз от
-              <input
-                type="date"
-                value={inputDateFrom}
-                onChange={(e) => setInputDateFrom(e.target.value)}
-                className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
-              Прогноз до
-              <input
-                type="date"
-                value={inputDateTo}
-                onChange={(e) => setInputDateTo(e.target.value)}
-                className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
-              История от
-              <input
-                type="date"
-                value={inputHistoryStartDate}
-                onChange={(e) => setInputHistoryStartDate(e.target.value)}
-                className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
-              История до
-              <input
-                type="date"
-                value={inputHistoryEndDate}
-                onChange={(e) => setInputHistoryEndDate(e.target.value)}
-                className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
-              />
-            </label>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
-            <button
-              onClick={handleApply}
-              className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
-            >
-              Построить прогноз
-            </button>
-            <button
-              onClick={() => loadForecast(appliedDateFrom, appliedDateTo, appliedHistoryStartDate, appliedHistoryEndDate)}
-              className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              <RefreshCw size={16} />
-              Обновить
-            </button>
-          </div>
-        </div>
+        <button
+          type="button"
+          onClick={() => setIsExpanded((prev) => !prev)}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700"
+        >
+          {isExpanded ? 'Скрыть прогноз' : 'Показать прогноз'}
+          {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
       </div>
+
+      {isExpanded && (
+        <div className="mt-4 space-y-4">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-end">
+            <div className="flex flex-col gap-3 xl:min-w-[680px]">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+                  Прогноз от
+                  <input
+                    type="date"
+                    value={inputDateFrom}
+                    onChange={(e) => setInputDateFrom(e.target.value)}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+                  Прогноз до
+                  <input
+                    type="date"
+                    value={inputDateTo}
+                    onChange={(e) => setInputDateTo(e.target.value)}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+                  История от
+                  <input
+                    type="date"
+                    value={inputHistoryStartDate}
+                    onChange={(e) => setInputHistoryStartDate(e.target.value)}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+                  История до
+                  <input
+                    type="date"
+                    value={inputHistoryEndDate}
+                    onChange={(e) => setInputHistoryEndDate(e.target.value)}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
+                  />
+                </label>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+                <button
+                  type="button"
+                  onClick={handleApply}
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
+                >
+                  Построить прогноз
+                </button>
+                <button
+                  type="button"
+                  onClick={() => loadForecast(appliedDateFrom, appliedDateTo, appliedHistoryStartDate, appliedHistoryEndDate)}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                  <RefreshCw size={16} />
+                  Обновить
+                </button>
+              </div>
+            </div>
+          </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
@@ -521,6 +540,8 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
               </tbody>
             </table>
           </div>
+        </div>
+      )}
         </div>
       )}
     </div>

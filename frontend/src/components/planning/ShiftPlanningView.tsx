@@ -7,10 +7,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   AlertCircle,
-  Copy,
-  Printer,
-  RefreshCw,
   Search,
+  CalendarDays,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { Schedule, Doctor, Study } from '../../types';
 import { ShiftForecastPanel } from './ShiftForecastPanel';
@@ -43,19 +42,113 @@ const formatLocalDate = (d: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+const parseLocalDate = (value: string) => {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day);
+};
+
+const getStartOfWeek = (date: Date) => {
+  const startOfWeek = new Date(date);
+  const day = startOfWeek.getDay();
+  const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
+
+  startOfWeek.setDate(diff);
+  startOfWeek.setHours(0, 0, 0, 0);
+
+  return startOfWeek;
+};
+
 const getDayStatusLabel = (schedule?: Schedule | null) => {
   if (!schedule) return '—';
   return schedule.day_status_label || DAY_STATUS_OPTIONS.find((item) => item.value === schedule.day_status)?.label || '—';
+};
+
+const getBooleanLike = (value: unknown, defaultValue = true): boolean => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    return !['false', '0', 'no', 'нет', 'ложь', 'inactive', 'архив', 'уволен'].includes(value.toLowerCase().trim());
+  }
+  return defaultValue;
+};
+
+const isDoctorActive = (doctor: Doctor): boolean => {
+  const activeFlag = (doctor as any).is_active ?? (doctor as any).active ?? true;
+  if (!getBooleanLike(activeFlag, true)) return false;
+
+  const endDateRaw =
+    (doctor as any).work_end_date ??
+    (doctor as any).end_work_date ??
+    (doctor as any).employment_end_date ??
+    (doctor as any).date_end ??
+    (doctor as any).end_date ??
+    (doctor as any).fired_at ??
+    (doctor as any).dismissal_date ??
+    (doctor as any).end_work;
+
+  if (!endDateRaw) return true;
+
+  const endDateText = String(endDateRaw).trim();
+  if (!endDateText || ['31.12.9999', '9999-12-31', '2999-12-31'].includes(endDateText)) return true;
+
+  const normalized = endDateText.includes('.')
+    ? endDateText.split('.').reverse().join('-')
+    : endDateText.split('T')[0];
+  const endDate = new Date(`${normalized}T23:59:59`);
+
+  return Number.isNaN(endDate.getTime()) || endDate >= new Date();
+};
+
+const normalizeText = (value?: string | null) =>
+  (value || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+
+const isDisplayableModality = (value?: string | null) => {
+  const normalized = normalizeText(value);
+  if (!normalized) return false;
+
+  // Должности/статусы не выводим в строке врача и не используем как модальности.
+  if (normalized.includes('диагност')) return false;
+  if (normalized.includes('врач')) return false;
+  if (['рентгенолог', 'radiologist', 'doctor'].includes(normalized)) return false;
+
+  return true;
+};
+
+const getDoctorModalities = (doctor: Doctor): string[] => {
+  const raw = [
+    (doctor as any).modality,
+    (doctor as any).modalities,
+    (doctor as any).modality_names,
+    (doctor as any).available_modalities,
+    (doctor as any).specializations,
+  ];
+
+  const values = raw
+    .flatMap((item) => (Array.isArray(item) ? item : item ? [item] : []))
+    .map((item) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object') {
+        const obj = item as Record<string, unknown>;
+        return String(obj.name ?? obj.title ?? obj.label ?? obj.modality ?? obj.modality_name ?? '');
+      }
+      return '';
+    })
+    .map((item) => item.trim())
+    .filter(isDisplayableModality);
+
+  return Array.from(new Set(values));
 };
 
 export const ShiftPlanningView: React.FC = () => {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [studies, setStudies] = useState<Study[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
 
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
-  const [selectedDoctor, setSelectedDoctor] = useState<number | 'all'>('all');
+  const [doctorSearch, setDoctorSearch] = useState('');
+  const [selectedModality, setSelectedModality] = useState<string>('all');
   const [forecastRefreshKey, setForecastRefreshKey] = useState(0);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -73,12 +166,7 @@ export const ShiftPlanningView: React.FC = () => {
 
   const dates = useMemo(() => {
     const result: string[] = [];
-    const startOfWeek = new Date(currentDate);
-    const day = startOfWeek.getDay();
-    const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
-
-    startOfWeek.setDate(diff);
-    startOfWeek.setHours(0, 0, 0, 0);
+    const startOfWeek = getStartOfWeek(currentDate);
 
     for (let i = 0; i < 7; i++) {
       const date = new Date(startOfWeek);
@@ -88,6 +176,18 @@ export const ShiftPlanningView: React.FC = () => {
 
     return result;
   }, [currentDate]);
+
+  const weekRangeLabel = useMemo(() => {
+    const start = parseLocalDate(dates[0]).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' });
+    const end = parseLocalDate(dates[6]).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
+    return `${start} — ${end}`;
+  }, [dates]);
+
+  const weekTitle = useMemo(() => {
+    const selectedWeekStart = dates[0];
+    const todayWeekStart = formatLocalDate(getStartOfWeek(new Date()));
+    return selectedWeekStart === todayWeekStart ? 'Текущая неделя' : 'Выбранная неделя';
+  }, [dates]);
 
   const getDoctorIdFromSchedule = (schedule: Schedule, fallback: number): number => {
     if (typeof schedule.doctor === 'object' && schedule.doctor?.id) {
@@ -112,7 +212,6 @@ export const ShiftPlanningView: React.FC = () => {
       schedulesApi.getAll({
         date_from: dates[0],
         date_to: dates[6],
-        ...(selectedDoctor !== 'all' && { doctor_id: Number(selectedDoctor) }),
       }),
       studiesApi.getAll({
         date_from: dates[0],
@@ -121,25 +220,34 @@ export const ShiftPlanningView: React.FC = () => {
     ]);
     setSchedules(schedulesData);
     setStudies(studiesData);
-  }, [dates, selectedDoctor]);
+  }, [dates]);
 
   useEffect(() => {
     loadDoctors();
   }, [loadDoctors]);
 
   useEffect(() => {
+    let isMounted = true;
+
     const loadData = async () => {
       try {
-        setLoading(true);
+        setScheduleLoading(true);
         await loadSchedulesData();
       } catch (err) {
         console.error('Error loading data:', err);
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setScheduleLoading(false);
+          setInitialLoading(false);
+        }
       }
     };
 
     loadData();
+
+    return () => {
+      isMounted = false;
+    };
   }, [loadSchedulesData]);
 
   const handlePrevWeek = () => {
@@ -160,6 +268,11 @@ export const ShiftPlanningView: React.FC = () => {
 
   const handleToday = () => {
     setCurrentDate(new Date());
+  };
+
+  const handleWeekPickerChange = (value: string) => {
+    if (!value) return;
+    setCurrentDate(parseLocalDate(value));
   };
 
   const handleOpenModal = (doctorId: number, date: string, schedule?: Schedule) => {
@@ -292,14 +405,47 @@ export const ShiftPlanningView: React.FC = () => {
     return 'bg-green-100 text-green-700 border border-green-300';
   };
 
+  const activeDoctors = useMemo(() => doctors.filter(isDoctorActive), [doctors]);
+
+  const modalityOptions = useMemo(() => {
+    const options = new Set<string>();
+
+    activeDoctors.forEach((doctor) => {
+      getDoctorModalities(doctor).forEach((item) => options.add(item));
+    });
+
+    return Array.from(options).sort((a, b) => a.localeCompare(b, 'ru'));
+  }, [activeDoctors]);
+
+  const visibleDoctors = useMemo(() => {
+    const normalizedSearch = normalizeText(doctorSearch);
+
+    return activeDoctors.filter((doctor) => {
+      const doctorModalities = getDoctorModalities(doctor);
+      const matchesSearch = !normalizedSearch ||
+        normalizeText(doctor.fio_alias).includes(normalizedSearch) ||
+        doctorModalities.some((item) => normalizeText(item).includes(normalizedSearch));
+      const matchesModality = selectedModality === 'all' || doctorModalities.includes(selectedModality);
+
+      return matchesSearch && matchesModality;
+    });
+  }, [activeDoctors, doctorSearch, selectedModality]);
+
+  const resetFilters = () => {
+    setDoctorSearch('');
+    setSelectedModality('all');
+  };
+
+  const hasActiveFilters = doctorSearch.trim() !== '' || selectedModality !== 'all';
+
   const calculateStats = useMemo(() => {
-    const totalDoctors = doctors.length;
+    const totalDoctors = visibleDoctors.length;
     let filledShifts = 0;
     let warningShifts = 0;
     let overloadShifts = 0;
     const totalPossibleShifts = totalDoctors * 7;
 
-    doctors.forEach((doctor) => {
+    visibleDoctors.forEach((doctor) => {
       dates.forEach((date) => {
         const schedule = getScheduleForDoctor(doctor.id, date);
         if (isWorkingSchedule(schedule)) {
@@ -318,9 +464,9 @@ export const ShiftPlanningView: React.FC = () => {
       warningShifts,
       overloadShifts,
     };
-  }, [doctors, dates, getScheduleForDoctor]);
+  }, [visibleDoctors, dates, getScheduleForDoctor]);
 
-  if (loading && schedules.length === 0) {
+  if (initialLoading && schedules.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-slate-500">Загрузка расписания...</div>
@@ -330,40 +476,14 @@ export const ShiftPlanningView: React.FC = () => {
 
   return (
     <div className="space-y-5 md:space-y-6">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-950">Планирование смен</h2>
-          <p className="mt-1 text-sm text-slate-500">График врачей, статусы дней и прогноз потребности</p>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-          <select
-            value={selectedDoctor}
-            onChange={(e) => setSelectedDoctor(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-            className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm sm:flex-none sm:min-w-[240px]"
-          >
-            <option value="all">Все врачи</option>
-            {doctors.map((doc) => (
-              <option key={doc.id} value={doc.id}>{doc.fio_alias}</option>
-            ))}
-          </select>
-
-          <div className="flex items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
-            <button onClick={handlePrevWeek} className="rounded-xl p-2 text-slate-700 hover:bg-slate-100">
-              <ChevronLeft size={16} />
-            </button>
-            <button onClick={handleToday} className="rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap">
-              Сегодня
-            </button>
-            <button onClick={handleNextWeek} className="rounded-xl p-2 text-slate-700 hover:bg-slate-100">
-              <ChevronRight size={16} />
-            </button>
-          </div>
-        </div>
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight text-slate-950">Планирование смен</h2>
+        <p className="mt-1 text-sm text-slate-500">График врачей, статусы дней и прогноз потребности</p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Всего врачей</div>
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Врачей в выборке</div>
           <div className="text-2xl font-bold tracking-tight text-slate-950">{calculateStats.totalDoctors}</div>
         </div>
         <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
@@ -391,32 +511,102 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      <ShiftForecastPanel refreshKey={forecastRefreshKey} doctors={doctors}/>
+      <ShiftForecastPanel refreshKey={forecastRefreshKey} doctors={activeDoctors} />
 
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-          <button className="hidden items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 md:flex">
-            <RefreshCw size={16} />Очистить неделю
-          </button>
-          <button className="hidden items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 md:flex">
-            <Search size={16} />Балансировать нагрузку
-          </button>
-          <button className="hidden items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 md:flex">
-            <Printer size={16} />Печать
-          </button>
+      <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-3 shadow-sm shadow-slate-200/60 md:p-4">
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
+            <label className="relative block">
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={doctorSearch}
+                onChange={(e) => setDoctorSearch(e.target.value)}
+                placeholder="Поиск врача по ФИО"
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50/80 pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100"
+              />
+            </label>
+
+            <label className="relative block">
+              <SlidersHorizontal size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <select
+                value={selectedModality}
+                onChange={(e) => setSelectedModality(e.target.value)}
+                className="unstyled-select h-11 w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/80 pl-12 pr-9 text-sm text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100"
+              >
+                <option value="all">Все модальности</option>
+                {modalityOptions.map((modality) => (
+                  <option key={modality} value={modality}>{modality}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="h-11 rounded-2xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+            >
+              Сбросить фильтры
+            </button>
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          <button className="hidden items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 md:flex">
-            <Copy size={16} />Копировать неделю
-          </button>
+
+        <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-2">
+          <div className="grid gap-2 lg:grid-cols-[auto_minmax(240px,1fr)_auto] lg:items-center">
+            <button
+              type="button"
+              onClick={handlePrevWeek}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-700 transition hover:bg-white hover:shadow-sm"
+            >
+              <ChevronLeft size={17} />
+              <span className="hidden sm:inline">Предыдущая</span>
+            </button>
+
+            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-center">
+              <div className="rounded-2xl bg-white px-4 py-2 text-center shadow-sm ring-1 ring-slate-200">
+                <div className="text-sm font-bold text-slate-950">{weekTitle}</div>
+                <div className="text-xs text-slate-500">{weekRangeLabel}</div>
+              </div>
+
+              <label className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700">
+                <CalendarDays size={16} />
+                <span>Выбрать дату</span>
+                <input
+                  type="date"
+                  value={formatLocalDate(currentDate)}
+                  onChange={(e) => handleWeekPickerChange(e.target.value)}
+                  className="h-8 w-[8.8rem] rounded-xl border border-slate-200 bg-slate-50 px-2 text-xs text-slate-700 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={handleToday}
+                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700"
+              >
+                Сегодня
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleNextWeek}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-700 transition hover:bg-white hover:shadow-sm"
+            >
+              <span className="hidden sm:inline">Следующая</span>
+              <ChevronRight size={17} />
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-xs text-slate-600 shadow-sm md:text-sm">
-        <span className="font-medium">Неделя:</span> {new Date(dates[0]).toLocaleDateString('ru-RU')} — {new Date(dates[6]).toLocaleDateString('ru-RU')}
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60">
+      <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60">
+        {scheduleLoading && (
+          <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center border-b border-blue-100 bg-blue-50/90 px-4 py-2 text-xs font-semibold text-blue-700 backdrop-blur">
+            Обновляем расписание выбранной недели…
+          </div>
+        )}
         <div className="overflow-x-auto">
           <div className="min-w-max">
           <table className="w-full text-left text-sm" style={{ minWidth: '840px' }}>
@@ -424,7 +614,7 @@ export const ShiftPlanningView: React.FC = () => {
               <tr>
                 <th className="px-4 md:px-6 py-4 font-semibold text-slate-700 sticky left-0 bg-slate-50 z-10">Врач</th>
                 {dates.map((date) => {
-                  const d = new Date(date);
+                  const d = parseLocalDate(date);
                   const dayName = d.toLocaleDateString('ru-RU', { weekday: 'short' });
                   const dayNum = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
                   return (
@@ -437,11 +627,27 @@ export const ShiftPlanningView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {doctors.map((doc) => (
+              {visibleDoctors.map((doc) => (
                 <tr key={doc.id} className="hover:bg-slate-50">
                   <td className="px-4 md:px-6 py-4 font-medium text-slate-900 sticky left-0 bg-white z-10 shadow-sm">
                     <div className="text-sm">{doc.fio_alias}</div>
-                    <div className="text-xs text-slate-500">{doc.specialty}</div>
+                    {getDoctorModalities(doc).length > 0 && (
+                      <div className="mt-2 flex max-w-[240px] flex-wrap gap-1">
+                        {getDoctorModalities(doc).slice(0, 2).map((modality) => (
+                          <span
+                            key={`${doc.id}-${modality}`}
+                            className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium leading-none text-slate-600"
+                          >
+                            {modality}
+                          </span>
+                        ))}
+                        {getDoctorModalities(doc).length > 2 && (
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium leading-none text-slate-500">
+                            +{getDoctorModalities(doc).length - 2}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </td>
                   {dates.map((date) => {
                     const schedule = getScheduleForDoctor(doc.id, date);
@@ -491,21 +697,17 @@ export const ShiftPlanningView: React.FC = () => {
                   })}
                 </tr>
               ))}
+              {visibleDoctors.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-6 py-10 text-center text-sm text-slate-500">
+                    По выбранным фильтрам врачи не найдены.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
           </div>
         </div>
-      </div>
-
-      <div className="rounded-2xl border border-blue-200 bg-blue-50/80 p-4">
-        <div className="mb-2 text-sm font-semibold text-blue-900">Подсказка по day_status</div>
-        <ul className="grid gap-1 text-xs text-blue-800 sm:grid-cols-2 lg:grid-cols-3">
-          <li>• 0 — рабочий день.</li>
-          <li>• 1 — выходной.</li>
-          <li>• 2 — отпуск / плановое отсутствие.</li>
-          <li>• 3 — больничный / иное отсутствие.</li>
-          <li>• 5 — до начала работы, 6 — после окончания работы.</li>
-        </ul>
       </div>
 
       {isModalOpen && (
@@ -534,7 +736,7 @@ export const ShiftPlanningView: React.FC = () => {
                   className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                   required
                 >
-                  {doctors.map((doc) => (
+                  {activeDoctors.map((doc) => (
                     <option key={doc.id} value={doc.id}>
                       {doc.fio_alias}
                     </option>
