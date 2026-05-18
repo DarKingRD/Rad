@@ -7,15 +7,22 @@ import CurrentDistributionView  from './components/distribution/CurrentDistribut
 import { DoctorsView } from './components/doctors/DoctorsView';
 import { ReportsView } from './components/reports/ReportsView';
 import {LoginView} from './components/auth/LoginView';
+import { DoctorPortalView } from './components/doctor/DoctorPortalView';
 import {authApi } from './services/api';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [refreshKey, setRefreshKey] = useState(0);
   const [isAuthenticated, setIsAuthenticated] = useState(authApi.isAuthenticated());
   const currentUser = authApi.getCurrentUser();
+  const isDoctorAccount =
+    currentUser?.role === 'doctor' ||
+    Boolean(currentUser?.doctor_id) ||
+    /^doctor_\d+$/i.test(currentUser?.username || '') ||
+    /^\d+$/.test(currentUser?.username || '');
   const renderContent = () => {
     switch (activeTab) {
-      case 'dashboard': return <DashboardView />;
+      case 'dashboard': return <DashboardView onNavigate={setActiveTab} />;
       case 'planning': return <ShiftPlanningView />;
       case 'distribution': return <CurrentDistributionView />;
       case 'doctors': return <DoctorsView />;
@@ -25,7 +32,7 @@ export default function App() {
   };
 
   const handleRefresh = () => {
-    window.location.reload();
+    setRefreshKey((prev) => prev + 1);
   };
 
     const handleLogout = () => {
@@ -35,6 +42,10 @@ export default function App() {
 
   if (!isAuthenticated) {
     return <LoginView onSuccess={() => setIsAuthenticated(true)} />;
+  }
+
+  if (isDoctorAccount) {
+    return <DoctorPortalView onLogout={handleLogout} />;
   }
 
   const accountName = currentUser?.full_name || currentUser?.username || 'Руководитель службы';
@@ -62,7 +73,9 @@ export default function App() {
         />
         <main className="flex-1 overflow-y-auto px-4 py-4 pb-24 md:px-6 md:py-6 md:pb-6 xl:px-8">
           <div className="mx-auto w-full max-w-[1480px]">
-            {renderContent()}
+            <div key={`${activeTab}-${refreshKey}`}>
+              {renderContent()}
+            </div>
           </div>
         </main>
       </div>

@@ -153,6 +153,7 @@ export const ShiftPlanningView: React.FC = () => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
   const [formData, setFormData] = useState<ScheduleFormData>({
     doctor_id: 0,
     work_date: '',
@@ -301,16 +302,19 @@ export const ShiftPlanningView: React.FC = () => {
         planned_up: 0,
       });
     }
+    setModalError(null);
     setIsModalOpen(true);
   };
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setEditingSchedule(null);
+    setModalError(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalError(null);
     try {
       const isWorking = formData.day_status === 0;
       const submitData = {
@@ -335,7 +339,7 @@ export const ShiftPlanningView: React.FC = () => {
       handleCloseModal();
     } catch (error: any) {
       console.error('Error saving schedule:', error);
-      alert('Ошибка при сохранении смены: ' + (error.response?.data?.detail || error.message));
+      setModalError('Ошибка при сохранении смены: ' + (error.response?.data?.detail || error.message));
     }
   };
 
@@ -350,7 +354,7 @@ export const ShiftPlanningView: React.FC = () => {
       handleCloseModal();
     } catch (error: any) {
       console.error('Error deleting schedule:', error);
-      alert('Ошибка при удалении смены: ' + (error.response?.data?.detail || error.message));
+      setModalError('Ошибка при удалении смены: ' + (error.response?.data?.detail || error.message));
     }
   };
 
@@ -400,9 +404,9 @@ export const ShiftPlanningView: React.FC = () => {
 
     const percentage = getLoadPercentage(schedule, doctor);
 
-    if (percentage > 95) return 'bg-red-100 text-red-700 border border-red-300';
+    if (percentage > 95) return 'bg-amber-100 text-amber-700 border border-amber-300';
     if (percentage >= 80) return 'bg-amber-100 text-amber-700 border border-amber-300';
-    return 'bg-green-100 text-green-700 border border-green-300';
+    return 'bg-blue-100 text-blue-700 border border-blue-300';
   };
 
   const activeDoctors = useMemo(() => doctors.filter(isDoctorActive), [doctors]);
@@ -489,7 +493,7 @@ export const ShiftPlanningView: React.FC = () => {
         <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
           <div className="flex items-center justify-between mb-1">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Рабочих смен</div>
-            <CheckCircle2 size={14} className="text-green-600" />
+            <CheckCircle2 size={14} className="text-blue-600" />
           </div>
           <div className="text-2xl font-bold tracking-tight text-slate-950">
             {calculateStats.filledShifts}/{calculateStats.totalPossibleShifts}
@@ -505,9 +509,9 @@ export const ShiftPlanningView: React.FC = () => {
         <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
           <div className="flex items-center justify-between mb-1">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Перегрузки</div>
-            <AlertCircle size={14} className="text-red-600" />
+            <AlertCircle size={14} className="text-amber-600" />
           </div>
-          <div className="text-2xl font-bold tracking-tight text-red-600">{calculateStats.overloadShifts}</div>
+          <div className="text-2xl font-bold tracking-tight text-amber-600">{calculateStats.overloadShifts}</div>
         </div>
       </div>
 
@@ -726,6 +730,13 @@ export const ShiftPlanningView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              {modalError && (
+                <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
+                  <AlertCircle size={17} className="mt-0.5 shrink-0" />
+                  <span>{modalError}</span>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   Врач
@@ -859,7 +870,7 @@ export const ShiftPlanningView: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleDelete}
-                    className="rounded-xl bg-red-600 px-4 py-2.5 font-semibold text-white hover:bg-red-700"
+                    className="rounded-xl bg-amber-600 px-4 py-2.5 font-semibold text-white hover:bg-amber-700"
                   >
                     Удалить
                   </button>

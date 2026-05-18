@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
   Calendar,
-  Eye,
   Filter,
   Loader2,
   UserCheck,
@@ -40,21 +39,32 @@ import { getPriorityColor, getPriorityLabel, getTodayString } from './utils/dist
 const OBJECTIVE_OPTIONS: Array<{ value: DistributionObjective; label: string }> = [
   {
     value: 'weighted_tardiness_lexicographic',
-    label: 'Взвешенная просрочка',
+    label: 'Срочность и просрочка',
   },
   {
     value: 'tardiness_lexicographic',
-    label: 'Обычная просрочка',
+    label: 'Минимальная просрочка',
   },
   {
     value: 'priority_tier_tardiness_multipass',
-    label: 'CITO → ASAP → normal',
+    label: 'Сначала CITO и срочные',
   },
   {
     value: 'max_assignments',
-    label: 'Максимум назначений',
+    label: 'Максимум исследований',
   },
 ];
+
+const OBJECTIVE_DESCRIPTIONS: Record<DistributionObjective, string> = {
+  weighted_tardiness_lexicographic:
+    'Оптимальный режим для демонстрации: срочные исследования получают больший вес, а просрочка снижается в первую очередь.',
+  tardiness_lexicographic:
+    'Режим минимизирует суммарное время опоздания без дополнительного усиления CITO и срочных исследований.',
+  priority_tier_tardiness_multipass:
+    'Алгоритм последовательно закрывает CITO, затем срочные, затем плановые исследования.',
+  max_assignments:
+    'Режим старается назначить как можно больше исследований, даже если качество сроков не главное.',
+};
 
 const CurrentDistributionView = () => {
   const formatModalityOptionLabel = (value: string) =>
@@ -293,7 +303,7 @@ const CurrentDistributionView = () => {
             Текущее распределение
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-slate-500">
-            Выбери исследование, врача и выполни ручное или автоматическое распределение
+            Очередь исследований, доступные врачи и расчёт оптимального назначения на выбранный период
           </p>
         </div>
 
@@ -314,7 +324,7 @@ const CurrentDistributionView = () => {
       </div>
 
       {error && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
           {error}
         </div>
       )}
@@ -350,7 +360,7 @@ const CurrentDistributionView = () => {
 
         <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
               <Calendar size={22} />
             </div>
             <div>
@@ -408,12 +418,12 @@ const CurrentDistributionView = () => {
                 checked={useMip}
                 onChange={(e) => setUseMip(e.target.checked)}
               />
-              <span className="text-sm font-medium text-slate-700">MIP</span>
+              <span className="text-sm font-medium text-slate-700">Точный расчёт</span>
             </label>
 
             <div className="min-w-0">
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Objective
+                Критерий распределения
               </label>
               <select
                 value={objective}
@@ -436,15 +446,22 @@ const CurrentDistributionView = () => {
               {distributing ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  Распределяем...
+                  Считаем решение...
                 </>
               ) : (
                 <>
                   <Zap size={16} />
-                  Запустить preview
+                  Построить распределение
                 </>
               )}
             </button>
+          </div>
+
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+            <div className="font-semibold text-blue-900">Как будет считаться решение</div>
+            <div className="mt-1">
+              {OBJECTIVE_DESCRIPTIONS[objective]} {useMip ? 'Используется точная оптимизационная модель.' : 'Используется быстрый эвристический режим.'}
+            </div>
           </div>
 
           {selectedStudy && (
@@ -469,10 +486,10 @@ const CurrentDistributionView = () => {
                 <button
                   onClick={handleAssign}
                   disabled={!selectedDoctor}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <Eye size={16} />
-                  Назначить вручную
+                  <UserCheck size={16} />
+                  Назначить выбранному врачу
                 </button>
 
                 <button
@@ -526,7 +543,7 @@ const CurrentDistributionView = () => {
                   Ожидающие исследования
                 </h3>
                 <p className="mt-0.5 text-sm text-slate-500">
-                  Выбери исследование для ручного назначения
+                  Можно выбрать исследование и назначить его вручную
                 </p>
               </div>
 
@@ -543,7 +560,7 @@ const CurrentDistributionView = () => {
                   >
                     <option value="all">Все приоритеты</option>
                     <option value="cito">CITO</option>
-                    <option value="asap">ASAP</option>
+                    <option value="asap">Срочные</option>
                     <option value="normal">Плановые</option>
                   </select>
                   <select
@@ -631,7 +648,7 @@ const CurrentDistributionView = () => {
               <div>
                 <h3 className="font-semibold text-slate-950">Доступные врачи</h3>
                 <p className="mt-0.5 text-sm text-slate-500">
-                  Раскрой врача, чтобы посмотреть его текущие исследования
+                  Нагрузка, лимиты и текущие исследования по каждому специалисту
                 </p>
               </div>
             </div>

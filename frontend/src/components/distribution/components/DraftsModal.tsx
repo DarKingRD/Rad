@@ -27,7 +27,7 @@ const DraftsModal: React.FC<DraftsModalProps> = ({
             <Archive size={20} className="text-slate-600" />
             <div>
               <h3 className="text-lg font-bold text-slate-900">Черновики распределений</h3>
-              <p className="text-sm text-slate-500">Сохранённые preview-результаты</p>
+              <p className="text-sm text-slate-500">Сохранённые предварительные расчёты</p>
             </div>
           </div>
 

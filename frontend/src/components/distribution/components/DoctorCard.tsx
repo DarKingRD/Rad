@@ -25,9 +25,10 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
   onToggleExpand,
   onSelectForAssign,
 }) => {
-  const assignedCount = distStat?.assigned_studies ?? doc.active_studies ?? 0;
-  const totalUp = distStat ? distStat.total_up : doc.current_load ?? 0;
-  const maxUp = distStat ? distStat.max_up : doc.max_load ?? 50;
+  const previewAssignedCount = distStat?.assigned_studies ?? 0;
+  const assignedCount = doc.active_studies ?? 0;
+  const totalUp = doc.current_load ?? 0;
+  const maxUp = doc.max_load ?? 50;
   const loadPct = maxUp > 0 ? Math.min((totalUp / maxUp) * 100, 100) : 0;
   const isOverloaded = loadPct > 80;
 
@@ -109,10 +110,10 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
             <div
               className={`h-full rounded-full transition-all duration-500 ${
                 isOverloaded
-                  ? 'bg-red-500'
+                  ? 'bg-amber-500'
                   : loadPct > 50
                   ? 'bg-amber-400'
-                  : 'bg-green-500'
+                  : 'bg-blue-500'
               }`}
               style={{ width: `${loadPct}%` }}
             />
@@ -121,7 +122,7 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
           <div className="mt-1 flex items-center gap-1 text-xs sm:justify-end">
             <UserCheck
               size={11}
-              className={assignedCount > 0 ? 'text-green-500' : 'text-slate-300'}
+              className={assignedCount > 0 ? 'text-blue-500' : 'text-slate-300'}
             />
             <span
               className={
@@ -131,6 +132,7 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
               }
             >
               {assignedCount} исслед.
+              {previewAssignedCount > 0 ? ` · +${previewAssignedCount} в расчёте` : ''}
             </span>
           </div>
         </div>
@@ -176,7 +178,7 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
               Загрузка исследований...
             </div>
           ) : studiesState?.error ? (
-            <div className="px-4 py-6 text-sm text-red-600">{studiesState.error}</div>
+            <div className="px-4 py-6 text-sm text-amber-600">{studiesState.error}</div>
           ) : studiesState?.studies?.length ? (
             <div>{studiesState.studies.map(renderStudyRow)}</div>
           ) : (

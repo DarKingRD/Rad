@@ -6,6 +6,7 @@ import {
   BarChart3,
   CheckCircle2,
   Clock,
+  Download,
   Filter,
   Target,
   TrendingDown,
@@ -26,33 +27,29 @@ import {
   Cell,
 } from "recharts";
 
-const COLORS = ["#3b82f6", "#22c55e", "#f97316"];
+const COLORS = ["#2563eb", "#64748b", "#d97706"];
 
 const metricCardClass =
   "rounded-2xl border border-slate-200/80 bg-white/95 p-4 shadow-sm shadow-slate-100/70 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-slate-200/70 sm:p-5";
 
 export const ReportsView: React.FC = () => {
-  const today = new Date();
-  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-
-  const formatInputDate = (d: Date) => d.toISOString().split("T")[0];
-
-  const initialDateFrom = formatInputDate(firstDay);
-  const initialDateTo = formatInputDate(today);
-
   const [loading, setLoading] = useState(true);
 
-  const [dateFrom, setDateFrom] = useState<string>(initialDateFrom);
-  const [dateTo, setDateTo] = useState<string>(initialDateTo);
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
 
-  const [appliedDateFrom, setAppliedDateFrom] = useState<string>(initialDateFrom);
-  const [appliedDateTo, setAppliedDateTo] = useState<string>(initialDateTo);
+  const [appliedDateFrom, setAppliedDateFrom] = useState<string>("");
+  const [appliedDateTo, setAppliedDateTo] = useState<string>("");
+  const [allDates, setAllDates] = useState(true);
 
   const [kpiData, setKpiData] = useState<DashboardStats | null>(null);
   const [chartData, setChartData] = useState<any[]>([]);
   const [pieData, setPieData] = useState<any[]>([]);
 
   const dailyUpStats = kpiData?.doctor_daily_up_stats ?? { median: 0, min: 0, max: 0 };
+  const reportPeriodLabel = allDates
+    ? "Все даты"
+    : `${appliedDateFrom || "—"} — ${appliedDateTo || "—"}`;
 
   const formatUp = (value?: number | null) => {
     if (value === null || value === undefined || Number.isNaN(value)) {
@@ -62,14 +59,22 @@ export const ReportsView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (appliedDateFrom && appliedDateTo) {
-      loadReportsData();
-    }
-  }, [appliedDateFrom, appliedDateTo]);
+    loadReportsData();
+  }, [appliedDateFrom, appliedDateTo, allDates]);
 
   const handleApplyFilters = () => {
-    setAppliedDateFrom(dateFrom);
-    setAppliedDateTo(dateTo);
+    const hasRange = Boolean(dateFrom && dateTo);
+    setAllDates(!hasRange);
+    setAppliedDateFrom(hasRange ? dateFrom : "");
+    setAppliedDateTo(hasRange ? dateTo : "");
+  };
+
+  const handleResetToAllDates = () => {
+    setDateFrom("");
+    setDateTo("");
+    setAppliedDateFrom("");
+    setAppliedDateTo("");
+    setAllDates(true);
   };
 
   const loadReportsData = async () => {
@@ -77,8 +82,8 @@ export const ReportsView: React.FC = () => {
       setLoading(true);
 
       const [stats, chart] = await Promise.all([
-        dashboardApi.getStats(appliedDateFrom, appliedDateTo),
-        dashboardApi.getChartData(appliedDateFrom, appliedDateTo),
+        dashboardApi.getStats(appliedDateFrom, appliedDateTo, allDates),
+        dashboardApi.getChartData(appliedDateFrom, appliedDateTo, allDates),
       ]);
 
       setKpiData(stats);
@@ -91,7 +96,7 @@ export const ReportsView: React.FC = () => {
 
       setPieData([
         { name: "CITO", value: stats.cito_studies },
-        { name: "ASAP", value: stats.asap_studies },
+        { name: "Срочные", value: stats.asap_studies },
         { name: "Обычные", value: normalStudies },
       ]);
     } catch (err) {
@@ -104,24 +109,64 @@ export const ReportsView: React.FC = () => {
     }
   };
 
+  const escapeCsvCell = (value: unknown) => {
+    const text = String(value ?? "");
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+
+  const handleExportCsv = () => {
+    if (!kpiData) return;
+
+    const rows = [
+      ["Отчёт РадПлан", reportPeriodLabel],
+      [],
+      ["Показатель", "Значение"],
+      ["Всего исследований", kpiData.total_studies],
+      ["Выполнено", kpiData.completed_studies],
+      ["Ожидают назначения", kpiData.pending_studies],
+      ["CITO", kpiData.cito_studies],
+      ["Срочные", kpiData.asap_studies],
+      ["Средняя нагрузка, УП", kpiData.avg_load_per_doctor],
+      ["Медиана УП в день", dailyUpStats.median],
+      ["Минимум УП в день", dailyUpStats.min],
+      ["Максимум УП в день", dailyUpStats.max],
+      [],
+      ["Врач", "Выполнено исследований", "Выполнено УП", "Дней с выполнением", "Среднее УП/день", "Медиана УП/день", "Мин. УП/день", "Макс. УП/день"],
+      ...kpiData.doctor_performance.map((row) => [
+        row.doctor_name,
+        row.completed_studies,
+        row.completed_up,
+        row.completed_days,
+        row.avg_up_per_day,
+        row.median_up_per_day,
+        row.min_daily_completed_up,
+        row.max_daily_completed_up,
+      ]),
+    ];
+
+    const csv = `\uFEFF${rows.map((row) => row.map(escapeCsvCell).join(";")).join("\r\n")}`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `radplan-report-${allDates ? "all-dates" : `${appliedDateFrom}-${appliedDateTo}`}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-5 md:space-y-6">
       <div className="flex flex-col gap-2">
-        <div className="inline-flex w-fit items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">
-          Отчёты
-        </div>
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-slate-950 md:text-3xl">
             Аналитика работы службы
           </h2>
-          <p className="mt-1 max-w-3xl text-sm text-slate-500">
-            Сводные показатели, динамика исследований и нагрузка врачей за выбранный период.
-          </p>
+          <p className="mt-1 max-w-3xl text-sm text-slate-500">Период: {reportPeriodLabel}</p>
         </div>
       </div>
 
       <div className="rounded-2xl border border-slate-200/80 bg-white/95 p-4 shadow-sm shadow-slate-100/70 sm:p-5">
-        <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+        <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto_auto_auto] lg:items-end">
           <div>
             <label className="mb-1.5 block text-sm font-medium text-slate-700">
               Период от
@@ -153,6 +198,20 @@ export const ReportsView: React.FC = () => {
             <Filter size={16} />
             Применить
           </button>
+          <button
+            onClick={handleResetToAllDates}
+            className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 lg:w-auto"
+          >
+            Все даты
+          </button>
+          <button
+            onClick={handleExportCsv}
+            disabled={!kpiData}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto"
+          >
+            <Download size={16} />
+            Excel
+          </button>
         </div>
       </div>
 
@@ -161,7 +220,7 @@ export const ReportsView: React.FC = () => {
           <div className="text-sm text-slate-500">Загрузка отчётов...</div>
         </div>
       ) : !kpiData ? (
-        <div className="rounded-2xl border border-red-200 bg-white p-10 text-center text-sm font-medium text-red-600 shadow-sm">
+        <div className="rounded-2xl border border-amber-200 bg-white p-10 text-center text-sm font-medium text-amber-600 shadow-sm">
           Не удалось загрузить отчёты
         </div>
       ) : (
@@ -183,7 +242,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-green-50 text-green-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
                   <CheckCircle2 size={22} />
                 </div>
                 <div className="min-w-0">
@@ -211,7 +270,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-purple-50 text-purple-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-50 text-slate-600">
                   <TrendingUp size={22} />
                 </div>
                 <div className="min-w-0">
@@ -227,7 +286,7 @@ export const ReportsView: React.FC = () => {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-50 text-slate-600">
                   <BarChart3 size={22} />
                 </div>
                 <div className="min-w-0">
@@ -241,7 +300,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
                   <TrendingDown size={22} />
                 </div>
                 <div className="min-w-0">
@@ -255,7 +314,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-50 text-slate-600">
                   <Activity size={22} />
                 </div>
                 <div className="min-w-0">
@@ -284,8 +343,8 @@ export const ReportsView: React.FC = () => {
                     <YAxis tick={{ fontSize: 12 }} />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="plan" name="План" fill="#3b82f6" />
-                    <Bar dataKey="actual" name="Факт" fill="#22c55e" />
+                    <Bar dataKey="plan" name="План" fill="#94a3b8" />
+                    <Bar dataKey="actual" name="Факт" fill="#2563eb" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -296,7 +355,7 @@ export const ReportsView: React.FC = () => {
                 <h3 className="text-base font-semibold text-slate-950 sm:text-lg">
                   Распределение по приоритетам
                 </h3>
-                <p className="text-sm text-slate-500">Доля CITO, ASAP и обычных исследований.</p>
+                <p className="text-sm text-slate-500">Доля CITO, срочных и обычных исследований.</p>
               </div>
               <div className="h-64 sm:h-[340px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -319,20 +378,19 @@ export const ReportsView: React.FC = () => {
               <h3 className="text-base font-semibold text-slate-950 sm:text-lg">
                 Выполненные исследования по врачам
               </h3>
-              <p className="text-sm text-slate-500">
-                Таблица сохранена полностью, на телефоне доступна горизонтальная прокрутка.
-              </p>
             </div>
 
             <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <div className="max-h-[420px] min-w-[720px] overflow-y-auto">
+              <div className="max-h-[420px] min-w-[920px] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-slate-50">
                     <tr>
                       <th className="px-4 py-3 text-left font-semibold text-slate-600">Врач</th>
                       <th className="px-4 py-3 text-left font-semibold text-slate-600">Исследований</th>
                       <th className="px-4 py-3 text-left font-semibold text-slate-600">УП</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-600">Дней</th>
                       <th className="px-4 py-3 text-left font-semibold text-slate-600">Среднее УП/день</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-600">Медиана</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -341,7 +399,9 @@ export const ReportsView: React.FC = () => {
                         <td className="px-4 py-3 font-medium text-slate-900">{row.doctor_name}</td>
                         <td className="px-4 py-3 text-slate-600">{row.completed_studies}</td>
                         <td className="px-4 py-3 text-slate-600">{formatUp(row.completed_up)}</td>
+                        <td className="px-4 py-3 text-slate-600">{row.completed_days}</td>
                         <td className="px-4 py-3 text-slate-600">{formatUp(row.avg_up_per_day)}</td>
+                        <td className="px-4 py-3 text-slate-600">{formatUp(row.median_up_per_day)}</td>
                       </tr>
                     ))}
                   </tbody>

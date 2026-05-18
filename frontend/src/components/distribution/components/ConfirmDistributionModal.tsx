@@ -112,13 +112,22 @@ const ConfirmDistributionModal = ({
   const priorityBreakdownRows = useMemo(
     () => [
       { key: 'plan', label: 'Плановые', data: distResult?.priority_breakdown?.plan },
-      { key: 'asap', label: 'ASAP', data: distResult?.priority_breakdown?.asap },
+      { key: 'asap', label: 'Срочные', data: distResult?.priority_breakdown?.asap },
       { key: 'cito', label: 'CITO', data: distResult?.priority_breakdown?.cito },
     ],
     [distResult?.priority_breakdown]
   );
   const resultSummary = distResult?.summary ?? distResult;
   const citoStats = distResult?.priority_breakdown?.cito;
+  const assignedRate = resultSummary?.assignment_rate_percent ?? (
+    assignments.length ? (assigned.length / assignments.length) * 100 : 0
+  );
+  const overdueClearedPercent =
+    resultSummary?.queue_overdue_hours_cleared_percent ??
+    resultSummary?.overdue_cleared_percent ??
+    0;
+  const remainingOverdue =
+    resultSummary?.overdue_remaining ?? resultSummary?.overdue_unassigned ?? 0;
 
   const handleReassignChange = (assignment: Assignment, value: string) => {
     const doctorId = Number(value);
@@ -128,10 +137,10 @@ const ConfirmDistributionModal = ({
   };
 
   const tabs: { key: ConfirmTab; label: string; count?: number }[] = [
-    { key: 'summary', label: 'Сводка' },
-    { key: 'assigned', label: 'Назначенные', count: assigned.length },
-    { key: 'unassigned', label: 'Неназначенные', count: unassignedAssignments.length },
-    { key: 'doctors', label: 'Врачи', count: doctorSummary.length },
+    { key: 'summary', label: 'Итог решения' },
+    { key: 'assigned', label: 'Назначено', count: assigned.length },
+    { key: 'unassigned', label: 'Осталось', count: unassignedAssignments.length },
+    { key: 'doctors', label: 'Нагрузка врачей', count: doctorSummary.length },
   ];
 
   if (!isOpen || !distResult) return null;
@@ -142,10 +151,10 @@ const ConfirmDistributionModal = ({
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 md:px-6">
           <div>
             <h3 className="text-lg font-bold text-slate-900">
-              Подтверждение распределения
+              Предпросмотр распределения
             </h3>
             <p className="text-sm text-slate-500 mt-0.5">
-              Проверь назначения перед сохранением
+              Проверь результат расчёта перед сохранением назначений
             </p>
           </div>
 
@@ -182,12 +191,12 @@ const ConfirmDistributionModal = ({
           {activeTab === 'summary' && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <div className="rounded-2xl border border-green-100 bg-green-50 p-3 sm:p-4">
-                  <div className="flex items-center gap-2 text-green-700 mb-2">
+                <div className="rounded-2xl border border-blue-100 bg-blue-50 p-3 sm:p-4">
+                  <div className="flex items-center gap-2 text-blue-700 mb-2">
                     <CheckCircle2 size={18} />
                     <span className="font-medium">Назначено</span>
                   </div>
-                  <div className="text-2xl font-bold text-green-800">
+                  <div className="text-2xl font-bold text-blue-800">
                     {distResult.assigned ?? assigned.length}
                   </div>
                 </div>
@@ -202,12 +211,12 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-red-100 bg-red-50 p-3 sm:p-4">
-                  <div className="flex items-center gap-2 text-red-700 mb-2">
+                <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 sm:p-4">
+                  <div className="flex items-center gap-2 text-amber-700 mb-2">
                     <AlertTriangle size={18} />
                     <span className="font-medium">CITO</span>
                   </div>
-                  <div className="text-2xl font-bold text-red-800">
+                  <div className="text-2xl font-bold text-amber-800">
                     {citoStats?.assigned ?? resultSummary?.cito_assigned ?? 0} / {citoStats?.total ?? resultSummary?.cito_total ?? 0}
                   </div>
                 </div>
@@ -215,12 +224,27 @@ const ConfirmDistributionModal = ({
                 <div className="rounded-2xl border border-blue-100 bg-blue-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-blue-700 mb-2">
                     <Clock size={18} />
-                    <span className="font-medium">Просрочка осталась</span>
+                    <span className="font-medium">Осталось просрочки</span>
                   </div>
                   <div className="text-2xl font-bold text-blue-800">
-                    {resultSummary?.overdue_remaining ?? resultSummary?.overdue_unassigned ?? 0}
+                    {remainingOverdue}
                   </div>
                 </div>
+              </div>
+
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+                <div className="mb-2 flex items-center gap-2 font-semibold">
+                  <CheckCircle2 size={18} />
+                  Пояснение решения
+                </div>
+                <p className="leading-6">
+                  Алгоритм назначил <strong>{assigned.length}</strong> исследований из{' '}
+                  <strong>{assignments.length}</strong> ({assignedRate.toFixed(1)}%).
+                  Срочных CITO закрыто <strong>{citoStats?.assigned ?? resultSummary?.cito_assigned ?? 0}</strong> из{' '}
+                  <strong>{citoStats?.total ?? resultSummary?.cito_total ?? 0}</strong>.
+                  Просроченных исследований после расчёта остаётся <strong>{remainingOverdue}</strong>,
+                  закрыто <strong>{overdueClearedPercent.toFixed(1)}%</strong> часов просрочки в очереди.
+                </p>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -248,10 +272,10 @@ const ConfirmDistributionModal = ({
                             <div
                               className={`h-full rounded-full ${
                                 doctor.load_percent > 80
-                                  ? 'bg-red-500'
+                                  ? 'bg-amber-500'
                                   : doctor.load_percent > 50
                                   ? 'bg-amber-400'
-                                  : 'bg-green-500'
+                                  : 'bg-blue-500'
                               }`}
                               style={{ width: `${Math.min(doctor.load_percent, 100)}%` }}
                             />
@@ -281,7 +305,7 @@ const ConfirmDistributionModal = ({
                       Без назначения: <strong>{unassignedAssignments.length}</strong>
                     </div>
                      <div>
-                      Доля назначений: <strong>{(resultSummary?.assignment_rate_percent ?? 0).toFixed(2)}%</strong>
+                      Доля назначений: <strong>{assignedRate.toFixed(2)}%</strong>
                     </div>
                     <div>
                       Просроченных было:{' '}
@@ -303,7 +327,7 @@ const ConfirmDistributionModal = ({
                     </div>
                     <div>
                       Просроченных осталось:{' '}
-                      <strong>{resultSummary?.overdue_remaining ?? resultSummary?.overdue_unassigned ?? 0}</strong>
+                      <strong>{remainingOverdue}</strong>
                     </div>
                     <div>
                       Осталось часов просрочки:{' '}
@@ -312,7 +336,7 @@ const ConfirmDistributionModal = ({
                     <div>
                       Просрочка закрыта:{' '}
                       <strong>
-                        {resultSummary?.overdue_cleared ?? resultSummary?.overdue_assigned ?? 0} иссл. / {(resultSummary?.queue_overdue_hours_assigned ?? 0).toFixed(2)}ч ({(resultSummary?.queue_overdue_hours_cleared_percent ?? resultSummary?.overdue_cleared_percent ?? 0).toFixed(2)}%)
+                        {resultSummary?.overdue_cleared ?? resultSummary?.overdue_assigned ?? 0} иссл. / {(resultSummary?.queue_overdue_hours_assigned ?? 0).toFixed(2)}ч ({overdueClearedPercent.toFixed(2)}%)
                       </strong>
                     </div>
                     <div>
@@ -344,12 +368,12 @@ const ConfirmDistributionModal = ({
                         <th className="py-2 pr-2">Всего</th>
                         <th className="py-2 pr-2">Доля</th>
                         <th className="py-2 pr-2">Назначено</th>
-                        <th className="py-2 pr-2">Проср. на старте</th>
-                        <th className="py-2 pr-2">С проср. в расписании</th>
-                        <th className="py-2 pr-2">Назначено с проср.</th>
-                        <th className="py-2 pr-2">Часы назнач.</th>
-                        <th className="py-2 pr-2">Не назначено с проср.</th>
-                        <th className="py-2">Часы не назнач.</th>
+                        <th className="py-2 pr-2">Просрочено до расчёта</th>
+                        <th className="py-2 pr-2">Будет с просрочкой</th>
+                        <th className="py-2 pr-2">Назначено с просрочкой</th>
+                        <th className="py-2 pr-2">Часы у назначенных</th>
+                        <th className="py-2 pr-2">Осталось с просрочкой</th>
+                        <th className="py-2">Часы у оставшихся</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -418,7 +442,7 @@ const ConfirmDistributionModal = ({
                 >
                   <option value="all">Все приоритеты</option>
                   <option value="cito">CITO</option>
-                  <option value="asap">ASAP</option>
+                  <option value="asap">Срочные</option>
                   <option value="normal">Обычные</option>
                 </select>
 
@@ -634,10 +658,10 @@ const ConfirmDistributionModal = ({
                                 <div
                                   className={`h-full rounded-full ${
                                     doctor.load_percent > 80
-                                      ? 'bg-red-500'
+                                      ? 'bg-amber-500'
                                       : doctor.load_percent > 50
                                       ? 'bg-amber-400'
-                                      : 'bg-green-500'
+                                      : 'bg-blue-500'
                                   }`}
                                   style={{
                                     width: `${Math.min(doctor.load_percent, 100)}%`,
@@ -672,7 +696,7 @@ const ConfirmDistributionModal = ({
             disabled={confirming}
             className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
-            {confirming ? 'Сохраняем...' : 'Подтвердить распределение'}
+            {confirming ? 'Сохраняем...' : 'Сохранить назначения'}
           </button>
         </div>
       </div>

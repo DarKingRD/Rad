@@ -7,7 +7,7 @@ export const KPICard: React.FC<KPICardProps & { className?: string }> = ({ title
     <div className="flex min-w-0 items-baseline gap-2">
       <span className="truncate text-2xl font-bold tracking-tight text-slate-950 md:text-3xl">{value}</span>
       {trend ? (
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${trend > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${trend > 0 ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}>
           {trend > 0 ? '+' : ''}{trend}%
         </span>
       ) : null}

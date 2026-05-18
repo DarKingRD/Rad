@@ -195,7 +195,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button onClick={openProfileModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры пользователя</button>
               <button onClick={openPasswordModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Сменить пароль</button>
               <hr className="my-1 border-slate-100" />
-              <button onClick={onLogout} className="w-full px-3 py-2.5 text-left text-sm text-rose-600 hover:bg-rose-50">Выйти из аккаунта</button>
+              <button onClick={onLogout} className="w-full px-3 py-2.5 text-left text-sm text-amber-600 hover:bg-amber-50">Выйти из аккаунта</button>
             </div>
           ) : null}
           </div>
@@ -218,7 +218,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button onClick={openProfileModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры пользователя</button>
             <button onClick={openPasswordModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Сменить пароль</button>
             <hr className="my-1 border-slate-100" />
-            <button onClick={onLogout} className="w-full px-3 py-2.5 text-left text-sm text-rose-600 hover:bg-rose-50">Выйти из аккаунта</button>
+            <button onClick={onLogout} className="w-full px-3 py-2.5 text-left text-sm text-amber-600 hover:bg-amber-50">Выйти из аккаунта</button>
           </div>
         ) : null}
       </div>
@@ -269,8 +269,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </form>
             )}
 
-            {formError ? <p className="mt-3 text-sm text-rose-600">{formError}</p> : null}
-            {formMessage ? <p className="mt-3 text-sm text-emerald-600">{formMessage}</p> : null}
+            {formError ? <p className="mt-3 text-sm text-amber-600">{formError}</p> : null}
+            {formMessage ? <p className="mt-3 text-sm text-blue-600">{formMessage}</p> : null}
 
             <button
               onClick={() => {

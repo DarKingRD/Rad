@@ -1,23 +1,30 @@
 export const getPriorityColor = (priority: string) => {
-  if (priority === 'cito') return 'bg-red-100 text-red-700 border-red-200';
+  if (priority === 'cito') return 'bg-amber-100 text-amber-700 border-amber-200';
   if (priority === 'asap') return 'bg-amber-100 text-amber-700 border-amber-200';
   return 'bg-slate-100 text-slate-600 border-slate-200';
 };
 
 export const getPriorityLabel = (priority: string) => {
   if (priority === 'cito') return 'CITO';
-  if (priority === 'asap') return 'ASAP';
+  if (priority === 'asap') return 'Срочное';
   return 'План';
 };
 
 export const getStatusColor = (status: string) => {
   if (status === 'confirmed' || status === 'Подтверждено') {
-    return 'bg-green-100 text-green-700';
+    return 'bg-blue-100 text-blue-700';
   }
   if (status === 'signed' || status === 'Подписано') {
     return 'bg-blue-100 text-blue-700';
   }
   return 'bg-slate-100 text-slate-600';
+};
+
+export const getStatusLabel = (status: string) => {
+  if (status === 'pending') return 'Ожидает';
+  if (status === 'confirmed') return 'Назначено';
+  if (status === 'signed') return 'Выполнено';
+  return status || '—';
 };
 
 export const formatDate = (iso?: string | null) =>

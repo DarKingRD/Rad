@@ -1,13 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { dashboardApi } from '../../services/api';
+import { dashboardApi, distributionApi, doctorsApi } from '../../services/api';
 import { KPICard } from './KPICard';
-import { CalendarClock, Clock } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { DashboardStats, ChartData } from '../../types';
+import { AlertTriangle, ArrowRight, CalendarClock, CheckCircle2, GitBranch, Users } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { DashboardStats, ChartData, DistributionInfo, DoctorWithLoad } from '../../types';
 
-export const DashboardView: React.FC = () => {
+interface DashboardViewProps {
+  onNavigate?: (tab: string) => void;
+}
+
+export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [chartData, setChartData] = useState<ChartData[]>([]);
+  const [distributionInfo, setDistributionInfo] = useState<DistributionInfo | null>(null);
+  const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -19,12 +25,18 @@ export const DashboardView: React.FC = () => {
       const [statsRes, chartRes] = await Promise.all([
         dashboardApi.getStats(),
         dashboardApi.getChartData(
-          new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          new Date(Date.now() - 13 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
           new Date().toISOString().split('T')[0]
         )
       ]);
       setStats(statsRes);
       setChartData(chartRes);
+      const [distributionRes, doctorsRes] = await Promise.all([
+        distributionApi.getInfo(),
+        doctorsApi.getWithLoad(),
+      ]);
+      setDistributionInfo(distributionRes);
+      setDoctors(doctorsRes || []);
     } catch (error) {
       console.error('Error loading dashboard:', error);
     } finally {
@@ -40,49 +52,79 @@ export const DashboardView: React.FC = () => {
     );
   }
 
+  const completionRate = Math.round(((stats?.completed_studies || 0) / (stats?.total_studies || 1)) * 100);
+  const urgentTotal = (stats?.cito_studies || 0) + (stats?.asap_studies || 0);
+  const overloadedDoctors = doctors.filter((doctor) => doctor.load_percentage >= 80);
+  const availableDoctors = distributionInfo?.available_doctors ?? stats?.active_doctors ?? 0;
+  const pendingStudies = distributionInfo?.pending_studies ?? stats?.pending_studies ?? 0;
+  const statusColor =
+    pendingStudies > 0 || overloadedDoctors.length > 0
+      ? 'border-amber-200 bg-amber-50 text-amber-800'
+      : 'border-blue-200 bg-blue-50 text-blue-800';
+
   return (
     <div className="space-y-5 md:space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-950">Обзор системы</h2>
-          <p className="mt-1 text-sm text-slate-500">Ключевые показатели работы и текущие риски очереди</p>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-950">Пульт службы</h2>
+          <p className="mt-1 text-sm text-slate-500">Состояние очереди, врачей и выполнения плана</p>
         </div>
-        <button
-          onClick={loadDashboardData}
-          className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700"
-        >
-          Обновить
-        </button>
       </div>
 
-      {/* KPI: 2 колонки на телефоне, 3 на десктопе */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 md:gap-4">
+      <div className={`rounded-2xl border px-4 py-3 shadow-sm ${statusColor}`}>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-start gap-3">
+            {pendingStudies > 0 || overloadedDoctors.length > 0 ? (
+              <AlertTriangle size={20} className="mt-0.5 shrink-0" />
+            ) : (
+              <CheckCircle2 size={20} className="mt-0.5 shrink-0" />
+            )}
+            <div>
+              <div className="font-semibold">
+                {pendingStudies > 0 ? `В очереди ${pendingStudies} исследований` : 'Очередь распределена'}
+              </div>
+              <div className="text-sm opacity-80">
+                Доступно врачей: {availableDoctors}. В зоне высокой нагрузки: {overloadedDoctors.length}.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigate?.('distribution')}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/80 px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-white"
+          >
+            Открыть распределение
+            <ArrowRight size={16} />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 md:gap-4">
         <KPICard
           title="Выполнение плана"
-          value={stats ? `${Math.round((stats.completed_studies / (stats.total_studies || 1)) * 100)}%` : '0%'}
+          value={`${completionRate}%`}
           subtext={`${stats?.completed_studies || 0} из ${stats?.total_studies || 0}`}
-          trend={2.4}
-        />
-        <KPICard
-          title="Ср. нагрузка"
-          value={`${stats?.avg_load_per_doctor || 0} УП`}
-          subtext="На врача"
-          trend={-1.2}
         />
         <KPICard
           title="Очередь"
-          value={stats?.pending_studies || 0}
-          subtext="Не назначено"
-          trend={-5}
-          className=""
+          value={pendingStudies}
+          subtext="Ожидают назначения"
+        />
+        <KPICard
+          title="Срочные"
+          value={urgentTotal}
+          subtext={`CITO ${stats?.cito_studies || 0} · Срочные ${stats?.asap_studies || 0}`}
+        />
+        <KPICard
+          title="Высокая нагрузка"
+          value={overloadedDoctors.length}
+          subtext="Врачей от 80% лимита"
         />
       </div>
 
-      {/* График + алерты: стек на мобиле, 2/3+1/3 на десктопе */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 md:gap-5">
         <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 lg:col-span-2 md:p-5">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h3 className="text-base font-semibold text-slate-900">Выполнение плана по дням</h3>
+            <h3 className="text-base font-semibold text-slate-900">Динамика за 14 дней</h3>
             <div className="flex space-x-2 text-xs">
               <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-slate-400 mr-1"></span>План</span>
               <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-blue-500 mr-1"></span>Факт</span>
@@ -95,41 +137,46 @@ export const DashboardView: React.FC = () => {
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
                 <Tooltip cursor={{ fill: '#f1f5f9' }} />
-                <Legend />
                 <Bar dataKey="plan" fill="#94a3b8" radius={[4, 4, 0, 0]} name="План" />
-                <Bar dataKey="actual" fill="#0ea5e9" radius={[4, 4, 0, 0]} name="Факт" />
+                <Bar dataKey="actual" fill="#2563eb" radius={[4, 4, 0, 0]} name="Факт" />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
         <div className="space-y-3 rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
-          <h3 className="text-base font-semibold text-slate-900">Фокус на сегодня</h3>
+          <h3 className="text-base font-semibold text-slate-900">Быстрые действия</h3>
           <div className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
             <div className="mt-0.5 text-blue-500 shrink-0">
-              <CalendarClock size={18} />
+              <GitBranch size={18} />
             </div>
-            <div>
-              <p className="text-sm font-medium text-slate-800">План/факт: {stats?.completed_studies || 0} / {stats?.total_studies || 0}</p>
-              <p className="text-xs text-slate-500 mt-0.5">Ориентир выполнения на текущий период</p>
+            <div className="min-w-0 flex-1">
+              <button onClick={() => onNavigate?.('distribution')} className="text-left text-sm font-medium text-slate-800 hover:text-blue-700">
+                Распределить очередь
+              </button>
+              <p className="text-xs text-slate-500 mt-0.5">{pendingStudies} исследований ожидают врача</p>
             </div>
           </div>
           <div className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
             <div className="mt-0.5 text-amber-500 shrink-0">
-              <Clock size={18} />
+              <CalendarClock size={18} />
             </div>
-            <div>
-              <p className="text-sm font-medium text-slate-800">ASAP: {stats?.asap_studies || 0}</p>
-              <p className="text-xs text-slate-500 mt-0.5">Требуют быстрого выполнения</p>
+            <div className="min-w-0 flex-1">
+              <button onClick={() => onNavigate?.('planning')} className="text-left text-sm font-medium text-slate-800 hover:text-blue-700">
+                Проверить смены
+              </button>
+              <p className="text-xs text-slate-500 mt-0.5">График и прогноз потребности</p>
             </div>
           </div>
           <div className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
             <div className="mt-0.5 text-blue-500 shrink-0">
-              <Clock size={18} />
+              <Users size={18} />
             </div>
-            <div>
-              <p className="text-sm font-medium text-slate-800">CITO: {stats?.cito_studies || 0}</p>
-              <p className="text-xs text-slate-500 mt-0.5">Срочные исследования в очереди</p>
+            <div className="min-w-0 flex-1">
+              <button onClick={() => onNavigate?.('reports')} className="text-left text-sm font-medium text-slate-800 hover:text-blue-700">
+                Открыть отчёт
+              </button>
+              <p className="text-xs text-slate-500 mt-0.5">Выполнение и нагрузка врачей</p>
             </div>
           </div>
         </div>

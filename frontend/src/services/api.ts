@@ -13,6 +13,7 @@ import type {
   DistributionConfirmResponse,
   DistributionInfo,
   DistributionPreviewPayload,
+  DoctorPortalProfile,
 } from '../types';
 
 type ApiListResponse<T> = T[] | { results: T[] };
@@ -64,6 +65,14 @@ type DistributionPreviewInfo = {
   message: string;
 };
 
+export type AdminNotification = {
+  id: string;
+  type: string;
+  message: string;
+  created_at: string;
+  payload: Record<string, unknown>;
+};
+
 const API_BASE_URL = 'http://localhost:8000/api';
 const AUTH_TOKEN_KEY = 'radplan_auth_token';
 const AUTH_USER_KEY = 'radplan_auth_user';
@@ -72,6 +81,9 @@ type AuthUser = {
   id: number;
   username: string;
   full_name: string;
+  role: 'manager' | 'doctor';
+  doctor_id: number | null;
+  doctor_name: string | null;
 };
 
 export class ApiClientError extends Error {
@@ -321,17 +333,44 @@ export const studiesApi = {
 };
 
 export const dashboardApi = {
-  getStats: (dateFrom?: string, dateTo?: string) =>
+  getStats: (dateFrom?: string, dateTo?: string, allDates = false) =>
     getOne<DashboardStats>('/dashboard/stats/', {
       ...(dateFrom ? { date_from: dateFrom } : {}),
       ...(dateTo ? { date_to: dateTo } : {}),
+      ...(allDates ? { all_dates: '1' } : {}),
     }),
 
-  getChartData: (dateFrom?: string, dateTo?: string) =>
+  getChartData: (dateFrom?: string, dateTo?: string, allDates = false) =>
     getOne<ChartPoint[]>('/dashboard/chart/', {
       ...(dateFrom ? { date_from: dateFrom } : {}),
       ...(dateTo ? { date_to: dateTo } : {}),
+      ...(allDates ? { all_dates: '1' } : {}),
     }),
+};
+
+export const doctorPortalApi = {
+  getMe: () => getOne<DoctorPortalProfile>('/doctor/me/'),
+  updateModalities: (modality: string[]) =>
+    patchOne<DoctorPortalProfile, { modality: string[] }>('/doctor/me/', { modality }),
+  getSchedules: (params?: { date_from?: string; date_to?: string }) =>
+    getList<Schedule>('/doctor/schedules/', params),
+  getStudies: (params?: { status?: string; date_from?: string; date_to?: string }) =>
+    getList<Study>('/doctor/studies/', params),
+  updateStudyStatus: (id: string, status: 'pending' | 'confirmed' | 'signed') =>
+    patchOne<Study, { status: 'pending' | 'confirmed' | 'signed' }>(
+      `/doctor/studies/${encodeURIComponent(id)}/status/`,
+      { status }
+    ),
+};
+
+export const notificationsApi = {
+  getAll: () =>
+    getOne<{ notifications: AdminNotification[]; unread_count: number }>('/notifications/'),
+  clear: () =>
+    postOne<{ notifications: AdminNotification[]; unread_count: number }, { action: 'clear' }>(
+      '/notifications/',
+      { action: 'clear' }
+    ),
 };
 
 export const distributionApi = {

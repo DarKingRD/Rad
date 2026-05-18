@@ -41,8 +41,8 @@ export function LoginView({ onSuccess }: LoginViewProps) {
             <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm">
               <LockKeyhole size={20} />
             </div>
-            <h1 className="text-xl font-semibold text-slate-950 sm:text-2xl">Вход для руководителя службы</h1>
-            <p className="mt-1 text-sm text-slate-600">Введите учётные данные для доступа к системе.</p>
+            <h1 className="text-xl font-semibold text-slate-950 sm:text-2xl">Вход в РадПлан</h1>
+            <p className="mt-1 text-sm text-slate-600">Для руководителя и врачей службы.</p>
           </div>
 
           <div className="space-y-4">
@@ -69,7 +69,7 @@ export function LoginView({ onSuccess }: LoginViewProps) {
           </div>
 
           {error ? (
-            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
               {error}
             </div>
           ) : null}

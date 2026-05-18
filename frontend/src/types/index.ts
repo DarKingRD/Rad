@@ -70,6 +70,27 @@ export interface DashboardStats {
   doctor_performance: DoctorPerformance[];
 }
 
+export interface DoctorPeriodStats {
+  assigned: number;
+  completed: number;
+  pending: number;
+  completed_up: number;
+}
+
+export interface DoctorMonthlyStats extends DoctorPeriodStats {
+  month: string | null;
+}
+
+export interface DoctorPortalProfile {
+  doctor: Doctor;
+  available_modalities: string[];
+  stats: {
+    today: DoctorPeriodStats;
+    current_month: DoctorPeriodStats;
+    previous_months: DoctorMonthlyStats[];
+  };
+}
+
 export interface DoctorDailyUpStats {
   median: number;
   min: number;

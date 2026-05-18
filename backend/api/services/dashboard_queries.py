@@ -3,18 +3,31 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from statistics import median
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Max, Min, Q, Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 
 from ..models import Doctor, Study
 
 
-def parse_dashboard_range(date_from: str | None, date_to: str | None):
+def parse_dashboard_range(date_from: str | None, date_to: str | None, include_all: bool = False):
     """
     Возвращает (start_dt, end_dt_exclusive).
     Если даты не переданы — текущий месяц до текущего момента.
     """
+    if include_all:
+        bounds = Study.objects.aggregate(
+            min_created=Min("created_at"),
+            max_created=Max("created_at"),
+        )
+        if bounds["min_created"] and bounds["max_created"]:
+            start_dt = bounds["min_created"].replace(hour=0, minute=0, second=0, microsecond=0)
+            end_dt = bounds["max_created"] + timedelta(days=1)
+            return start_dt, end_dt
+
+        now = timezone.now()
+        return now.replace(hour=0, minute=0, second=0, microsecond=0), now
+
     if not date_from or not date_to:
         now = timezone.now()
         start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)

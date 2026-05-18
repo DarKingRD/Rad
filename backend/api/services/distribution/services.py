@@ -169,22 +169,11 @@ class DistributionService:
             return
 
         min_shift_start = min(doctor.shift_start for doctor in doctors)
-        if self.target_date != self.real_now.date():
-            self.now = min_shift_start
-            self._log(
-                f"Целевая дата {self.target_date} не равна сегодняшней; "
-                f"планирование начинается от {self.now}"
-            )
-            return
-
-        if self.real_now < min_shift_start:
-            self.now = min_shift_start
-            self._log(
-                f"Текущее время раньше начала смены; используем {self.now} как начало планирования"
-            )
-            return
-
-        self._log(f"Планирование выполняется от реального текущего времени {self.now}")
+        self.now = min_shift_start
+        self._log(
+            f"Плановая дата распределения {self.target_date}; "
+            f"планирование начинается от начала первой смены {self.now}"
+        )
 
     def load_studies(
         self,

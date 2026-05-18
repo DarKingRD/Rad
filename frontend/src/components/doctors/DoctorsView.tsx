@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, X, Search, ArrowUpDown } from 'lucide-react';
+import { AlertCircle, Plus, X, Search, ArrowUpDown } from 'lucide-react';
 import { doctorsApi } from '../../services/api';
 import { Doctor, DoctorWithLoad } from '../../types';
 
@@ -24,6 +24,7 @@ export const DoctorsView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const sortedDoctors = useMemo(() => {
     let result = [...doctors];
@@ -157,17 +158,20 @@ export const DoctorsView: React.FC = () => {
       setEditingDoctor(null);
       setFormData(getDefaultFormData());
     }
+    setFormError(null);
     setIsModalOpen(true);
   };
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setEditingDoctor(null);
+    setFormError(null);
     setFormData(getDefaultFormData());
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     try {
       if (editingDoctor) {
         await doctorsApi.update(editingDoctor.id, formData);
@@ -179,7 +183,7 @@ export const DoctorsView: React.FC = () => {
     } catch (error) {
       console.error('Error saving doctor:', error);
       const message = error instanceof Error ? error.message : 'Ошибка при сохранении врача';
-      alert(message);
+      setFormError(message);
     }
   };
 
@@ -280,14 +284,14 @@ export const DoctorsView: React.FC = () => {
                     )}
                   </td>
                   <td className="px-6 py-4">
-                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${doc.is_active ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${doc.is_active ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
                       {doc.is_active ? 'Активен' : 'В архиве'}
                     </span>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2 min-w-[140px]">
                       <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full transition-all ${doc.load_percentage > 95 ? 'bg-red-500' : doc.load_percentage > 80 ? 'bg-amber-400' : 'bg-green-500'}`}
+                        <div className={`h-full rounded-full transition-all ${doc.load_percentage > 95 ? 'bg-amber-500' : doc.load_percentage > 80 ? 'bg-amber-400' : 'bg-blue-500'}`}
                           style={{ width: `${Math.min(doc.load_percentage, 100)}%` }} />
                       </div>
                       <span className="text-xs text-slate-600 whitespace-nowrap">{doc.current_load.toFixed(1)} / {doc.max_load} УП</span>
@@ -318,7 +322,7 @@ export const DoctorsView: React.FC = () => {
                   <div className="font-semibold text-slate-900 text-sm">{doc.fio_alias || 'Не указано'}</div>
                   <div className="text-xs text-slate-500 mt-0.5">{doc.specialty || doc.position_type || '—'}</div>
                 </div>
-                <span className={`shrink-0 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${doc.is_active ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                <span className={`shrink-0 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${doc.is_active ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
                   {doc.is_active ? 'Активен' : 'В архиве'}
                 </span>
               </div>
@@ -335,7 +339,7 @@ export const DoctorsView: React.FC = () => {
                   <span className="font-medium text-slate-700">{doc.current_load.toFixed(1)} / {doc.max_load} УП</span>
                 </div>
                 <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full ${doc.load_percentage > 95 ? 'bg-red-500' : doc.load_percentage > 80 ? 'bg-amber-400' : 'bg-green-500'}`}
+                  <div className={`h-full rounded-full ${doc.load_percentage > 95 ? 'bg-amber-500' : doc.load_percentage > 80 ? 'bg-amber-400' : 'bg-blue-500'}`}
                     style={{ width: `${Math.min(doc.load_percentage, 100)}%` }} />
                 </div>
               </div>
@@ -366,6 +370,13 @@ export const DoctorsView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSubmit} className="p-5 space-y-5">
+              {formError && (
+                <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
+                  <AlertCircle size={17} className="mt-0.5 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">
                   ФИО
