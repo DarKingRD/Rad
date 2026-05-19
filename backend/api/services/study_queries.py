@@ -1,4 +1,7 @@
+from datetime import datetime, timedelta
+
 from django.db.models import Case, IntegerField, QuerySet, When
+from django.utils import timezone
 
 from ..models import Study
 
@@ -12,6 +15,15 @@ PRIORITY_ORDER = Case(
 )
 
 
+def _date_start(value: str):
+    parsed = datetime.strptime(value, "%Y-%m-%d").date()
+    return timezone.make_aware(datetime.combine(parsed, datetime.min.time()))
+
+
+def _date_exclusive_end(value: str):
+    return _date_start(value) + timedelta(days=1)
+
+
 def get_pending_studies_queryset(
     *,
     priority: str | None = None,
@@ -23,9 +35,9 @@ def get_pending_studies_queryset(
     if priority:
         qs = qs.filter(priority=priority)
     if date_from:
-        qs = qs.filter(created_at__date__gte=date_from)
+        qs = qs.filter(created_at__gte=_date_start(date_from))
     if date_to:
-        qs = qs.filter(created_at__date__lte=date_to)
+        qs = qs.filter(created_at__lt=_date_exclusive_end(date_to))
     if modality:
         qs = qs.filter(study_type__name__icontains=modality)
     return (

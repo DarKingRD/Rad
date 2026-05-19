@@ -4,7 +4,7 @@ import uuid
 
 from django.core.cache import cache
 from django.contrib.auth.models import User
-from django.db.models import Case, Count, F, IntegerField, Max, Min, Q, Sum, When
+from django.db.models import Case, Count, IntegerField, Max, Min, Q, Sum, When
 from django.db.models.functions import TruncMonth
 from django.contrib.auth import authenticate
 from django.utils import timezone

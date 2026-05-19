@@ -171,7 +171,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Activity size={28} />
             <span className="text-xl font-bold text-slate-900 tracking-tight">РадПлан</span>
           </div>
-          <p className="mt-1 text-xs text-slate-500">Рентгенологическая служба</p>
         </div>
 
         <nav className="flex-1 space-y-1.5 p-3">

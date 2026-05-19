@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Set
 
 
-@dataclass
+@dataclass(slots=True)
 class StudyData:
     """Нормализованное представление исследования для алгоритма распределения."""
 
@@ -28,7 +28,7 @@ class StudyData:
         return self.duration_minutes / 60.0
 
 
-@dataclass
+@dataclass(slots=True)
 class DoctorData:
     """Нормализованное представление врача и его рабочей смены."""
 
@@ -87,7 +87,7 @@ class DoctorData:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class ScheduleOption:
     """Один допустимый вариант назначения исследования на конкретного врача."""
 

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
 from django.db import models
+from django.db.models import Q
 
 if TYPE_CHECKING:
     from django.db.models.manager import Manager
@@ -222,6 +223,16 @@ class Study(models.Model):
             models.Index(fields=["planned_at"], name="study_planned_idx"),
             models.Index(fields=["diagnostician", "status"], name="study_diag_status_idx"),
             models.Index(fields=["status", "planned_at"], name="study_status_planned_idx"),
+            models.Index(
+                fields=["created_at"],
+                name="study_unasg_created_idx",
+                condition=Q(diagnostician__isnull=True),
+            ),
+            models.Index(
+                fields=["priority", "created_at"],
+                name="study_unasg_prio_cr_idx",
+                condition=Q(diagnostician__isnull=True),
+            ),
         ]
 
     def __str__(self):

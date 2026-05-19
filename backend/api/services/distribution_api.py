@@ -76,9 +76,10 @@ def get_distribution_info(target_date=None):
 
 
 def get_distribution_preview_info(target_date):
+    preview_end = timezone.make_aware(datetime.combine(target_date + timedelta(days=1), datetime.min.time()))
     pending = Study.objects.filter(
         diagnostician__isnull=True,
-        created_at__date__lte=target_date,
+        created_at__lt=preview_end,
     ).count()
 
     doctors = (
