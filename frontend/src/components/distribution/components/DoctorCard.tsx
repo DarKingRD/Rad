@@ -67,14 +67,14 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
 
   return (
     <div
-      className={`overflow-hidden rounded-2xl border bg-white transition-all ${
+      className={`overflow-hidden rounded-xl border bg-white transition-all ${
         isSelectedForAssign && hasSelectedStudy
           ? 'border-blue-500 ring-2 ring-blue-100 shadow-sm'
-          : 'border-slate-200 shadow-sm shadow-slate-100/70'
+          : 'border-slate-200 shadow-sm'
       }`}
     >
       <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-blue-600 text-sm font-semibold text-white shadow-sm">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-sm font-semibold text-white shadow-sm">
           {doc.fio_alias?.charAt(0) || 'В'}
         </div>
 
@@ -171,7 +171,7 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
       </div>
 
       {isExpanded && (
-        <div className="rounded-b-2xl bg-slate-50/90">
+        <div className="rounded-b-xl bg-slate-50/90">
           {studiesState?.loading ? (
             <div className="px-4 py-6 flex items-center gap-2 text-sm text-slate-500">
               <Loader2 size={16} className="animate-spin" />

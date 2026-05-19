@@ -16,7 +16,7 @@ export function DoctorSettingsPanel({
   onSave,
 }: DoctorSettingsPanelProps) {
   return (
-    <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="mb-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-950">Настройки</h2>

@@ -1,6 +1,16 @@
-import { Activity, LayoutDashboard, CalendarDays, GitBranch, Users, BarChart2, ChevronUp, UserCircle2 } from 'lucide-react';
+import {
+  Activity,
+  BarChart2,
+  CalendarDays,
+  ChevronUp,
+  GitBranch,
+  LayoutDashboard,
+  UserCircle2,
+  Users,
+} from 'lucide-react';
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiClientError, authApi } from '../../services/api';
+
 interface SidebarItemProps {
   icon: React.ElementType;
   label: string;
@@ -14,7 +24,7 @@ const SidebarItem: React.FC<SidebarItemProps> = ({ icon: Icon, label, active, on
     return (
       <button
         onClick={onClick}
-        className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-2xl py-2 transition ${
+        className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-xl py-2 transition ${
           active ? 'bg-blue-50 text-blue-700' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'
         }`}
       >
@@ -27,9 +37,9 @@ const SidebarItem: React.FC<SidebarItemProps> = ({ icon: Icon, label, active, on
   return (
     <button
       onClick={onClick}
-      className={`group flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition ${
+      className={`group flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left transition ${
         active
-          ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/20'
+          ? 'bg-blue-600 text-white shadow-sm'
           : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
       }`}
     >
@@ -75,7 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'reports', label: 'Отчёты', icon: BarChart2 },
   ];
 
-    const initials = useMemo(() => {
+  const initials = useMemo(() => {
     const words = accountName.trim().split(/\s+/).filter(Boolean);
     if (!words.length) return 'РС';
     return words.slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('');
@@ -95,7 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-   const openProfileModal = async () => {
+  const openProfileModal = async () => {
     setFormError(null);
     setFormMessage(null);
     setIsAccountMenuOpen(false);
@@ -155,7 +165,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      <div className="hidden w-[264px] shrink-0 flex-col border-r border-slate-200/80 bg-white/90 backdrop-blur md:flex">
+      <div className="hidden w-[264px] shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
         <div className="border-b border-slate-100 px-6 py-5">
           <div className="flex items-center gap-2 text-blue-600">
             <Activity size={28} />
@@ -179,9 +189,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="border-t border-slate-100 p-4" ref={desktopMenuRef}>
           <button
             onClick={() => setIsAccountMenuOpen((prev) => !prev)}
-            className="flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-2.5 transition hover:border-slate-300 hover:bg-white"
-            >
-            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-blue-100 text-xs font-bold text-blue-700">
+            className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-2.5 transition hover:border-slate-300 hover:bg-white"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-100 text-xs font-bold text-blue-700">
               {initials}
             </div>
             <div className="overflow-hidden flex-1 text-left">
@@ -189,33 +199,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <p className="text-xs text-slate-500 truncate">{accountRole}</p>
             </div>
             <ChevronUp size={16} className={`text-slate-400 transition-transform ${isAccountMenuOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {isAccountMenuOpen ? (
-            <div className="mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1 shadow-lg shadow-slate-200/70">
-              <button onClick={openProfileModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры пользователя</button>
+          </button>
+          {isAccountMenuOpen ? (
+            <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+              <button onClick={openProfileModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Профиль</button>
               <button onClick={openPasswordModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Сменить пароль</button>
               <hr className="my-1 border-slate-100" />
               <button onClick={onLogout} className="w-full px-3 py-2.5 text-left text-sm text-amber-600 hover:bg-amber-50">Выйти из аккаунта</button>
             </div>
           ) : null}
-          </div>
         </div>
+      </div>
 
       <div className="fixed bottom-20 right-3 z-50 md:hidden" ref={mobileMenuRef}>
         <button
           onClick={() => setIsAccountMenuOpen((prev) => !prev)}
-          className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-blue-700 shadow-lg shadow-slate-200/70"
+          className="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-blue-700 shadow-lg"
           aria-label="Меню пользователя"
         >
           <UserCircle2 size={24} />
         </button>
         {isAccountMenuOpen ? (
-          <div className="absolute bottom-14 right-0 w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white py-2 shadow-2xl shadow-slate-300/50">
+          <div className="absolute bottom-14 right-0 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white py-2 shadow-lg">
             <div className="px-3 pb-2 border-b border-slate-100">
               <p className="text-sm font-medium text-slate-900 truncate">{accountName}</p>
               <p className="text-xs text-slate-500 truncate">{accountRole}</p>
             </div>
-            <button onClick={openProfileModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Параметры пользователя</button>
+            <button onClick={openProfileModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Профиль</button>
             <button onClick={openPasswordModal} className="w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50">Сменить пароль</button>
             <hr className="my-1 border-slate-100" />
             <button onClick={onLogout} className="w-full px-3 py-2.5 text-left text-sm text-amber-600 hover:bg-amber-50">Выйти из аккаунта</button>
@@ -223,7 +233,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ) : null}
       </div>
 
-      <nav className="safe-area-pb fixed bottom-0 left-0 right-0 z-40 flex h-16 items-stretch gap-1 border-t border-slate-200 bg-white/95 px-2 py-1.5 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur md:hidden">
+      <nav className="safe-area-pb fixed bottom-0 left-0 right-0 z-40 flex h-16 items-stretch gap-1 border-t border-slate-200 bg-white px-2 py-1.5 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] md:hidden">
         {menuItems.map((item) => (
           <SidebarItem
             key={item.id}
@@ -238,7 +248,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {(isProfileModalOpen || isPasswordModalOpen) ? (
         <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-900/45 p-0 sm:items-center sm:p-4">
-          <div className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl">
+          <div className="w-full max-w-md rounded-t-2xl bg-white p-5 shadow-lg sm:rounded-xl">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">
               {isProfileModalOpen ? 'Параметры профиля' : 'Сменить пароль'}
             </h3>

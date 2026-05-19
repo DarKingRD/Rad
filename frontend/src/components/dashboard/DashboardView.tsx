@@ -71,7 +71,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         </div>
       </div>
 
-      <div className={`rounded-2xl border px-4 py-3 shadow-sm ${statusColor}`}>
+      <div className={`rounded-xl border px-4 py-3 shadow-sm ${statusColor}`}>
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-start gap-3">
             {pendingStudies > 0 || overloadedDoctors.length > 0 ? (
@@ -98,7 +98,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 md:gap-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 md:gap-4">
         <KPICard
           title="Выполнение плана"
           value={`${completionRate}%`}
@@ -114,20 +114,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           value={urgentTotal}
           subtext={`CITO ${stats?.cito_studies || 0} · Срочные ${stats?.asap_studies || 0}`}
         />
-        <KPICard
-          title="Высокая нагрузка"
-          value={overloadedDoctors.length}
-          subtext="Врачей от 80% лимита"
-        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 md:gap-5">
-        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 lg:col-span-2 md:p-5">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-2 md:p-5">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-base font-semibold text-slate-900">Динамика за 14 дней</h3>
             <div className="flex space-x-2 text-xs">
-              <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-slate-400 mr-1"></span>План</span>
-              <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-blue-500 mr-1"></span>Факт</span>
+              <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-slate-400 mr-1"></span>Поступило</span>
+              <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-blue-500 mr-1"></span>Выполнено</span>
             </div>
           </div>
           <div className="h-56 md:h-72">
@@ -137,16 +132,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11 }} />
                 <Tooltip cursor={{ fill: '#f1f5f9' }} />
-                <Bar dataKey="plan" fill="#94a3b8" radius={[4, 4, 0, 0]} name="План" />
-                <Bar dataKey="actual" fill="#2563eb" radius={[4, 4, 0, 0]} name="Факт" />
+                <Bar dataKey="plan" fill="#94a3b8" radius={[4, 4, 0, 0]} name="Поступило" />
+                <Bar dataKey="actual" fill="#2563eb" radius={[4, 4, 0, 0]} name="Выполнено" />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="space-y-3 rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
+        <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <h3 className="text-base font-semibold text-slate-900">Быстрые действия</h3>
-          <div className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
+          <div className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
             <div className="mt-0.5 text-blue-500 shrink-0">
               <GitBranch size={18} />
             </div>
@@ -157,7 +152,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               <p className="text-xs text-slate-500 mt-0.5">{pendingStudies} исследований ожидают врача</p>
             </div>
           </div>
-          <div className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
+          <div className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
             <div className="mt-0.5 text-amber-500 shrink-0">
               <CalendarClock size={18} />
             </div>
@@ -168,7 +163,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               <p className="text-xs text-slate-500 mt-0.5">График и прогноз потребности</p>
             </div>
           </div>
-          <div className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
+          <div className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
             <div className="mt-0.5 text-blue-500 shrink-0">
               <Users size={18} />
             </div>

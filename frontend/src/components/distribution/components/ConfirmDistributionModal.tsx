@@ -146,8 +146,8 @@ const ConfirmDistributionModal = ({
   if (!isOpen || !distResult) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/50 p-0 backdrop-blur-sm md:items-center md:p-4">
-      <div className="flex max-h-[95dvh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl md:max-w-6xl md:rounded-3xl">
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/50 p-0 md:items-center md:p-4">
+      <div className="flex max-h-[95dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-lg md:max-w-6xl md:rounded-xl">
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 md:px-6">
           <div>
             <h3 className="text-lg font-bold text-slate-900">
@@ -174,7 +174,7 @@ const ConfirmDistributionModal = ({
                 onClick={() => setActiveTab(tab.key)}
                 className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${
                   activeTab === tab.key
-                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-200'
+                    ? 'bg-blue-600 text-white shadow-sm'
                     : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
               >
@@ -191,7 +191,7 @@ const ConfirmDistributionModal = ({
           {activeTab === 'summary' && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <div className="rounded-2xl border border-blue-100 bg-blue-50 p-3 sm:p-4">
+                <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-blue-700 mb-2">
                     <CheckCircle2 size={18} />
                     <span className="font-medium">Назначено</span>
@@ -201,7 +201,7 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 sm:p-4">
+                <div className="rounded-xl border border-amber-100 bg-amber-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-amber-700 mb-2">
                     <FileWarning size={18} />
                     <span className="font-medium">Не назначено</span>
@@ -211,7 +211,7 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 sm:p-4">
+                <div className="rounded-xl border border-amber-100 bg-amber-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-amber-700 mb-2">
                     <AlertTriangle size={18} />
                     <span className="font-medium">CITO</span>
@@ -221,7 +221,7 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-blue-100 bg-blue-50 p-3 sm:p-4">
+                <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 sm:p-4">
                   <div className="flex items-center gap-2 text-blue-700 mb-2">
                     <Clock size={18} />
                     <span className="font-medium">Осталось просрочки</span>
@@ -232,7 +232,7 @@ const ConfirmDistributionModal = ({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
                 <div className="mb-2 flex items-center gap-2 font-semibold">
                   <CheckCircle2 size={18} />
                   Пояснение решения
@@ -248,7 +248,7 @@ const ConfirmDistributionModal = ({
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <div className="flex items-center gap-2 text-slate-800 font-medium mb-3">
                     <Users size={18} />
                     Самые загруженные врачи
@@ -286,7 +286,7 @@ const ConfirmDistributionModal = ({
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <div className="flex items-center gap-2 text-slate-800 font-medium mb-3">
                     <BarChart3 size={18} />
                     Общая сводка
@@ -355,7 +355,7 @@ const ConfirmDistributionModal = ({
                 </div>
               </div>
               
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center gap-2 text-slate-800 font-medium mb-3">
                   <BarChart3 size={18} />
                   Детализация по срочности
@@ -465,7 +465,7 @@ const ConfirmDistributionModal = ({
                 </select>
               </div>
 
-              <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <div className="overflow-hidden rounded-xl border border-slate-200">
                 <div className="max-h-[52vh] overflow-auto"><div className="min-w-[860px]">
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50 sticky top-0">
@@ -558,7 +558,7 @@ const ConfirmDistributionModal = ({
           )}
 
           {activeTab === 'unassigned' && (
-            <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="overflow-hidden rounded-xl border border-slate-200">
               <div className="max-h-[60vh] overflow-auto"><div className="min-w-[680px]">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 sticky top-0">
@@ -618,7 +618,7 @@ const ConfirmDistributionModal = ({
           )}
 
           {activeTab === 'doctors' && (
-            <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="overflow-hidden rounded-xl border border-slate-200">
               <div className="max-h-[60vh] overflow-auto"><div className="min-w-[680px]">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 sticky top-0">
@@ -694,7 +694,7 @@ const ConfirmDistributionModal = ({
           <button
             onClick={onConfirm}
             disabled={confirming}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
             {confirming ? 'Сохраняем...' : 'Сохранить назначения'}
           </button>

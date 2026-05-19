@@ -8,7 +8,7 @@ type DoctorStatsCardProps = {
 
 export function DoctorStatsCard({ title, stats }: DoctorStatsCardProps) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
         <Activity size={18} className="text-blue-600" />

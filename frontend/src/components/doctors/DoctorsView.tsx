@@ -49,8 +49,8 @@ export const DoctorsView: React.FC = () => {
 
     if (sortColumn && sortDirection) {
       result = result.sort((a, b) => {
-        let valA: any;
-        let valB: any;
+        let valA: string | number;
+        let valB: string | number;
         switch (sortColumn) {
           case 'fio_alias':
             valA = (a.fio_alias || '').toLowerCase();
@@ -207,13 +207,13 @@ export const DoctorsView: React.FC = () => {
         </div>
         <button
           onClick={() => handleOpenModal()}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700 sm:self-auto"
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 sm:self-auto"
         >
           <Plus size={18} /> Добавить врача
         </button>
       </div>
 
-      <div className="relative rounded-2xl border border-slate-200/80 bg-white/90 p-2 shadow-sm shadow-slate-200/60">
+      <div className="relative rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
         <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-5">
           <Search size={18} className="text-slate-400" />
         </div>
@@ -234,7 +234,7 @@ export const DoctorsView: React.FC = () => {
         )}
       </div>
 
-      <div className="hidden overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60 md:block">
+      <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm md:block">
         <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
@@ -316,7 +316,7 @@ export const DoctorsView: React.FC = () => {
           </div>
         ) : (
           sortedDoctors.map((doc) => (
-            <div key={doc.id} className="space-y-3 rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
+            <div key={doc.id} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="font-semibold text-slate-900 text-sm">{doc.fio_alias || 'Не указано'}</div>
@@ -356,8 +356,8 @@ export const DoctorsView: React.FC = () => {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4">
-          <div className="max-h-[95dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:max-h-[90vh] sm:rounded-3xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 p-5 backdrop-blur">
+          <div className="max-h-[95dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white shadow-lg sm:max-h-[90vh] sm:rounded-xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-5">
               <h3 className="text-lg font-bold text-slate-900">
                 {editingDoctor ? 'Редактировать врача' : 'Добавить врача'}
               </h3>
@@ -371,7 +371,7 @@ export const DoctorsView: React.FC = () => {
 
             <form onSubmit={handleSubmit} className="p-5 space-y-5">
               {formError && (
-                <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
+                <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
                   <AlertCircle size={17} className="mt-0.5 shrink-0" />
                   <span>{formError}</span>
                 </div>
@@ -436,7 +436,7 @@ export const DoctorsView: React.FC = () => {
                     })
                   }
                   className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
-                  placeholder="Например: Компьютерная томограмма, Рентгенгеновское исследование"
+          placeholder="Например: КТ, МРТ, Рентгенография"
                 />
                 <p className="text-xs text-slate-500 mt-1.5">
                   Лучше использовать полные названия модальностей из положения ОМС.

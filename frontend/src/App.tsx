@@ -3,12 +3,12 @@ import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { ShiftPlanningView } from './components/planning/ShiftPlanningView';
-import CurrentDistributionView  from './components/distribution/CurrentDistributionView';
+import CurrentDistributionView from './components/distribution/CurrentDistributionView';
 import { DoctorsView } from './components/doctors/DoctorsView';
 import { ReportsView } from './components/reports/ReportsView';
-import {LoginView} from './components/auth/LoginView';
+import { LoginView } from './components/auth/LoginView';
 import { DoctorPortalView } from './components/doctor/DoctorPortalView';
-import {authApi } from './services/api';
+import { authApi } from './services/api';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -35,7 +35,7 @@ export default function App() {
     setRefreshKey((prev) => prev + 1);
   };
 
-    const handleLogout = () => {
+  const handleLogout = () => {
     authApi.logout();
     setIsAuthenticated(false);
   };
@@ -52,7 +52,7 @@ export default function App() {
   const accountRole = currentUser?.username ? `Логин: ${currentUser.username}` : 'Авторизованный пользователь';
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-gradient-to-br from-slate-50 via-white to-blue-50/40 font-sans text-slate-900">
+    <div className="flex h-dvh overflow-hidden bg-slate-50 font-sans text-slate-900">
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}

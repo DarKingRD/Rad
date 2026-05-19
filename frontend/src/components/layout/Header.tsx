@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bell, CheckCircle2, RefreshCw, Activity, Folder, UserRound } from 'lucide-react';
+import { Activity, Bell, Folder, RefreshCw, UserRound } from 'lucide-react';
 import { AdminNotification, notificationsApi } from '../../services/api';
 
 interface HeaderProps {
@@ -88,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({ currentDate, onRefresh }) => {
       : 'text-blue-800';
 
   return (
-    <header className="sticky top-0 z-30 h-14 shrink-0 border-b border-slate-200/80 bg-white/85 px-4 backdrop-blur md:h-16 md:px-6 xl:px-8">
+    <header className="sticky top-0 z-30 h-14 shrink-0 border-b border-slate-200 bg-white px-4 md:h-16 md:px-6 xl:px-8">
       <div className="flex h-full items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex items-center gap-2 text-blue-600 md:hidden">
@@ -119,12 +119,12 @@ export const Header: React.FC<HeaderProps> = ({ currentDate, onRefresh }) => {
             </button>
 
             {isOpen ? (
-              <div className="fixed left-3 right-3 top-16 flex h-[min(620px,calc(100dvh-76px))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/80 md:left-auto md:right-6 md:top-16 md:w-[620px] xl:right-8">
+              <div className="fixed left-3 right-3 top-16 flex h-[min(620px,calc(100dvh-76px))] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-md md:left-auto md:right-6 md:top-16 md:w-[620px] xl:right-8">
                 <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
                   <div>
                     <p className="text-sm font-bold text-slate-950">Уведомления</p>
                     <p className="text-xs text-slate-500">
-                      {notifications.length} событий · {notificationFolders.length} папок
+                      {notifications.length} событий · {notificationFolders.length} врачей
                     </p>
                   </div>
                   {notifications.length > 0 ? (
@@ -196,7 +196,7 @@ export const Header: React.FC<HeaderProps> = ({ currentDate, onRefresh }) => {
           </div>
           <button
             onClick={onRefresh}
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700 md:px-4 md:text-sm"
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 md:px-4 md:text-sm"
           >
             <RefreshCw size={16} />
             <span className="hidden sm:inline">Обновить данные</span>

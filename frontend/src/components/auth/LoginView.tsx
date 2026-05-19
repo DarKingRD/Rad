@@ -29,20 +29,20 @@ export function LoginView({ onSuccess }: LoginViewProps) {
   };
 
   return (
-    <div className="min-h-dvh bg-gradient-to-br from-slate-50 via-white to-blue-100/60 px-4 py-8 flex items-center justify-center">
+    <div className="min-h-dvh bg-slate-50 px-4 py-8 flex items-center justify-center">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center justify-center gap-2 text-blue-600">
           <Activity size={30} />
           <span className="text-2xl font-bold tracking-tight text-slate-950">РадПлан</span>
         </div>
 
-        <form onSubmit={handleSubmit} className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-xl shadow-slate-200/70 backdrop-blur sm:p-8">
-          <div className="mb-6 rounded-2xl bg-blue-50 p-4 text-blue-800">
-            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm">
+        <form onSubmit={handleSubmit} className="rounded-xl border border-slate-200 bg-white p-5 shadow-md sm:p-8">
+          <div className="mb-6 rounded-xl bg-blue-50 p-4 text-blue-800">
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm">
               <LockKeyhole size={20} />
             </div>
             <h1 className="text-xl font-semibold text-slate-950 sm:text-2xl">Вход в РадПлан</h1>
-            <p className="mt-1 text-sm text-slate-600">Для руководителя и врачей службы.</p>
+            <p className="mt-1 text-sm text-slate-600">Доступ для руководителя и врачей.</p>
           </div>
 
           <div className="space-y-4">
@@ -77,9 +77,9 @@ export function LoginView({ onSuccess }: LoginViewProps) {
           <button
             type="submit"
             disabled={isLoading}
-            className="mt-6 w-full rounded-xl bg-blue-600 py-3 font-semibold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="mt-6 w-full rounded-xl bg-blue-600 py-3 font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isLoading ? 'Входим...' : 'Войти'}
+            {isLoading ? 'Проверяем...' : 'Войти'}
           </button>
         </form>
       </div>

@@ -123,7 +123,7 @@ export function DoctorScheduleCalendar({
         })}
       </div>
 
-      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <p className="text-sm font-bold text-slate-950">
           {new Date(selectedDate).toLocaleDateString('ru-RU', {
             day: '2-digit',

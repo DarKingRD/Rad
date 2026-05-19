@@ -1,5 +1,3 @@
-// === ОСНОВНЫЕ ТИПЫ ДАННЫХ ===
-
 export interface Doctor {
   id: number;
   fio_alias: string;
@@ -124,8 +122,6 @@ export interface KPICardProps {
   trend?: number;
 }
 
-// === ПРОГНОЗ СМЕН ===
-
 export interface ForecastModalityItem {
   modality: string;
   expected_studies: number;
@@ -214,8 +210,6 @@ export interface ForecastCompareResponse {
     min_train_days: number;
   };
 }
-
-// === РАСПРЕДЕЛЕНИЕ ===
 
 export interface DoctorDistStat {
   doctor_id: number;

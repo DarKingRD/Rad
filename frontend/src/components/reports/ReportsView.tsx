@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { dashboardApi } from "../../services/api";
-import type { DashboardStats } from "../../types";
+import type { ChartPoint, DashboardStats } from "../../types";
 import {
   Activity,
   BarChart3,
@@ -27,10 +27,19 @@ import {
   Cell,
 } from "recharts";
 
-const COLORS = ["#2563eb", "#64748b", "#d97706"];
+const PRIORITY_COLORS: Record<string, string> = {
+  "Обычные": "#94a3b8",
+  "Срочные": "#2563eb",
+  "CITO": "#d97706",
+};
+
+type PieSegment = {
+  name: string;
+  value: number;
+};
 
 const metricCardClass =
-  "rounded-2xl border border-slate-200/80 bg-white/95 p-4 shadow-sm shadow-slate-100/70 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-slate-200/70 sm:p-5";
+  "rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5";
 
 export const ReportsView: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -43,8 +52,8 @@ export const ReportsView: React.FC = () => {
   const [allDates, setAllDates] = useState(true);
 
   const [kpiData, setKpiData] = useState<DashboardStats | null>(null);
-  const [chartData, setChartData] = useState<any[]>([]);
-  const [pieData, setPieData] = useState<any[]>([]);
+  const [chartData, setChartData] = useState<ChartPoint[]>([]);
+  const [pieData, setPieData] = useState<PieSegment[]>([]);
 
   const dailyUpStats = kpiData?.doctor_daily_up_stats ?? { median: 0, min: 0, max: 0 };
   const reportPeriodLabel = allDates
@@ -159,13 +168,13 @@ export const ReportsView: React.FC = () => {
       <div className="flex flex-col gap-2">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-slate-950 md:text-3xl">
-            Аналитика работы службы
+            Отчёты службы
           </h2>
           <p className="mt-1 max-w-3xl text-sm text-slate-500">Период: {reportPeriodLabel}</p>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200/80 bg-white/95 p-4 shadow-sm shadow-slate-100/70 sm:p-5">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto_auto_auto] lg:items-end">
           <div>
             <label className="mb-1.5 block text-sm font-medium text-slate-700">
@@ -193,7 +202,7 @@ export const ReportsView: React.FC = () => {
 
           <button
             onClick={handleApplyFilters}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-200 transition hover:bg-blue-700 lg:w-auto"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 lg:w-auto"
           >
             <Filter size={16} />
             Применить
@@ -210,17 +219,17 @@ export const ReportsView: React.FC = () => {
             className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto"
           >
             <Download size={16} />
-            Excel
+            CSV
           </button>
         </div>
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center rounded-2xl border border-slate-200/80 bg-white/95 p-10 shadow-sm shadow-slate-100/70">
+        <div className="flex items-center justify-center rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
           <div className="text-sm text-slate-500">Загрузка отчётов...</div>
         </div>
       ) : !kpiData ? (
-        <div className="rounded-2xl border border-amber-200 bg-white p-10 text-center text-sm font-medium text-amber-600 shadow-sm">
+        <div className="rounded-xl border border-amber-200 bg-white p-10 text-center text-sm font-medium text-amber-600 shadow-sm">
           Не удалось загрузить отчёты
         </div>
       ) : (
@@ -228,7 +237,7 @@ export const ReportsView: React.FC = () => {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <Target size={22} />
                 </div>
                 <div className="min-w-0">
@@ -242,7 +251,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <CheckCircle2 size={22} />
                 </div>
                 <div className="min-w-0">
@@ -256,7 +265,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <Clock size={22} />
                 </div>
                 <div className="min-w-0">
@@ -270,7 +279,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-50 text-slate-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <TrendingUp size={22} />
                 </div>
                 <div className="min-w-0">
@@ -286,7 +295,7 @@ export const ReportsView: React.FC = () => {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-50 text-slate-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <BarChart3 size={22} />
                 </div>
                 <div className="min-w-0">
@@ -300,7 +309,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <TrendingDown size={22} />
                 </div>
                 <div className="min-w-0">
@@ -314,7 +323,7 @@ export const ReportsView: React.FC = () => {
 
             <div className={metricCardClass}>
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-50 text-slate-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <Activity size={22} />
                 </div>
                 <div className="min-w-0">
@@ -328,12 +337,18 @@ export const ReportsView: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200/80 bg-white/95 p-4 shadow-sm shadow-slate-100/70 sm:p-5">
-              <div className="mb-4">
-                <h3 className="text-base font-semibold text-slate-950 sm:text-lg">
-                  Динамика исследований
-                </h3>
-                <p className="text-sm text-slate-500">План и фактические значения по дням.</p>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-950 sm:text-lg">
+                    Динамика исследований
+                  </h3>
+                  <p className="text-sm text-slate-500">Поступившие и выполненные исследования по дням.</p>
+                </div>
+                <div className="flex space-x-2 text-xs">
+                  <span className="flex items-center"><span className="mr-1 h-2 w-2 rounded-full bg-slate-400"></span>Поступило</span>
+                  <span className="flex items-center"><span className="mr-1 h-2 w-2 rounded-full bg-blue-500"></span>Выполнено</span>
+                </div>
               </div>
               <div className="h-64 sm:h-[340px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -342,15 +357,14 @@ export const ReportsView: React.FC = () => {
                     <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                     <YAxis tick={{ fontSize: 12 }} />
                     <Tooltip />
-                    <Legend />
-                    <Bar dataKey="plan" name="План" fill="#94a3b8" />
-                    <Bar dataKey="actual" name="Факт" fill="#2563eb" />
+                    <Bar dataKey="plan" name="Поступило" fill="#94a3b8" />
+                    <Bar dataKey="actual" name="Выполнено" fill="#2563eb" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200/80 bg-white/95 p-4 shadow-sm shadow-slate-100/70 sm:p-5">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <div className="mb-4">
                 <h3 className="text-base font-semibold text-slate-950 sm:text-lg">
                   Распределение по приоритетам
@@ -361,8 +375,8 @@ export const ReportsView: React.FC = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={pieData} dataKey="value" nameKey="name" outerRadius="72%" label>
-                      {pieData.map((_, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      {pieData.map((entry) => (
+                        <Cell key={`cell-${entry.name}`} fill={PRIORITY_COLORS[entry.name]} />
                       ))}
                     </Pie>
                     <Tooltip />
@@ -373,7 +387,7 @@ export const ReportsView: React.FC = () => {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200/80 bg-white/95 p-4 shadow-sm shadow-slate-100/70 sm:p-5">
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <div className="mb-4">
               <h3 className="text-base font-semibold text-slate-950 sm:text-lg">
                 Выполненные исследования по врачам

@@ -5,7 +5,6 @@ import {
   ChevronRight,
   X,
   CheckCircle2,
-  AlertTriangle,
   AlertCircle,
   Search,
   CalendarDays,
@@ -24,6 +23,8 @@ interface ScheduleFormData {
   day_status: number;
   planned_up: number;
 }
+
+type DoctorRecord = Doctor & Record<string, unknown>;
 
 const DAY_STATUS_OPTIONS = [
   { value: 0, label: 'Рабочий день' },
@@ -72,19 +73,31 @@ const getBooleanLike = (value: unknown, defaultValue = true): boolean => {
   return defaultValue;
 };
 
+const getErrorMessage = (error: unknown) => {
+  const responseDetail =
+    typeof error === 'object' && error !== null
+      ? (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+      : null;
+
+  if (responseDetail) return String(responseDetail);
+  if (error instanceof Error) return error.message;
+  return 'неизвестная ошибка';
+};
+
 const isDoctorActive = (doctor: Doctor): boolean => {
-  const activeFlag = (doctor as any).is_active ?? (doctor as any).active ?? true;
+  const doctorRecord = doctor as DoctorRecord;
+  const activeFlag = doctorRecord.is_active ?? doctorRecord.active ?? true;
   if (!getBooleanLike(activeFlag, true)) return false;
 
   const endDateRaw =
-    (doctor as any).work_end_date ??
-    (doctor as any).end_work_date ??
-    (doctor as any).employment_end_date ??
-    (doctor as any).date_end ??
-    (doctor as any).end_date ??
-    (doctor as any).fired_at ??
-    (doctor as any).dismissal_date ??
-    (doctor as any).end_work;
+    doctorRecord.work_end_date ??
+    doctorRecord.end_work_date ??
+    doctorRecord.employment_end_date ??
+    doctorRecord.date_end ??
+    doctorRecord.end_date ??
+    doctorRecord.fired_at ??
+    doctorRecord.dismissal_date ??
+    doctorRecord.end_work;
 
   if (!endDateRaw) return true;
 
@@ -115,12 +128,13 @@ const isDisplayableModality = (value?: string | null) => {
 };
 
 const getDoctorModalities = (doctor: Doctor): string[] => {
+  const doctorRecord = doctor as DoctorRecord;
   const raw = [
-    (doctor as any).modality,
-    (doctor as any).modalities,
-    (doctor as any).modality_names,
-    (doctor as any).available_modalities,
-    (doctor as any).specializations,
+    doctorRecord.modality,
+    doctorRecord.modalities,
+    doctorRecord.modality_names,
+    doctorRecord.available_modalities,
+    doctorRecord.specializations,
   ];
 
   const values = raw
@@ -337,9 +351,9 @@ export const ShiftPlanningView: React.FC = () => {
       await loadSchedulesData();
       setForecastRefreshKey((prev) => prev + 1);
       handleCloseModal();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error saving schedule:', error);
-      setModalError('Ошибка при сохранении смены: ' + (error.response?.data?.detail || error.message));
+      setModalError(`Не удалось сохранить смену: ${getErrorMessage(error)}`);
     }
   };
 
@@ -352,9 +366,9 @@ export const ShiftPlanningView: React.FC = () => {
       await loadSchedulesData();
       setForecastRefreshKey((prev) => prev + 1);
       handleCloseModal();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error deleting schedule:', error);
-      setModalError('Ошибка при удалении смены: ' + (error.response?.data?.detail || error.message));
+      setModalError(`Не удалось удалить смену: ${getErrorMessage(error)}`);
     }
   };
 
@@ -404,8 +418,8 @@ export const ShiftPlanningView: React.FC = () => {
 
     const percentage = getLoadPercentage(schedule, doctor);
 
-    if (percentage > 95) return 'bg-amber-100 text-amber-700 border border-amber-300';
-    if (percentage >= 80) return 'bg-amber-100 text-amber-700 border border-amber-300';
+    if (percentage > 95) return 'bg-blue-100 text-blue-700 border border-blue-300';
+    if (percentage >= 80) return 'bg-blue-100 text-blue-700 border border-blue-300';
     return 'bg-blue-100 text-blue-700 border border-blue-300';
   };
 
@@ -485,12 +499,12 @@ export const ShiftPlanningView: React.FC = () => {
         <p className="mt-1 text-sm text-slate-500">График врачей, статусы дней и прогноз потребности</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
-        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:gap-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Врачей в выборке</div>
           <div className="text-2xl font-bold tracking-tight text-slate-950">{calculateStats.totalDoctors}</div>
         </div>
-        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between mb-1">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Рабочих смен</div>
             <CheckCircle2 size={14} className="text-blue-600" />
@@ -499,25 +513,11 @@ export const ShiftPlanningView: React.FC = () => {
             {calculateStats.filledShifts}/{calculateStats.totalPossibleShifts}
           </div>
         </div>
-        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Близко к лимиту</div>
-            <AlertTriangle size={14} className="text-amber-600" />
-          </div>
-          <div className="text-2xl font-bold tracking-tight text-amber-600">{calculateStats.warningShifts}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Перегрузки</div>
-            <AlertCircle size={14} className="text-amber-600" />
-          </div>
-          <div className="text-2xl font-bold tracking-tight text-amber-600">{calculateStats.overloadShifts}</div>
-        </div>
       </div>
 
       <ShiftForecastPanel refreshKey={forecastRefreshKey} doctors={activeDoctors} />
 
-      <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-3 shadow-sm shadow-slate-200/60 md:p-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm md:p-4">
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
             <label className="relative block">
@@ -526,7 +526,7 @@ export const ShiftPlanningView: React.FC = () => {
                 value={doctorSearch}
                 onChange={(e) => setDoctorSearch(e.target.value)}
                 placeholder="Поиск врача по ФИО"
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50/80 pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100"
+                className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/80 pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100"
               />
             </label>
 
@@ -535,7 +535,7 @@ export const ShiftPlanningView: React.FC = () => {
               <select
                 value={selectedModality}
                 onChange={(e) => setSelectedModality(e.target.value)}
-                className="unstyled-select h-11 w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/80 pl-12 pr-9 text-sm text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100"
+                className="unstyled-select h-11 w-full appearance-none rounded-xl border border-slate-200 bg-slate-50/80 pl-12 pr-9 text-sm text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100"
               >
                 <option value="all">Все модальности</option>
                 {modalityOptions.map((modality) => (
@@ -549,14 +549,14 @@ export const ShiftPlanningView: React.FC = () => {
             <button
               type="button"
               onClick={resetFilters}
-              className="h-11 rounded-2xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+              className="h-11 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
             >
               Сбросить фильтры
             </button>
           )}
         </div>
 
-        <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-2">
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-2">
           <div className="grid gap-2 lg:grid-cols-[auto_minmax(240px,1fr)_auto] lg:items-center">
             <button
               type="button"
@@ -568,12 +568,12 @@ export const ShiftPlanningView: React.FC = () => {
             </button>
 
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-center">
-              <div className="rounded-2xl bg-white px-4 py-2 text-center shadow-sm ring-1 ring-slate-200">
+              <div className="rounded-xl bg-white px-4 py-2 text-center shadow-sm ring-1 ring-slate-200">
                 <div className="text-sm font-bold text-slate-950">{weekTitle}</div>
                 <div className="text-xs text-slate-500">{weekRangeLabel}</div>
               </div>
 
-              <label className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700">
+              <label className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700">
                 <CalendarDays size={16} />
                 <span>Выбрать дату</span>
                 <input
@@ -587,7 +587,7 @@ export const ShiftPlanningView: React.FC = () => {
               <button
                 type="button"
                 onClick={handleToday}
-                className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700"
+                className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700"
               >
                 Сегодня
               </button>
@@ -605,9 +605,9 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60">
+      <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         {scheduleLoading && (
-          <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center border-b border-blue-100 bg-blue-50/90 px-4 py-2 text-xs font-semibold text-blue-700 backdrop-blur">
+          <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center border-b border-blue-100 bg-blue-50/90 px-4 py-2 text-xs font-semibold text-blue-700">
             Обновляем расписание выбранной недели…
           </div>
         )}
@@ -716,8 +716,8 @@ export const ShiftPlanningView: React.FC = () => {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4">
-          <div className="max-h-[95dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 p-5 backdrop-blur">
+          <div className="max-h-[95dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white shadow-lg sm:rounded-xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-5">
               <h3 className="text-lg font-bold text-slate-900">
                 {editingSchedule ? 'Редактировать смену' : 'Добавить смену'}
               </h3>
@@ -731,7 +731,7 @@ export const ShiftPlanningView: React.FC = () => {
 
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               {modalError && (
-                <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
+                <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
                   <AlertCircle size={17} className="mt-0.5 shrink-0" />
                   <span>{modalError}</span>
                 </div>
@@ -854,7 +854,7 @@ export const ShiftPlanningView: React.FC = () => {
               )}
 
               {formData.day_status !== 0 && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                   Для нерабочих статусов время смены и УП при сохранении будут сброшены.
                 </div>
               )}

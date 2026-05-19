@@ -10,6 +10,8 @@ interface ShiftForecastPanelProps {
   doctors?: Doctor[];
 }
 
+type DoctorRecord = Doctor & Record<string, unknown>;
+
 const formatLocalDate = (d: Date) => {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -86,12 +88,13 @@ const getStringField = (value: unknown): string => {
 };
 
 const getDoctorModalities = (doctor: Doctor): string[] => {
+  const doctorRecord = doctor as DoctorRecord;
   const rawValues = [
-    (doctor as any).modality,
-    (doctor as any).modalities,
-    (doctor as any).modality_names,
-    (doctor as any).available_modalities,
-    (doctor as any).specializations,
+    doctorRecord.modality,
+    doctorRecord.modalities,
+    doctorRecord.modality_names,
+    doctorRecord.available_modalities,
+    doctorRecord.specializations,
   ];
 
   return rawValues
@@ -108,7 +111,10 @@ const getDoctorModalityKeys = (doctor: Doctor): string[] => {
   // Fallback используем только если API вообще не вернул модальности.
   // Иначе поле должности «врач-рентгенолог» ошибочно добавит всем врачам рентген и флюорографию.
   if (keys.size === 0) {
-    const specialty = normalizeModality((doctor as any).specialty || (doctor as any).position_type || (doctor as any).position);
+    const doctorRecord = doctor as DoctorRecord;
+    const specialty = normalizeModality(
+      String(doctorRecord.specialty ?? doctorRecord.position_type ?? doctorRecord.position ?? '')
+    );
     if (specialty.includes('рентген')) {
       keys.add('xray');
       keys.add('fluorography');
@@ -119,7 +125,8 @@ const getDoctorModalityKeys = (doctor: Doctor): string[] => {
 };
 
 const isDoctorActive = (doctor: Doctor): boolean => {
-  const value = (doctor as any).is_active ?? (doctor as any).active ?? true;
+  const doctorRecord = doctor as unknown as Record<string, unknown>;
+  const value = doctorRecord.is_active ?? doctorRecord.active ?? true;
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
   if (typeof value === 'string') {
@@ -128,11 +135,15 @@ const isDoctorActive = (doctor: Doctor): boolean => {
   return true;
 };
 
-const getDoctorName = (doctor: Doctor): string =>
-  String((doctor as any).fio_alias ?? (doctor as any).full_name ?? (doctor as any).fio ?? (doctor as any).name ?? 'Без имени');
+const getDoctorName = (doctor: Doctor): string => {
+  const doctorRecord = doctor as DoctorRecord;
+  return String(doctorRecord.fio_alias ?? doctorRecord.full_name ?? doctorRecord.fio ?? doctorRecord.name ?? 'Без имени');
+};
 
-const getDoctorStableId = (doctor: Doctor): string =>
-  String((doctor as any).id ?? (doctor as any).doctor_id ?? (doctor as any).external_id ?? getDoctorName(doctor));
+const getDoctorStableId = (doctor: Doctor): string => {
+  const doctorRecord = doctor as DoctorRecord;
+  return String(doctorRecord.id ?? doctorRecord.doctor_id ?? doctorRecord.external_id ?? getDoctorName(doctor));
+};
 
 const modalityMatchesDoctor = (forecastModality: string, doctor: Doctor): boolean => {
   const target = modalityToKey(forecastModality);
@@ -230,9 +241,9 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         ...(historyEndDate ? { history_end_date: historyEndDate } : {}),
       });
       setForecast(data);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error loading shift forecast:', err);
-      setError(err?.message || 'Не удалось загрузить прогноз.');
+      setError(err instanceof Error ? err.message : 'Не удалось загрузить прогноз.');
       setForecast(null);
     } finally {
       setLoading(false);
@@ -272,7 +283,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const days = forecast?.days || [];
 
   return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="text-lg font-semibold text-slate-950">Прогноз потребности в специалистах</div>
@@ -280,7 +291,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
             <div className="mt-3 text-xs text-slate-500">
               {forecast
                 ? `Последний диапазон: ${formatDateFullLabel(forecast.date_from)} — ${formatDateFullLabel(forecast.date_to)}`
-                : 'Прогноз будет доступен после раскрытия раздела.'}
+                : 'Прогноз появится после выбора диапазона.'}
             </div>
           )}
         </div>
@@ -288,7 +299,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         <button
           type="button"
           onClick={() => setIsExpanded((prev) => !prev)}
-          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700"
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700"
         >
           {isExpanded ? 'Скрыть прогноз' : 'Показать прогноз'}
           {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -341,7 +352,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                 <button
                   type="button"
                   onClick={handleApply}
-                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
                 >
                   Построить прогноз
                 </button>
@@ -358,19 +369,19 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
           </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ожидается исследований</div>
           <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : formatMetric(summary?.total_expected_studies, 1)}</div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ожидаемый объём, УП</div>
           <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : formatMetric(summary?.total_expected_up, 2)}</div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Пиковая потребность во врачах</div>
           <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : summary?.max_min_doctors_per_shift ?? 0}</div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Основные модальности</div>
           <div className="text-sm font-medium text-slate-900 leading-6">
             {loading ? '…' : summary?.modalities?.join(', ') || '—'}
@@ -378,7 +389,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600 md:text-sm">
+      <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600 md:text-sm">
         {forecast?.message || 'Прогноз будет загружен после выбора диапазона.'}
       </div>
 
@@ -389,16 +400,16 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
       )}
 
       {error && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
           {error}
         </div>
       )}
 
       {!loading && !error && chartData.length > 0 && (
         <div className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="font-semibold text-slate-900 mb-1">График ожидаемого числа исследований</div>
-            <div className="text-xs text-slate-500 mb-4">Сколько исследований прогнозируется на каждый день выбранного диапазона.</div>
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="font-semibold text-slate-900 mb-1">Ожидаемые исследования</div>
+            <div className="text-xs text-slate-500 mb-4">Прогноз потока по дням выбранного диапазона.</div>
             <div className="h-64 sm:h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
@@ -412,9 +423,9 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="font-semibold text-slate-900 mb-1">График рекомендуемого числа врачей</div>
-            <div className="text-xs text-slate-500 mb-4">Сколько врачей рекомендуется на каждый день выбранного диапазона.</div>
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="font-semibold text-slate-900 mb-1">Потребность во врачах</div>
+            <div className="text-xs text-slate-500 mb-4">Минимальное число врачей по дням.</div>
             <div className="h-64 sm:h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData}>
@@ -430,10 +441,10 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         </div>
       )}
       {!loading && !error && days.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="font-semibold text-slate-900 mb-1">Рекомендации по вызову врачей на смену</div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="font-semibold text-slate-900 mb-1">Кого поставить в смену</div>
           <div className="text-xs text-slate-500 mb-3">
-            Базовый подбор: для каждой модальности выбираются все активные врачи с этой модальностью.
+            Подбор учитывает активных врачей и их модальности.
           </div>
           <div className="space-y-3">
             {days.map((day) => {
@@ -470,13 +481,13 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         </div>
       )}
       {!loading && !error && days.length === 0 && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           Для выбранного диапазона не удалось построить прогноз.
         </div>
       )}
 
       {!loading && !error && days.length > 0 && (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 bg-slate-50/80 px-4 py-3">
             <div className="font-semibold text-slate-900">
               {formatDateFullLabel(forecast?.date_from)} — {formatDateFullLabel(forecast?.date_to)}

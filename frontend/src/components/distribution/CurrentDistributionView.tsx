@@ -57,13 +57,13 @@ const OBJECTIVE_OPTIONS: Array<{ value: DistributionObjective; label: string }> 
 
 const OBJECTIVE_DESCRIPTIONS: Record<DistributionObjective, string> = {
   weighted_tardiness_lexicographic:
-    'Оптимальный режим для демонстрации: срочные исследования получают больший вес, а просрочка снижается в первую очередь.',
+    'Учитывает срочность и просрочку: CITO и срочные получают больший вес.',
   tardiness_lexicographic:
-    'Режим минимизирует суммарное время опоздания без дополнительного усиления CITO и срочных исследований.',
+    'Снижает суммарную просрочку без отдельного усиления срочных исследований.',
   priority_tier_tardiness_multipass:
-    'Алгоритм последовательно закрывает CITO, затем срочные, затем плановые исследования.',
+    'Сначала закрывает CITO, затем срочные, затем плановые исследования.',
   max_assignments:
-    'Режим старается назначить как можно больше исследований, даже если качество сроков не главное.',
+    'Назначает максимум исследований, сроки учитываются вторым приоритетом.',
 };
 
 const CurrentDistributionView = () => {
@@ -324,15 +324,15 @@ const CurrentDistributionView = () => {
       </div>
 
       {error && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
           {error}
         </div>
       )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 md:gap-4">
-        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
               <UserCheck size={22} />
             </div>
             <div>
@@ -344,9 +344,9 @@ const CurrentDistributionView = () => {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
               <Filter size={22} />
             </div>
             <div>
@@ -358,9 +358,9 @@ const CurrentDistributionView = () => {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
               <Calendar size={22} />
             </div>
             <div>
@@ -373,7 +373,7 @@ const CurrentDistributionView = () => {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/60 md:p-5">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto_240px_auto] xl:items-end">
             <div className="flex-1">
@@ -441,12 +441,12 @@ const CurrentDistributionView = () => {
             <button
               onClick={handleRunDistribution}
               disabled={distributing}
-              className="inline-flex h-[42px] items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:col-span-2 xl:col-span-1"
+              className="inline-flex h-[42px] items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:col-span-2 xl:col-span-1"
             >
               {distributing ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  Считаем решение...
+                  Расчёт...
                 </>
               ) : (
                 <>
@@ -457,15 +457,15 @@ const CurrentDistributionView = () => {
             </button>
           </div>
 
-          <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-            <div className="font-semibold text-blue-900">Как будет считаться решение</div>
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+            <div className="font-semibold text-blue-900">Параметры расчёта</div>
             <div className="mt-1">
-              {OBJECTIVE_DESCRIPTIONS[objective]} {useMip ? 'Используется точная оптимизационная модель.' : 'Используется быстрый эвристический режим.'}
+              {OBJECTIVE_DESCRIPTIONS[objective]} {useMip ? 'Точный расчёт.' : 'Быстрый расчёт.'}
             </div>
           </div>
 
           {selectedStudy && (
-            <div className="flex flex-col gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <div className="text-sm text-blue-700">Выбрано исследование</div>
                 <div className="font-medium text-blue-900">
@@ -507,7 +507,7 @@ const CurrentDistributionView = () => {
         </div>
       </div>
 
-      <div className="sticky top-2 z-20 flex rounded-2xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur lg:hidden">
+      <div className="sticky top-2 z-20 flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm lg:hidden">
         <button
           onClick={() => setMobileTab('studies')}
           className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${
@@ -536,7 +536,7 @@ const CurrentDistributionView = () => {
             mobileTab !== 'studies' ? 'hidden lg:block' : ''
           }`}
         >
-          <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4 md:px-5">
               <div>
                 <h3 className="font-semibold text-slate-950">
@@ -643,7 +643,7 @@ const CurrentDistributionView = () => {
             mobileTab !== 'doctors' ? 'hidden lg:block' : ''
           }`}
         >
-          <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm shadow-slate-200/60">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4 md:px-5">
               <div>
                 <h3 className="font-semibold text-slate-950">Доступные врачи</h3>
