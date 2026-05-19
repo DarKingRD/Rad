@@ -2,7 +2,7 @@ import React from 'react';
 import { ChevronDown, ChevronUp, Clock, Loader2, UserCheck } from 'lucide-react';
 import type { DoctorDistStat, DoctorWithLoad, Study } from '../../../types';
 import type { DoctorStudiesState } from '../hooks/useDoctorStudies';
-import { getPriorityColor, getPriorityLabel, getStatusColor } from '../utils/distributionFormatters';
+import { getPriorityColor, getPriorityLabel, getStatusColor, getStatusLabel } from '../utils/distributionFormatters';
 
 interface DoctorCardProps {
   doc: DoctorWithLoad;
@@ -59,7 +59,7 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
             study.status
           )}`}
         >
-          {study.status || '—'}
+          {getStatusLabel(study.status) || '—'}
         </span>
       </div>
     </div>
