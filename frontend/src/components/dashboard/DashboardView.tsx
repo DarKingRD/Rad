@@ -66,44 +66,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     <div className="space-y-5 md:space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-950">Пульт службы</h2>
-          <p className="mt-1 text-sm text-slate-500">Состояние очереди, врачей и выполнения плана</p>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-950">Главная</h2>
         </div>
       </div>
-
-      <div className={`rounded-xl border px-4 py-3 shadow-sm ${statusColor}`}>
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-start gap-3">
-            {pendingStudies > 0 || overloadedDoctors.length > 0 ? (
-              <AlertTriangle size={20} className="mt-0.5 shrink-0" />
-            ) : (
-              <CheckCircle2 size={20} className="mt-0.5 shrink-0" />
-            )}
-            <div>
-              <div className="font-semibold">
-                {pendingStudies > 0 ? `В очереди ${pendingStudies} исследований` : 'Очередь распределена'}
-              </div>
-              <div className="text-sm opacity-80">
-                Доступно врачей: {availableDoctors}. В зоне высокой нагрузки: {overloadedDoctors.length}.
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={() => onNavigate?.('distribution')}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/80 px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-white"
-          >
-            Открыть распределение
-            <ArrowRight size={16} />
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 md:gap-4">
-        <KPICard
-          title="Выполнение плана"
-          value={`${completionRate}%`}
-          subtext={`${stats?.completed_studies || 0} из ${stats?.total_studies || 0}`}
-        />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-2 md:gap-4">
         <KPICard
           title="Очередь"
           value={pendingStudies}

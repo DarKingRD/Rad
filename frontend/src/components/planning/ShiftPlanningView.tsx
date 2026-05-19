@@ -496,7 +496,7 @@ export const ShiftPlanningView: React.FC = () => {
     <div className="space-y-5 md:space-y-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight text-slate-950">Планирование смен</h2>
-        <p className="mt-1 text-sm text-slate-500">График врачей, статусы дней и прогноз потребности</p>
+        <p className="mt-1 text-sm text-slate-500">График врачей и прогноз потребности в специалистах</p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:gap-4">
