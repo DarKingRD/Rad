@@ -229,6 +229,59 @@ class ForecastCompareMethodsTests(SimpleTestCase):
         self.assertGreater(smoothed[mondays[-1]]["total_up"], 180.0)
         self.assertLess(smoothed[saturdays[-1]]["total_up"], 40.0)
 
+    def test_outlier_smoothing_ignores_empty_calendar_days(self):
+        from .services.shift_forecast_multi_method import _smooth_daily_totals
+
+        mondays = [date(2025, 10, 6) + timedelta(days=7 * offset) for offset in range(8)]
+        totals_map = {
+            current_day: {"studies_count": 0.0, "total_up": 0.0}
+            for current_day in mondays
+        }
+        totals_map[mondays[1]] = {"studies_count": 12.0, "total_up": 24.0}
+        totals_map[mondays[5]] = {"studies_count": 18.0, "total_up": 36.0}
+
+        smoothed = _smooth_daily_totals(
+            totals_map=totals_map,
+            history_days=mondays,
+        )
+
+        self.assertEqual(smoothed[mondays[1]]["studies_count"], 12.0)
+        self.assertEqual(smoothed[mondays[5]]["studies_count"], 18.0)
+        self.assertEqual(smoothed[mondays[1]]["total_up"], 24.0)
+        self.assertEqual(smoothed[mondays[5]]["total_up"], 36.0)
+
+    def test_weekday_mean_ignores_empty_history_days(self):
+        from .services.shift_forecast_multi_method import FORECAST_XRAY, _build_profile_for_day
+
+        first_monday = date(2025, 10, 6)
+        empty_monday = date(2025, 10, 13)
+        second_monday = date(2025, 10, 20)
+        forecast_monday = date(2025, 10, 27)
+        daily_series = {
+            first_monday: {
+                FORECAST_XRAY: {"studies_count": 10.0, "total_up": 20.0},
+            },
+            empty_monday: {},
+            second_monday: {
+                FORECAST_XRAY: {"studies_count": 20.0, "total_up": 40.0},
+            },
+        }
+
+        profile = _build_profile_for_day(
+            target_day=forecast_monday,
+            daily_series=daily_series,
+            modalities=[FORECAST_XRAY],
+            history_start=first_monday,
+            history_end=second_monday,
+            method="weekday_mean",
+            recent_weeks=4,
+            moving_window_days=14,
+        )
+
+        self.assertEqual(len(profile), 1)
+        self.assertEqual(profile[0]["expected_studies"], 15.0)
+        self.assertEqual(profile[0]["expected_up"], 30.0)
+
 
 class DashboardAndChartViewsTests(SimpleTestCase):
     def setUp(self):

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { dashboardApi } from "../../services/api";
 import type { ChartPoint, DashboardStats } from "../../types";
 import {
@@ -33,6 +33,8 @@ const PRIORITY_COLORS: Record<string, string> = {
   "CITO": "#d97706",
 };
 
+const MODALITY_COLORS = ["#2563eb", "#0f766e", "#7c3aed", "#d97706", "#475569", "#db2777", "#16a34a"];
+
 type PieSegment = {
   name: string;
   value: number;
@@ -56,6 +58,18 @@ export const ReportsView: React.FC = () => {
   const [pieData, setPieData] = useState<PieSegment[]>([]);
 
   const dailyUpStats = kpiData?.doctor_daily_up_stats ?? { median: 0, min: 0, max: 0 };
+  const modalityBreakdown = kpiData?.modality_breakdown ?? [];
+  const modalityChartData = useMemo(
+    () =>
+      modalityBreakdown.map((item, index) => ({
+        ...item,
+        color: MODALITY_COLORS[index % MODALITY_COLORS.length],
+      })),
+    [modalityBreakdown]
+  );
+  const completionRate = kpiData?.total_studies
+    ? Math.round((kpiData.completed_studies / kpiData.total_studies) * 100)
+    : 0;
   const reportPeriodLabel = allDates
     ? "Все даты"
     : `${appliedDateFrom || "—"} — ${appliedDateTo || "—"}`;
@@ -66,6 +80,9 @@ export const ReportsView: React.FC = () => {
     }
     return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value);
   };
+
+  const formatCount = (value?: number | null) =>
+    new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value || 0);
 
   useEffect(() => {
     loadReportsData();
@@ -139,6 +156,19 @@ export const ReportsView: React.FC = () => {
       ["Медиана УП в день", dailyUpStats.median],
       ["Минимум УП в день", dailyUpStats.min],
       ["Максимум УП в день", dailyUpStats.max],
+      ["Процент выполнения", `${completionRate}%`],
+      [],
+      ["Модальность", "Исследований", "Доля", "Выполнено", "Ожидает назначения", "УП всего", "УП выполнено", "Процент выполнения"],
+      ...modalityBreakdown.map((row) => [
+        row.modality,
+        row.studies_count,
+        `${row.share_percent}%`,
+        row.completed_studies,
+        row.pending_studies,
+        row.total_up,
+        row.completed_up,
+        `${row.completion_rate_percent}%`,
+      ]),
       [],
       ["Врач", "Выполнено исследований", "Выполнено УП", "Дней с выполнением", "Среднее УП/день", "Медиана УП/день", "Мин. УП/день", "Макс. УП/день"],
       ...kpiData.doctor_performance.map((row) => [
@@ -219,7 +249,7 @@ export const ReportsView: React.FC = () => {
             className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto"
           >
             <Download size={16} />
-            CSV
+            Excel
           </button>
         </div>
       </div>
@@ -283,9 +313,9 @@ export const ReportsView: React.FC = () => {
                   <TrendingUp size={22} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-sm text-slate-500">Средняя нагрузка</div>
+                  <div className="text-sm text-slate-500">Выполнение потока</div>
                   <div className="truncate text-2xl font-bold text-slate-950">
-                    {kpiData.avg_load_per_doctor}
+                    {completionRate}%
                   </div>
                 </div>
               </div>
@@ -383,6 +413,74 @@ export const ReportsView: React.FC = () => {
                     <Legend />
                   </PieChart>
                 </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-slate-950 sm:text-lg">
+                  Распределение по основным модальностям
+                </h3>
+                <p className="text-sm text-slate-500">
+                  Объём потока, очередь и УП по типам исследований.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(520px,0.9fr)]">
+              <div className="h-72 sm:h-[360px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={modalityChartData}
+                    layout="vertical"
+                    margin={{ left: 8, right: 28, top: 8, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis type="number" tick={{ fontSize: 12 }} />
+                    <YAxis
+                      type="category"
+                      dataKey="modality"
+                      width={150}
+                      tick={{ fontSize: 12 }}
+                    />
+                    <Tooltip
+                      formatter={(value: number, name: string) => [
+                        name === "УП" ? formatUp(value) : formatCount(value),
+                        name,
+                      ]}
+                    />
+                    <Bar dataKey="studies_count" name="Исследований" radius={[0, 6, 6, 0]}>
+                      {modalityChartData.map((entry) => (
+                        <Cell key={`modality-${entry.modality}`} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full min-w-[520px] text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-3 py-3 text-left font-semibold text-slate-600">Модальность</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-600">Доля</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-600">Иссл.</th>
+                      <th className="px-3 py-3 text-right font-semibold text-slate-600">УП</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {modalityBreakdown.map((row) => (
+                      <tr key={row.modality} className="hover:bg-slate-50">
+                        <td className="px-3 py-3 font-medium text-slate-900">{row.modality}</td>
+                        <td className="px-3 py-3 text-right text-slate-600">{formatUp(row.share_percent)}%</td>
+                        <td className="px-3 py-3 text-right text-slate-600">{formatCount(row.studies_count)}</td>
+                        <td className="px-3 py-3 text-right text-slate-600">{formatUp(row.total_up)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>

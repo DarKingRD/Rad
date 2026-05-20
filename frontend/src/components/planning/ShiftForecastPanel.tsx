@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, RefreshCw, Users } from 'lucide-react';
 import { ResponsiveContainer, CartesianGrid, Tooltip, XAxis, YAxis, BarChart, Bar, LineChart, Line } from 'recharts';
 
 import { schedulesApi } from '../../services/api';
@@ -145,6 +145,14 @@ const getDoctorStableId = (doctor: Doctor): string => {
   return String(doctorRecord.id ?? doctorRecord.doctor_id ?? doctorRecord.external_id ?? getDoctorName(doctor));
 };
 
+const getDoctorCapacity = (doctor: Doctor): number => {
+  const value = Number((doctor as DoctorRecord).max_up_per_day ?? 0);
+  return Number.isFinite(value) ? value : 0;
+};
+
+const hashString = (value: string): number =>
+  value.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+
 const modalityMatchesDoctor = (forecastModality: string, doctor: Doctor): boolean => {
   const target = modalityToKey(forecastModality);
   const doctorKeys = getDoctorModalityKeys(doctor);
@@ -160,6 +168,11 @@ const modalityMatchesDoctor = (forecastModality: string, doctor: Doctor): boolea
 };
 
 type ForecastDay = ShiftForecastResponse['days'][number];
+
+type DayDoctorRecommendation = {
+  doctor: Doctor;
+  modalities: string[];
+};
 
 const buildDayDoctorRecommendations = (day: ForecastDay, doctors: Doctor[]) => {
   const activeDoctors = doctors.filter(isDoctorActive);
@@ -184,19 +197,63 @@ const buildDayDoctorRecommendations = (day: ForecastDay, doctors: Doctor[]) => {
   });
 
   const usedDoctors = new Set<string>();
-  const recommendations = new Map<string, Doctor[]>();
+  const recommendationsByModality = new Map<string, Doctor[]>();
+  const recommendationsByDoctor = new Map<string, DayDoctorRecommendation>();
 
   sortedModalities.forEach((modality) => {
     const needCount = modality.recommended_doctors || 0;
     const selected = (availableByModality.get(modality.modality) || [])
       .filter((doctor) => !usedDoctors.has(getDoctorStableId(doctor)))
+      .sort((a, b) => {
+        const aKeys = getDoctorModalityKeys(a).length || 99;
+        const bKeys = getDoctorModalityKeys(b).length || 99;
+        if (aKeys !== bKeys) return aKeys - bKeys;
+
+        const capacityDiff = getDoctorCapacity(b) - getDoctorCapacity(a);
+        if (capacityDiff !== 0) return capacityDiff;
+
+        const seed = hashString(`${day.date}-${modality.modality}`);
+        const aRotation = (hashString(getDoctorStableId(a)) + seed) % Math.max(activeDoctors.length, 1);
+        const bRotation = (hashString(getDoctorStableId(b)) + seed) % Math.max(activeDoctors.length, 1);
+        if (aRotation !== bRotation) return aRotation - bRotation;
+
+        return getDoctorName(a).localeCompare(getDoctorName(b), 'ru');
+      })
       .slice(0, needCount);
 
-    selected.forEach((doctor) => usedDoctors.add(getDoctorStableId(doctor)));
-    recommendations.set(modality.modality, selected);
+    selected.forEach((doctor) => {
+      const doctorId = getDoctorStableId(doctor);
+      usedDoctors.add(doctorId);
+
+      const existing = recommendationsByDoctor.get(doctorId);
+      if (existing) {
+        existing.modalities.push(modality.modality);
+      } else {
+        recommendationsByDoctor.set(doctorId, {
+          doctor,
+          modalities: [modality.modality],
+        });
+      }
+    });
+    recommendationsByModality.set(modality.modality, selected);
   });
 
-  return recommendations;
+  const totalNeed = day.required_modalities.reduce(
+    (sum, modality) => sum + (modality.recommended_doctors || 0),
+    0
+  );
+  const coveredCount = [...recommendationsByModality.values()].reduce(
+    (sum, selected) => sum + selected.length,
+    0
+  );
+
+  return {
+    byModality: recommendationsByModality,
+    doctors: [...recommendationsByDoctor.values()],
+    totalNeed,
+    coveredCount,
+    missingCount: Math.max(0, totalNeed - coveredCount),
+  };
 };
 
 const getDefaultRange = () => {
@@ -368,7 +425,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
             </div>
           </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ожидается исследований</div>
           <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : formatMetric(summary?.total_expected_studies, 1)}</div>
@@ -380,12 +437,6 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Пиковая потребность во врачах</div>
           <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : summary?.max_min_doctors_per_shift ?? 0}</div>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Основные модальности</div>
-          <div className="text-sm font-medium text-slate-900 leading-6">
-            {loading ? '…' : summary?.modalities?.join(', ') || '—'}
-          </div>
         </div>
       </div>
 
@@ -441,39 +492,104 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         </div>
       )}
       {!loading && !error && days.length > 0 && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="font-semibold text-slate-900 mb-1">Кого поставить в смену</div>
-          <div className="text-xs text-slate-500 mb-3">
-            Подбор учитывает активных врачей и их модальности.
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/80 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="font-semibold text-slate-900">Кого поставить в смену</div>
+              <div className="text-xs text-slate-500">
+                Сначала закрываются дефицитные модальности; внутри них приоритет у узких профилей и большей дневной емкости.
+              </div>
+            </div>
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
+              <Users size={14} />
+              {doctors.length} активных врачей
+            </div>
           </div>
-          <div className="space-y-3">
+          <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
             {days.map((day) => {
               const recommendations = buildDayDoctorRecommendations(day, doctors);
+              const isCovered = recommendations.missingCount === 0;
 
               return (
-                <div key={day.date} className="border border-slate-200 rounded-lg p-3">
-                  <div className="text-sm font-medium text-slate-900 mb-2">{day.weekday}, {day.label}</div>
-                  <div className="space-y-2">
+                <div key={day.date} className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">{day.weekday}</div>
+                      <div className="text-xs text-slate-500">{formatDateFullLabel(day.date)}</div>
+                    </div>
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${
+                        isCovered
+                          ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
+                          : 'bg-amber-50 text-amber-700 ring-1 ring-amber-100'
+                      }`}
+                    >
+                      {isCovered ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                      {recommendations.coveredCount}/{recommendations.totalNeed || day.min_doctors}
+                    </span>
+                  </div>
+
+                  <div className="mb-3 flex flex-wrap gap-1.5">
                     {day.required_modalities.map((modality) => {
                       const needCount = modality.recommended_doctors || 0;
-                      const selected = recommendations.get(modality.modality) || [];
+                      const selected = recommendations.byModality.get(modality.modality) || [];
                       const missingCount = Math.max(0, needCount - selected.length);
 
                       return (
-                        <div key={`${day.date}-${modality.modality}`} className="rounded-xl bg-white px-3 py-2 text-sm">
-                          <span className="font-medium text-slate-800">{modality.modality}</span>: нужно <span className="font-semibold">{needCount}</span>
-                          {selected.length > 0 ? (
-                            <span className="text-slate-600"> · желательно вызвать: {selected.map(getDoctorName).join(', ')}</span>
-                          ) : (
-                            <span className="text-amber-700"> · нет подходящих активных врачей</span>
-                          )}
-                          {missingCount > 0 && selected.length > 0 && (
-                            <span className="text-amber-700"> · не хватает: {missingCount}</span>
-                          )}
-                        </div>
+                        <span
+                          key={`${day.date}-${modality.modality}`}
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium ${
+                            missingCount > 0
+                              ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-100'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}
+                          title={`Нужно ${needCount}; подобрано ${selected.length}`}
+                        >
+                          {modality.modality}
+                          <span className="font-semibold">{selected.length}/{needCount}</span>
+                        </span>
                       );
                     })}
                   </div>
+
+                  {recommendations.doctors.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {recommendations.doctors.map((item) => (
+                        <div
+                          key={`${day.date}-${getDoctorStableId(item.doctor)}`}
+                          className="flex items-start justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-slate-900">
+                              {getDoctorName(item.doctor)}
+                            </div>
+                            <div className="truncate text-xs text-slate-500">
+                              {item.modalities.join(', ')}
+                            </div>
+                          </div>
+                          {getDoctorCapacity(item.doctor) > 0 && (
+                            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                              {formatMetric(getDoctorCapacity(item.doctor), 1)} УП
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : recommendations.totalNeed === 0 ? (
+                    <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+                      По прогнозу дополнительная смена не требуется.
+                    </div>
+                  ) : (
+                    <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                      Нет подходящих активных врачей под нужные модальности.
+                    </div>
+                  )}
+
+                  {recommendations.missingCount > 0 && recommendations.doctors.length > 0 && (
+                    <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                      Не хватает врачей: {recommendations.missingCount}
+                    </div>
+                  )}
                 </div>
               );
             })}

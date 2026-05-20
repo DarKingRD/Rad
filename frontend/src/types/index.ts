@@ -66,6 +66,7 @@ export interface DashboardStats {
   asap_studies: number;
   doctor_daily_up_stats: DoctorDailyUpStats;
   doctor_performance: DoctorPerformance[];
+  modality_breakdown: ModalityBreakdown[];
 }
 
 export interface DoctorPeriodStats {
@@ -105,6 +106,17 @@ export interface DoctorPerformance {
   median_up_per_day: number;
   min_daily_completed_up: number;
   max_daily_completed_up: number;
+}
+
+export interface ModalityBreakdown {
+  modality: string;
+  studies_count: number;
+  completed_studies: number;
+  pending_studies: number;
+  total_up: number;
+  completed_up: number;
+  share_percent: number;
+  completion_rate_percent: number;
 }
 
 export interface ChartData {
