@@ -236,8 +236,8 @@ export interface DoctorDistStat {
 export interface Assignment {
   study_number: string;
   study_modality?: string[];
-  doctor_id: number;
-  doctor_name: string;
+  doctor_id: number | null;
+  doctor_name: string | null;
   doctor_modality?: string[];
   priority: 'normal' | 'cito' | 'asap' | string;
   deadline: string;
@@ -351,7 +351,8 @@ export type DistributionObjective =
   | 'weighted_tardiness_lexicographic'
   | 'tardiness_lexicographic'
   | 'max_assignments'
-  | 'priority_tier_tardiness_multipass';
+  | 'priority_tier_tardiness_multipass'
+  | 'greedy_developer';
 
 export interface DistributionPreviewPayload {
   date: string;

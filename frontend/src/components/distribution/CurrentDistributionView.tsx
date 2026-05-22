@@ -53,6 +53,10 @@ const OBJECTIVE_OPTIONS: Array<{ value: DistributionObjective; label: string }> 
     value: 'max_assignments',
     label: 'Максимум исследований',
   },
+  {
+    value: 'greedy_developer',
+    label: 'Жадный алгоритм (для разработчика)',
+  },
 ];
 
 const OBJECTIVE_DESCRIPTIONS: Record<DistributionObjective, string> = {
@@ -64,6 +68,8 @@ const OBJECTIVE_DESCRIPTIONS: Record<DistributionObjective, string> = {
     'Сначала закрывает CITO, затем срочные, затем плановые исследования.',
   max_assignments:
     'Назначает максимум исследований, сроки учитываются вторым приоритетом.',
+  greedy_developer:
+    'Быстрый жадный алгоритм для проверки работы модуля без точного MIP-решателя.',
 };
 
 const CurrentDistributionView = () => {
@@ -91,7 +97,6 @@ const CurrentDistributionView = () => {
   const [distributionDate, setDistributionDate] = useState(getTodayString());
   const [distributionDateFrom, setDistributionDateFrom] = useState('');
   const [distributionDateTo, setDistributionDateTo] = useState('');
-  const [useMip, setUseMip] = useState(true);
   const [objective, setObjective] = useState<DistributionObjective>('weighted_tardiness_lexicographic');
 
   const [mobileTab, setMobileTab] = useState<MobileTab>('studies');
@@ -220,8 +225,11 @@ const CurrentDistributionView = () => {
         preview: true,
         date_from: distributionDateFrom || undefined,
         date_to: distributionDateTo || undefined,
-        use_mip: useMip,
-        objective,
+        use_mip: objective !== 'greedy_developer',
+        objective:
+          objective === 'greedy_developer'
+            ? 'weighted_tardiness_lexicographic'
+            : objective,
       });
 
       setDistResult(result);
@@ -375,7 +383,7 @@ const CurrentDistributionView = () => {
 
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
         <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto_240px_auto] xl:items-end">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_260px_auto] xl:items-end">
             <div className="flex-1">
               <label className="block text-sm font-medium text-slate-700 mb-1">
                 Дата распределения
@@ -411,15 +419,6 @@ const CurrentDistributionView = () => {
                 className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
               />
             </div>
-
-            <label className="inline-flex h-[42px] items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm xl:mb-0">
-              <input
-                type="checkbox"
-                checked={useMip}
-                onChange={(e) => setUseMip(e.target.checked)}
-              />
-              <span className="text-sm font-medium text-slate-700">Точный расчёт</span>
-            </label>
 
             <div className="min-w-0">
               <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -460,7 +459,8 @@ const CurrentDistributionView = () => {
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
             <div className="font-semibold text-blue-900">Параметры расчёта</div>
             <div className="mt-1">
-              {OBJECTIVE_DESCRIPTIONS[objective]} {useMip ? 'Точный расчёт.' : 'Быстрый расчёт.'}
+              {OBJECTIVE_DESCRIPTIONS[objective]}{' '}
+              {objective === 'greedy_developer' ? 'Точный расчёт выключен.' : 'Точный расчёт.'}
             </div>
           </div>
 
