@@ -140,6 +140,27 @@ export const ReportsView: React.FC = () => {
     return `"${text.replace(/"/g, '""')}"`;
   };
 
+  const formatCsvNumber = (value?: number | null, fractionDigits = 3) => {
+    if (value === null || value === undefined || Number.isNaN(value)) {
+      return "";
+    }
+
+    if (Number.isInteger(value)) {
+      return String(value);
+    }
+
+    return value
+      .toFixed(fractionDigits)
+      .replace(/0+$/, "")
+      .replace(/\.$/, "")
+      .replace(".", ",");
+  };
+
+  const formatCsvPercent = (value?: number | null) => {
+    const formatted = formatCsvNumber(value, 2);
+    return formatted ? `${formatted}%` : "";
+  };
+
   const handleExportCsv = () => {
     if (!kpiData) return;
 
@@ -152,34 +173,34 @@ export const ReportsView: React.FC = () => {
       ["Ожидают назначения", kpiData.pending_studies],
       ["CITO", kpiData.cito_studies],
       ["Срочные", kpiData.asap_studies],
-      ["Средняя нагрузка, УП", kpiData.avg_load_per_doctor],
-      ["Медиана УП в день", dailyUpStats.median],
-      ["Минимум УП в день", dailyUpStats.min],
-      ["Максимум УП в день", dailyUpStats.max],
+      ["Средняя нагрузка, УП", formatCsvNumber(kpiData.avg_load_per_doctor)],
+      ["Медиана УП в день", formatCsvNumber(dailyUpStats.median)],
+      ["Минимум УП в день", formatCsvNumber(dailyUpStats.min)],
+      ["Максимум УП в день", formatCsvNumber(dailyUpStats.max)],
       ["Процент выполнения", `${completionRate}%`],
       [],
       ["Модальность", "Исследований", "Доля", "Выполнено", "Ожидает назначения", "УП всего", "УП выполнено", "Процент выполнения"],
       ...modalityBreakdown.map((row) => [
         row.modality,
         row.studies_count,
-        `${row.share_percent}%`,
+        formatCsvPercent(row.share_percent),
         row.completed_studies,
         row.pending_studies,
-        row.total_up,
-        row.completed_up,
-        `${row.completion_rate_percent}%`,
+        formatCsvNumber(row.total_up),
+        formatCsvNumber(row.completed_up),
+        formatCsvPercent(row.completion_rate_percent),
       ]),
       [],
       ["Врач", "Выполнено исследований", "Выполнено УП", "Дней с выполнением", "Среднее УП/день", "Медиана УП/день", "Мин. УП/день", "Макс. УП/день"],
       ...kpiData.doctor_performance.map((row) => [
         row.doctor_name,
         row.completed_studies,
-        row.completed_up,
+        formatCsvNumber(row.completed_up),
         row.completed_days,
-        row.avg_up_per_day,
-        row.median_up_per_day,
-        row.min_daily_completed_up,
-        row.max_daily_completed_up,
+        formatCsvNumber(row.avg_up_per_day),
+        formatCsvNumber(row.median_up_per_day),
+        formatCsvNumber(row.min_daily_completed_up),
+        formatCsvNumber(row.max_daily_completed_up),
       ]),
     ];
 
