@@ -7,11 +7,11 @@ export const statusTabs: Array<{ key: StudyStatusFilter; label: string }> = [
 ];
 
 export function monthStartString(date = new Date()) {
-  return new Date(date.getFullYear(), date.getMonth(), 1).toISOString().split('T')[0];
+  return localDateString(new Date(date.getFullYear(), date.getMonth(), 1));
 }
 
 export function todayString(date = new Date()) {
-  return date.toISOString().split('T')[0];
+  return localDateString(date);
 }
 
 export function localDateString(date: Date) {

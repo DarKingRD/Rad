@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { dashboardApi, distributionApi, doctorsApi } from '../../services/api';
+import { dashboardApi, distributionApi } from '../../services/api';
 import { KPICard } from './KPICard';
-import { AlertTriangle, ArrowRight, CalendarClock, CheckCircle2, GitBranch, Users } from 'lucide-react';
+import { CalendarClock, GitBranch, Users } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { DashboardStats, ChartData, DistributionInfo, DoctorWithLoad } from '../../types';
+import { DashboardStats, ChartData, DistributionInfo } from '../../types';
 
 interface DashboardViewProps {
   onNavigate?: (tab: string) => void;
@@ -13,7 +13,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [chartData, setChartData] = useState<ChartData[]>([]);
   const [distributionInfo, setDistributionInfo] = useState<DistributionInfo | null>(null);
-  const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -31,12 +30,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       ]);
       setStats(statsRes);
       setChartData(chartRes);
-      const [distributionRes, doctorsRes] = await Promise.all([
-        distributionApi.getInfo(),
-        doctorsApi.getWithLoad(),
-      ]);
+      const distributionRes = await distributionApi.getInfo();
       setDistributionInfo(distributionRes);
-      setDoctors(doctorsRes || []);
     } catch (error) {
       console.error('Error loading dashboard:', error);
     } finally {
@@ -52,15 +47,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     );
   }
 
-  const completionRate = Math.round(((stats?.completed_studies || 0) / (stats?.total_studies || 1)) * 100);
   const urgentTotal = (stats?.cito_studies || 0) + (stats?.asap_studies || 0);
-  const overloadedDoctors = doctors.filter((doctor) => doctor.load_percentage >= 80);
-  const availableDoctors = distributionInfo?.available_doctors ?? stats?.active_doctors ?? 0;
   const pendingStudies = distributionInfo?.pending_studies ?? stats?.pending_studies ?? 0;
-  const statusColor =
-    pendingStudies > 0 || overloadedDoctors.length > 0
-      ? 'border-amber-200 bg-amber-50 text-amber-800'
-      : 'border-blue-200 bg-blue-50 text-blue-800';
 
   return (
     <div className="space-y-5 md:space-y-6">
