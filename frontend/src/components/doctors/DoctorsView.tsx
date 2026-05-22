@@ -1,9 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Plus, X, Search, ArrowUpDown } from 'lucide-react';
+import { AlertCircle, Plus, X, Search, ArrowUpDown, ChevronDown, Check } from 'lucide-react';
 import { doctorsApi } from '../../services/api';
 import { Doctor, DoctorWithLoad } from '../../types';
 
 const DAILY_UP_DEFAULT = 8;
+const MODALITY_OPTIONS = [
+  'Флюорографическое исследование',
+  'Маммографическое исследование совместно с искусственным интеллектом',
+  'Рентгенгеновское исследование',
+  'Компьютерная томограмма',
+  'Компьютерная томограмма с контрастом',
+  'Магнитно-резонансная томограмма',
+  'Магнитно-резонансная томограмма с контрастом',
+  'Суточное мониторирование артериального давления',
+  'Электрокардиография',
+  'Холтеровское мониторирование электрокардиографии',
+  'Электроэнцефалографическое исследование',
+];
 
 interface DoctorFormData {
   fio_alias: string;
@@ -25,6 +38,7 @@ export const DoctorsView: React.FC = () => {
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isModalitySelectOpen, setIsModalitySelectOpen] = useState(false);
 
   const sortedDoctors = useMemo(() => {
     let result = [...doctors];
@@ -159,6 +173,7 @@ export const DoctorsView: React.FC = () => {
       setFormData(getDefaultFormData());
     }
     setFormError(null);
+    setIsModalitySelectOpen(false);
     setIsModalOpen(true);
   };
 
@@ -166,7 +181,20 @@ export const DoctorsView: React.FC = () => {
     setIsModalOpen(false);
     setEditingDoctor(null);
     setFormError(null);
+    setIsModalitySelectOpen(false);
     setFormData(getDefaultFormData());
+  };
+
+  const toggleModality = (modality: string) => {
+    setFormData((prev) => {
+      const isSelected = prev.modality.includes(modality);
+      return {
+        ...prev,
+        modality: isSelected
+          ? prev.modality.filter((item) => item !== modality)
+          : [...prev.modality, modality],
+      };
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -421,26 +449,71 @@ export const DoctorsView: React.FC = () => {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  Модальности (через запятую)
+                  Модальности
                 </label>
-                <input
-                  type="text"
-                  value={formData.modality.join(', ')}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      modality: e.target.value
-                        .split(',')
-                        .map((m) => m.trim())
-                        .filter(Boolean),
-                    })
-                  }
-                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
-          placeholder="Например: КТ, МРТ, Рентгенография"
-                />
-                <p className="text-xs text-slate-500 mt-1.5">
-                  Лучше использовать полные названия модальностей из положения ОМС.
-                </p>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsModalitySelectOpen((value) => !value)}
+                    className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-left text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
+                  >
+                    <span className={formData.modality.length ? 'text-slate-900' : 'text-slate-400'}>
+                      {formData.modality.length
+                        ? `Выбрано: ${formData.modality.length}`
+                        : 'Выберите модальности'}
+                    </span>
+                    <ChevronDown
+                      size={18}
+                      className={`shrink-0 text-slate-400 transition ${isModalitySelectOpen ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+
+                  {isModalitySelectOpen && (
+                    <div className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                      {MODALITY_OPTIONS.map((modality) => {
+                        const isSelected = formData.modality.includes(modality);
+                        return (
+                          <button
+                            key={modality}
+                            type="button"
+                            onClick={() => toggleModality(modality)}
+                            className={`flex w-full items-start gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+                              isSelected ? 'bg-blue-50 text-blue-900' : 'text-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            <span
+                              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                isSelected
+                                  ? 'border-blue-600 bg-blue-600 text-white'
+                                  : 'border-slate-300 bg-white'
+                              }`}
+                            >
+                              {isSelected && <Check size={12} />}
+                            </span>
+                            <span className="leading-5">{modality}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {formData.modality.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {formData.modality.map((modality) => (
+                      <button
+                        key={modality}
+                        type="button"
+                        onClick={() => toggleModality(modality)}
+                        className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800 transition hover:bg-blue-100"
+                        title="Убрать модальность"
+                      >
+                        <span className="truncate">{modality}</span>
+                        <X size={13} className="shrink-0" />
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center">
