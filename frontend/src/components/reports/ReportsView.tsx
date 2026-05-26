@@ -219,7 +219,7 @@ export const ReportsView: React.FC = () => {
       <div className="flex flex-col gap-2">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-slate-950 md:text-3xl">
-            Отчёты службы
+            Отчёты
           </h2>
           <p className="mt-1 max-w-3xl text-sm text-slate-500">Период: {reportPeriodLabel}</p>
         </div>

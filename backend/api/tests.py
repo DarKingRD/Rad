@@ -4,6 +4,8 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory
+from django.contrib.auth.models import AnonymousUser, User
+from rest_framework.test import APIRequestFactory, force_authenticate
 
 from .serializers import DistributionRunSerializer
 from .services.distribution.entities import DoctorData, StudyData
@@ -286,12 +288,14 @@ class ForecastCompareMethodsTests(SimpleTestCase):
 class DashboardAndChartViewsTests(SimpleTestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
+        self.user = User(username="test_manager", is_staff=True)
 
     @patch("api.views.parse_dashboard_range", side_effect=ValueError)
     def test_dashboard_stats_returns_400_for_invalid_date_format(self, _parse_mock):
         request = self.factory.get(
             "/api/dashboard/stats/", {"date_from": "bad", "date_to": "date"}
         )
+        force_authenticate(request, user=self.user) 
 
         response = dashboard_stats(request)
 
@@ -316,6 +320,8 @@ class DashboardAndChartViewsTests(SimpleTestCase):
             "/api/dashboard/chart/",
             {"date_from": "2026-03-01", "date_to": "2026-03-10"},
         )
+        
+        force_authenticate(request, user=self.user)
 
         response = chart_data(request)
 
@@ -331,6 +337,8 @@ class DashboardAndChartViewsTests(SimpleTestCase):
         )
         request = self.factory.get("/api/dashboard/chart/")
 
+        force_authenticate(request, user=self.user)
+        
         response = chart_data(request)
 
         self.assertEqual(response.status_code, 400)
@@ -476,6 +484,7 @@ class ExactSolverOptionBuilderTests(SimpleTestCase):
 class DistributionViewsTests(SimpleTestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
+        self.user = User(username="test_manager", is_staff=True)
 
     @patch("api.views.run_distribution")
     @patch("api.views.parse_distribution_datetime_end")
@@ -501,6 +510,8 @@ class DistributionViewsTests(SimpleTestCase):
             },
             format="json",
         )
+        
+        force_authenticate(request, user=self.user)
 
         response = distribute_studies_view(request)
 
@@ -524,6 +535,8 @@ class DistributionViewsTests(SimpleTestCase):
             {"distribution_id": "missing-id"},
             format="json",
         )
+        
+        force_authenticate(request, user=self.user)
 
         response = confirm_distribution(request)
 
@@ -548,6 +561,8 @@ class DistributionViewsTests(SimpleTestCase):
 
         request = self.factory.get("/api/distribute/preview/")
 
+        force_authenticate(request, user=self.user)
+        
         response = distribution_preview(request)
 
         self.assertEqual(response.status_code, 200)
@@ -557,6 +572,8 @@ class DistributionViewsTests(SimpleTestCase):
     def test_distribution_preview_returns_400_for_invalid_date(self):
         request = self.factory.get("/api/distribute/preview/", {"date": "23-03-2026"})
 
+        force_authenticate(request, user=self.user)
+        
         response = distribution_preview(request)
 
         self.assertEqual(response.status_code, 400)

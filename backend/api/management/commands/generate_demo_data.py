@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 
 from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.core.management.color import no_style
+from django.db import connection, transaction
 from django.utils import timezone
 
 from api.models import Doctor, Schedule, Study, StudyType
@@ -72,7 +73,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--studies-per-day",
             type=int,
-            default=45,
+            default=1700,
             help="Сколько ожидающих исследований создать на каждый день. По умолчанию 45.",
         )
 
@@ -83,10 +84,18 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             self._clear_previous_demo()
+            self._reset_sequences()
+
             doctors = self._create_doctors()
             study_types = self._create_study_types()
             schedules_count = self._create_schedules(doctors, start_date, days)
-            studies_count = self._create_studies(study_types, start_date, days, studies_per_day)
+            studies_count = self._create_studies(
+                study_types,
+                start_date,
+                days,
+                studies_per_day,
+            )
+            self._reset_sequences()
 
         self.stdout.write(self.style.SUCCESS("\nДемо-данные готовы"))
         self.stdout.write(f"  Период: {start_date.isoformat()} - {(start_date + timedelta(days=days - 1)).isoformat()}")
@@ -116,7 +125,17 @@ class Command(BaseCommand):
         Schedule.objects.filter(doctor_id__in=demo_doctor_ids).delete()
         Doctor.objects.filter(id__in=demo_doctor_ids).delete()
         StudyType.objects.filter(id__in=demo_study_type_ids).delete()
+    
+    def _reset_sequences(self):
+        sequence_sql = connection.ops.sequence_reset_sql(
+            no_style(),
+            [Doctor, Schedule, StudyType, Study],
+        )
 
+        with connection.cursor() as cursor:
+            for sql in sequence_sql:
+                cursor.execute(sql)
+    
     def _create_doctors(self):
         doctors = []
         for offset, (name, position, modalities) in enumerate(DEMO_DOCTORS):

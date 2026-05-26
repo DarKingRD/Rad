@@ -444,12 +444,6 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
         {forecast?.message || 'Прогноз будет загружен после выбора диапазона.'}
       </div>
 
-      {forecast?.history_start_date && forecast?.history_end_date && (
-        <div className="text-xs text-slate-500">
-          Исторический диапазон для обучения прогноза: {formatDateFullLabel(forecast.history_start_date)} — {formatDateFullLabel(forecast.history_end_date)}.
-        </div>
-      )}
-
       {error && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
           {error}

@@ -63,7 +63,7 @@ from .services.shift_forecast_multi_method import (
 )
 
 logger = logging.getLogger(__name__)
-DOCTOR_LOGIN_PREFIX = "doctor_"
+DOCTOR_LOGIN_PREFIX = "doctor_" # подредачить!
 ADMIN_NOTIFICATIONS_CACHE_KEY = "admin_notifications"
 ADMIN_NOTIFICATIONS_LIMIT = 50
 
