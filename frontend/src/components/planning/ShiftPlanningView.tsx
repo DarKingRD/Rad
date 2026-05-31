@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { schedulesApi, doctorsApi, studiesApi, dashboardApi } from '../../services/api';
 import {
   ChevronLeft,
@@ -223,7 +223,7 @@ export const ShiftPlanningView: React.FC = () => {
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [doctorSearch, setDoctorSearch] = useState('');
   const [selectedModality, setSelectedModality] = useState<string>('all');
-  const [forecastRefreshKey, setForecastRefreshKey] = useState(0);
+  const lastScrollYRef = useRef<number | null>(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
@@ -392,7 +392,12 @@ export const ShiftPlanningView: React.FC = () => {
     }
   };
 
-  const handleOpenModal = (doctorId: number, date: string, schedule?: Schedule) => {
+  const handleOpenModal = (
+    doctorId: number,
+    date: string,
+    schedule?: Schedule,
+    suggestedPlannedUp = 0
+  ) => {
     if (schedule) {
       setEditingSchedule(schedule);
       setFormData({
@@ -415,7 +420,7 @@ export const ShiftPlanningView: React.FC = () => {
         break_start: '12:00',
         break_end: '13:00',
         day_status: 0,
-        planned_up: 0,
+        planned_up: suggestedPlannedUp,
       });
     }
     setModalError(null);
@@ -431,6 +436,22 @@ export const ShiftPlanningView: React.FC = () => {
     setIsSaving(false);
   };
 
+  const rememberScrollPosition = () => {
+    lastScrollYRef.current = window.scrollY;
+  };
+
+  const restoreScrollPosition = () => {
+    const scrollY = lastScrollYRef.current;
+    if (scrollY === null) return;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: scrollY, left: 0, behavior: 'auto' });
+        lastScrollYRef.current = null;
+      });
+    });
+  };
+
   const getMonthlyCompletedLoad = async () => {
     const { dateFrom, dateTo, monthLabel } = getMonthDateRange(formData.work_date);
     const stats = await dashboardApi.getStats(dateFrom, dateTo, false);
@@ -441,6 +462,7 @@ export const ShiftPlanningView: React.FC = () => {
   };
 
   const saveSchedule = async (allowOverload = false) => {
+    rememberScrollPosition();
     setModalError(null);
     setIsSaving(true);
     try {
@@ -483,8 +505,8 @@ export const ShiftPlanningView: React.FC = () => {
       }
 
       await loadSchedulesData();
-      setForecastRefreshKey((prev) => prev + 1);
       handleCloseModal();
+      restoreScrollPosition();
     } catch (error) {
       console.error('Error saving schedule:', error);
       setModalError(`Не удалось сохранить смену: ${getErrorMessage(error)}`);
@@ -503,10 +525,11 @@ export const ShiftPlanningView: React.FC = () => {
     if (!confirm('Вы уверены, что хотите удалить эту смену?')) return;
 
     try {
+      rememberScrollPosition();
       await schedulesApi.delete(editingSchedule.id);
       await loadSchedulesData();
-      setForecastRefreshKey((prev) => prev + 1);
       handleCloseModal();
+      restoreScrollPosition();
     } catch (error) {
       console.error('Error deleting schedule:', error);
       setModalError(`Не удалось удалить смену: ${getErrorMessage(error)}`);
@@ -523,6 +546,10 @@ export const ShiftPlanningView: React.FC = () => {
       return scheduleDate === date;
     });
   }, [schedules]);
+
+  const handleOpenForecastSchedule = (doctorId: number, date: string, suggestedPlannedUp = 0) => {
+    handleOpenModal(doctorId, date, getScheduleForDoctor(doctorId, date), suggestedPlannedUp);
+  };
 
   const getLoadPercentage = (schedule: Schedule | undefined, doctor: Doctor): number => {
     if (!isWorkingSchedule(schedule)) return 0;
@@ -656,7 +683,12 @@ export const ShiftPlanningView: React.FC = () => {
         </div>
       </div>
 
-      <ShiftForecastPanel refreshKey={forecastRefreshKey} doctors={activeDoctors} />
+      <ShiftForecastPanel
+        doctors={activeDoctors}
+        schedules={schedules}
+        doctorMonthlyCompletedLoad={doctorMonthlyCompletedLoad}
+        onScheduleDoctor={handleOpenForecastSchedule}
+      />
 
       <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm md:p-4">
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">

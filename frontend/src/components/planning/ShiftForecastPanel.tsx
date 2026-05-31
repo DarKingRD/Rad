@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, RefreshCw, Users } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, RefreshCw, Users, X } from 'lucide-react';
 import { ResponsiveContainer, CartesianGrid, Tooltip, XAxis, YAxis, BarChart, Bar, LineChart, Line } from 'recharts';
 
 import { schedulesApi } from '../../services/api';
-import type { Doctor, ShiftForecastResponse } from '../../types';
+import type { Doctor, Schedule, ShiftForecastResponse } from '../../types';
 
 interface ShiftForecastPanelProps {
   refreshKey?: number;
   doctors?: Doctor[];
+  schedules?: Schedule[];
+  doctorMonthlyCompletedLoad?: Record<number, number>;
+  onScheduleDoctor?: (doctorId: number, date: string, suggestedPlannedUp?: number) => void;
 }
 
 type DoctorRecord = Doctor & Record<string, unknown>;
@@ -25,6 +28,11 @@ const formatMetric = (value?: number | null, digits = 1) => {
     minimumFractionDigits: 0,
     maximumFractionDigits: digits,
   }).format(value);
+};
+
+const formatStudiesCount = (value?: number | null) => {
+  if (value === null || value === undefined) return '0';
+  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Math.ceil(value));
 };
 
 const formatDateFullLabel = (value?: string | null) => {
@@ -145,6 +153,12 @@ const getDoctorStableId = (doctor: Doctor): string => {
   return String(doctorRecord.id ?? doctorRecord.doctor_id ?? doctorRecord.external_id ?? getDoctorName(doctor));
 };
 
+const getDoctorNumericId = (doctor: Doctor): number | null => {
+  const doctorRecord = doctor as DoctorRecord;
+  const id = Number(doctorRecord.id ?? doctorRecord.doctor_id ?? doctorRecord.external_id);
+  return Number.isFinite(id) ? id : null;
+};
+
 const getDoctorCapacity = (doctor: Doctor): number => {
   const value = Number((doctor as DoctorRecord).max_up_per_day ?? 0);
   return Number.isFinite(value) ? value : 0;
@@ -172,9 +186,121 @@ type ForecastDay = ShiftForecastResponse['days'][number];
 type DayDoctorRecommendation = {
   doctor: Doctor;
   modalities: string[];
+  isScheduled: boolean;
+  monthlyLoad: number;
+  score: number;
 };
 
-const buildDayDoctorRecommendations = (day: ForecastDay, doctors: Doctor[]) => {
+type MissingModalityRequest = {
+  date: string;
+  weekday: string;
+  modality: string;
+  candidates: DayDoctorRecommendation[];
+};
+
+const getScheduleDoctorId = (schedule: Schedule): number | null => {
+  if (typeof schedule.doctor === 'object' && schedule.doctor?.id) return schedule.doctor.id;
+  const id = Number(schedule.doctor_id || (typeof schedule.doctor === 'number' ? schedule.doctor : 0));
+  return Number.isFinite(id) && id > 0 ? id : null;
+};
+
+const isWorkingSchedule = (schedule?: Schedule | null) => !!schedule && schedule.day_status === 0;
+
+const getScheduleForDoctor = (schedules: Schedule[], doctorId: number, date: string) =>
+  schedules.find((schedule) => {
+    const scheduleDoctorId = getScheduleDoctorId(schedule);
+    const scheduleDate = schedule.work_date?.split('T')[0];
+    return scheduleDoctorId === doctorId && scheduleDate === date;
+  });
+
+const getMonthlyLoad = (doctor: Doctor, monthlyLoadByDoctor: Record<number, number>) => {
+  const doctorId = getDoctorNumericId(doctor);
+  return doctorId === null ? 0 : monthlyLoadByDoctor[doctorId] || 0;
+};
+
+const getSchedulePlannedUp = (schedule?: Schedule | null) => {
+  if (!isWorkingSchedule(schedule)) return 0;
+  const value = Number(schedule?.planned_up ?? 0);
+  return Number.isFinite(value) ? Math.max(value, 0) : 0;
+};
+
+const getProjectedMonthlyLoadBeforeDate = (
+  doctor: Doctor,
+  date: string,
+  schedules: Schedule[],
+  monthlyLoadByDoctor: Record<number, number>
+) => {
+  const doctorId = getDoctorNumericId(doctor);
+  const factualLoad = getMonthlyLoad(doctor, monthlyLoadByDoctor);
+  if (doctorId === null) return factualLoad;
+
+  const plannedLoadBeforeDate = schedules.reduce((sum, schedule) => {
+    const scheduleDoctorId = getScheduleDoctorId(schedule);
+    const scheduleDate = schedule.work_date?.split('T')[0];
+    if (scheduleDoctorId !== doctorId || !scheduleDate || scheduleDate >= date) return sum;
+    return sum + getSchedulePlannedUp(schedule);
+  }, 0);
+
+  return factualLoad + plannedLoadBeforeDate;
+};
+
+const buildCandidateScore = (
+  doctor: Doctor,
+  day: ForecastDay,
+  modality: string,
+  schedules: Schedule[],
+  monthlyLoadByDoctor: Record<number, number>,
+  scarcityRank = 0
+) => {
+  const doctorId = getDoctorNumericId(doctor);
+  const schedule = doctorId === null ? undefined : getScheduleForDoctor(schedules, doctorId, day.date);
+  const monthlyLoad = getProjectedMonthlyLoadBeforeDate(doctor, day.date, schedules, monthlyLoadByDoctor);
+  const modalityCount = getDoctorModalityKeys(doctor).length || 1;
+  const capacity = getDoctorCapacity(doctor);
+  const scheduledPenalty = isWorkingSchedule(schedule) ? -8 : schedule ? 30 : 0;
+  const universalPenalty = modalityCount > 1 ? modalityCount * 1.5 : 0;
+  const capacityBonus = Math.min(capacity, 12) * -0.2;
+  const seed = (hashString(`${day.date}-${modality}-${getDoctorStableId(doctor)}`) % 100) / 100;
+
+  return monthlyLoad + scheduledPenalty + universalPenalty + capacityBonus + scarcityRank * 0.1 + seed;
+};
+
+const buildCandidatesForModality = (
+  day: ForecastDay,
+  modality: string,
+  doctors: Doctor[],
+  schedules: Schedule[],
+  monthlyLoadByDoctor: Record<number, number>,
+  scarcityRank = 0
+): DayDoctorRecommendation[] =>
+  doctors
+    .filter(isDoctorActive)
+    .filter((doctor) => modalityMatchesDoctor(modality, doctor))
+    .map((doctor) => {
+      const doctorId = getDoctorNumericId(doctor);
+      const schedule = doctorId === null ? undefined : getScheduleForDoctor(schedules, doctorId, day.date);
+      const monthlyLoad = getProjectedMonthlyLoadBeforeDate(doctor, day.date, schedules, monthlyLoadByDoctor);
+
+      return {
+        doctor,
+        modalities: [modality],
+        isScheduled: isWorkingSchedule(schedule),
+        monthlyLoad,
+        score: buildCandidateScore(doctor, day, modality, schedules, monthlyLoadByDoctor, scarcityRank),
+      };
+    })
+    .sort((a, b) => {
+      if (a.isScheduled !== b.isScheduled) return a.isScheduled ? -1 : 1;
+      if (a.score !== b.score) return a.score - b.score;
+      return getDoctorName(a.doctor).localeCompare(getDoctorName(b.doctor), 'ru');
+    });
+
+const buildDayDoctorRecommendations = (
+  day: ForecastDay,
+  doctors: Doctor[],
+  schedules: Schedule[],
+  monthlyLoadByDoctor: Record<number, number>
+) => {
   const activeDoctors = doctors.filter(isDoctorActive);
   const availableByModality = new Map<string, Doctor[]>();
 
@@ -196,46 +322,35 @@ const buildDayDoctorRecommendations = (day: ForecastDay, doctors: Doctor[]) => {
     return (b.recommended_doctors || 0) - (a.recommended_doctors || 0);
   });
 
-  const usedDoctors = new Set<string>();
   const recommendationsByModality = new Map<string, Doctor[]>();
   const recommendationsByDoctor = new Map<string, DayDoctorRecommendation>();
 
-  sortedModalities.forEach((modality) => {
+  sortedModalities.forEach((modality, scarcityRank) => {
     const needCount = modality.recommended_doctors || 0;
-    const selected = (availableByModality.get(modality.modality) || [])
-      .filter((doctor) => !usedDoctors.has(getDoctorStableId(doctor)))
-      .sort((a, b) => {
-        const aKeys = getDoctorModalityKeys(a).length || 99;
-        const bKeys = getDoctorModalityKeys(b).length || 99;
-        if (aKeys !== bKeys) return aKeys - bKeys;
+    const selected = buildCandidatesForModality(
+      day,
+      modality.modality,
+      availableByModality.get(modality.modality) || activeDoctors,
+      schedules,
+      monthlyLoadByDoctor,
+      scarcityRank
+    ).slice(0, needCount);
 
-        const capacityDiff = getDoctorCapacity(b) - getDoctorCapacity(a);
-        if (capacityDiff !== 0) return capacityDiff;
-
-        const seed = hashString(`${day.date}-${modality.modality}`);
-        const aRotation = (hashString(getDoctorStableId(a)) + seed) % Math.max(activeDoctors.length, 1);
-        const bRotation = (hashString(getDoctorStableId(b)) + seed) % Math.max(activeDoctors.length, 1);
-        if (aRotation !== bRotation) return aRotation - bRotation;
-
-        return getDoctorName(a).localeCompare(getDoctorName(b), 'ru');
-      })
-      .slice(0, needCount);
-
-    selected.forEach((doctor) => {
-      const doctorId = getDoctorStableId(doctor);
-      usedDoctors.add(doctorId);
+    selected.forEach((item) => {
+      const doctorId = getDoctorStableId(item.doctor);
 
       const existing = recommendationsByDoctor.get(doctorId);
       if (existing) {
         existing.modalities.push(modality.modality);
+        existing.score = Math.min(existing.score, item.score);
       } else {
         recommendationsByDoctor.set(doctorId, {
-          doctor,
+          ...item,
           modalities: [modality.modality],
         });
       }
     });
-    recommendationsByModality.set(modality.modality, selected);
+    recommendationsByModality.set(modality.modality, selected.map((item) => item.doctor));
   });
 
   const totalNeed = day.required_modalities.reduce(
@@ -249,7 +364,11 @@ const buildDayDoctorRecommendations = (day: ForecastDay, doctors: Doctor[]) => {
 
   return {
     byModality: recommendationsByModality,
-    doctors: [...recommendationsByDoctor.values()],
+    doctors: [...recommendationsByDoctor.values()].sort((a, b) => {
+      if (a.isScheduled !== b.isScheduled) return a.isScheduled ? -1 : 1;
+      if (a.score !== b.score) return a.score - b.score;
+      return getDoctorName(a.doctor).localeCompare(getDoctorName(b.doctor), 'ru');
+    }),
     totalNeed,
     coveredCount,
     missingCount: Math.max(0, totalNeed - coveredCount),
@@ -267,7 +386,13 @@ const getDefaultRange = () => {
   };
 };
 
-export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshKey = 0, doctors = []}) => {
+export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({
+  refreshKey = 0,
+  doctors = [],
+  schedules = [],
+  doctorMonthlyCompletedLoad = {},
+  onScheduleDoctor,
+}) => {
   const defaults = useMemo(() => getDefaultRange(), []);
   const [inputDateFrom, setInputDateFrom] = useState(defaults.dateFrom);
   const [inputDateTo, setInputDateTo] = useState(defaults.dateTo);
@@ -281,6 +406,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [missingRequest, setMissingRequest] = useState<MissingModalityRequest | null>(null);
 
   const loadForecast = async (
     dateFrom: string,
@@ -338,6 +464,16 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
   const chartData = forecast?.chart || [];
   const summary = forecast?.summary;
   const days = forecast?.days || [];
+  const dayRecommendations = useMemo(
+    () =>
+      new Map(
+        days.map((day) => [
+          day.date,
+          buildDayDoctorRecommendations(day, doctors, schedules, doctorMonthlyCompletedLoad),
+        ])
+      ),
+    [days, doctors, schedules, doctorMonthlyCompletedLoad]
+  );
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
@@ -428,7 +564,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ожидается исследований</div>
-          <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : formatMetric(summary?.total_expected_studies, 1)}</div>
+          <div className="text-xl font-bold tracking-tight text-slate-950">{loading ? '…' : formatStudiesCount(summary?.total_expected_studies)}</div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ожидаемый объём, УП</div>
@@ -461,7 +597,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="label" />
                   <YAxis />
-                  <Tooltip formatter={(value: number) => [formatMetric(value, 1), 'Исследований']} />
+                  <Tooltip formatter={(value: number) => [formatStudiesCount(value), 'Исследований']} />
                   <Bar dataKey="expected_studies_total" name="Исследований" fill="#2563eb" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -491,7 +627,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
             <div>
               <div className="font-semibold text-slate-900">Кого поставить в смену</div>
               <div className="text-xs text-slate-500">
-                Сначала закрываются дефицитные модальности; внутри них приоритет у узких профилей и большей дневной емкости.
+                Подбор учитывает модальности, уже выставленные смены и месячную нагрузку врачей.
               </div>
             </div>
             <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
@@ -499,14 +635,29 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
               {doctors.length} активных врачей
             </div>
           </div>
-          <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-2.5 p-3 md:grid-cols-2 xl:grid-cols-3">
             {days.map((day) => {
-              const recommendations = buildDayDoctorRecommendations(day, doctors);
-              const isCovered = recommendations.missingCount === 0;
+              const recommendations = dayRecommendations.get(day.date) ||
+                buildDayDoctorRecommendations(day, doctors, schedules, doctorMonthlyCompletedLoad);
+              const scheduledCountFor = (modalityName: string) => {
+                const selected = recommendations.byModality.get(modalityName) || [];
+                return selected.filter((doctor) => {
+                  const doctorId = getDoctorNumericId(doctor);
+                  return doctorId !== null && isWorkingSchedule(getScheduleForDoctor(schedules, doctorId, day.date));
+                }).length;
+              };
+              const scheduledCoveredCount = day.required_modalities.reduce(
+                (sum, modality) => sum + scheduledCountFor(modality.modality),
+                0
+              );
+              const isCovered = recommendations.totalNeed === 0 || scheduledCoveredCount >= recommendations.totalNeed;
+              const missingModalities = day.required_modalities.filter(
+                (modality) => scheduledCountFor(modality.modality) < (modality.recommended_doctors || 0)
+              );
 
               return (
-                <div key={day.date} className="rounded-lg border border-slate-200 bg-white p-3">
-                  <div className="mb-3 flex items-start justify-between gap-3">
+                <div key={day.date} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <div className="mb-2 flex items-start justify-between gap-2">
                     <div>
                       <div className="text-sm font-semibold text-slate-900">{day.weekday}</div>
                       <div className="text-xs text-slate-500">{formatDateFullLabel(day.date)}</div>
@@ -514,60 +665,91 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                     <span
                       className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${
                         isCovered
-                          ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
+                          ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100'
                           : 'bg-amber-50 text-amber-700 ring-1 ring-amber-100'
                       }`}
                     >
                       {isCovered ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-                      {recommendations.coveredCount}/{recommendations.totalNeed || day.min_doctors}
+                      {scheduledCoveredCount}/{recommendations.totalNeed || day.min_doctors}
                     </span>
                   </div>
 
-                  <div className="mb-3 flex flex-wrap gap-1.5">
+                  <div className="mb-2 flex flex-wrap gap-1.5">
                     {day.required_modalities.map((modality) => {
                       const needCount = modality.recommended_doctors || 0;
                       const selected = recommendations.byModality.get(modality.modality) || [];
-                      const missingCount = Math.max(0, needCount - selected.length);
+                      const scheduledCount = scheduledCountFor(modality.modality);
+                      const missingCount = Math.max(0, needCount - scheduledCount);
 
                       return (
                         <span
                           key={`${day.date}-${modality.modality}`}
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium ${
-                            missingCount > 0
-                              ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-100'
-                              : 'bg-slate-100 text-slate-700'
+                            missingCount === 0
+                              ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100'
+                              : selected.length > 0
+                                ? 'bg-slate-100 text-slate-700'
+                                : 'bg-amber-50 text-amber-800 ring-1 ring-amber-100'
                           }`}
-                          title={`Нужно ${needCount}; подобрано ${selected.length}`}
+                          title={`Нужно ${needCount}; выставлено ${scheduledCount}`}
                         >
                           {modality.modality}
-                          <span className="font-semibold">{selected.length}/{needCount}</span>
+                          <span className="font-semibold">{scheduledCount}/{needCount}</span>
                         </span>
                       );
                     })}
                   </div>
 
                   {recommendations.doctors.length > 0 ? (
-                    <div className="space-y-1.5">
-                      {recommendations.doctors.map((item) => (
-                        <div
+                    <div className="space-y-1">
+                      {recommendations.doctors.slice(0, 4).map((item) => {
+                        const doctorId = getDoctorNumericId(item.doctor);
+                        const capacity = getDoctorCapacity(item.doctor);
+                        const canSchedule = Boolean(onScheduleDoctor && doctorId !== null);
+
+                        return (
+                        <button
+                          type="button"
                           key={`${day.date}-${getDoctorStableId(item.doctor)}`}
-                          className="flex items-start justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-2"
+                          disabled={!canSchedule}
+                          onClick={() => {
+                            if (doctorId !== null) {
+                              onScheduleDoctor?.(doctorId, day.date, capacity);
+                            }
+                          }}
+                          className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition hover:bg-blue-50 hover:ring-1 hover:ring-blue-200 disabled:cursor-default disabled:hover:bg-slate-50 disabled:hover:ring-0 ${
+                            item.isScheduled ? 'bg-blue-50 ring-1 ring-blue-100' : 'bg-slate-50'
+                          }`}
+                          title={canSchedule ? 'Добавить или изменить смену врача на этот день' : undefined}
                         >
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-slate-900">
+                            <div className="truncate font-medium text-slate-900">
                               {getDoctorName(item.doctor)}
                             </div>
-                            <div className="truncate text-xs text-slate-500">
-                              {item.modalities.join(', ')}
+                            <div className="truncate text-[11px] text-slate-500">
+                              {item.modalities.join(', ')} · {formatMetric(item.monthlyLoad, 1)} УП/мес.
                             </div>
                           </div>
-                          {getDoctorCapacity(item.doctor) > 0 && (
-                            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
-                              {formatMetric(getDoctorCapacity(item.doctor), 1)} УП
-                            </span>
-                          )}
+                          <div className="flex shrink-0 items-center gap-1">
+                            {item.isScheduled && (
+                              <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                                выставлен
+                              </span>
+                            )}
+                            {capacity > 0 && (
+                              <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                {formatMetric(capacity, 1)} УП
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                        );
+                      })}
+                      {recommendations.doctors.length > 4 && (
+                        <div className="px-2 text-[11px] text-slate-500">
+                          +{recommendations.doctors.length - 4} врачей в альтернативах
                         </div>
-                      ))}
+                      )}
                     </div>
                   ) : recommendations.totalNeed === 0 ? (
                     <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
@@ -579,14 +761,115 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                     </div>
                   )}
 
-                  {recommendations.missingCount > 0 && recommendations.doctors.length > 0 && (
-                    <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-                      Не хватает врачей: {recommendations.missingCount}
+                  {missingModalities.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-100 pt-2">
+                      {missingModalities.slice(0, 2).map((modality) => (
+                        <button
+                          type="button"
+                          key={`${day.date}-missing-${modality.modality}`}
+                          onClick={() =>
+                            setMissingRequest({
+                              date: day.date,
+                              weekday: day.weekday,
+                              modality: modality.modality,
+                              candidates: buildCandidatesForModality(
+                                day,
+                                modality.modality,
+                                doctors,
+                                schedules,
+                                doctorMonthlyCompletedLoad
+                              ),
+                            })
+                          }
+                          className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-100 transition hover:bg-amber-100"
+                        >
+                          Закрыть {modality.modality}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+      {missingRequest && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4">
+          <div className="max-h-[95dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white shadow-lg sm:rounded-xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-slate-200 bg-white p-5">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Закрыть модальность</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  {missingRequest.modality} · {missingRequest.weekday}, {formatDateFullLabel(missingRequest.date)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMissingRequest(null)}
+                className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="space-y-2 p-4">
+              {missingRequest.candidates.length > 0 ? (
+                missingRequest.candidates.map((item) => {
+                  const doctorId = getDoctorNumericId(item.doctor);
+                  const capacity = getDoctorCapacity(item.doctor);
+
+                  return (
+                    <button
+                      key={`${missingRequest.date}-${missingRequest.modality}-${getDoctorStableId(item.doctor)}`}
+                      type="button"
+                      disabled={doctorId === null}
+                      onClick={() => {
+                        if (doctorId !== null) {
+                          onScheduleDoctor?.(doctorId, missingRequest.date, capacity);
+                          setMissingRequest(null);
+                        }
+                      }}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-default disabled:opacity-60"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-slate-900">
+                          {getDoctorName(item.doctor)}
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {getDoctorModalities(item.doctor).slice(0, 4).map((modality) => (
+                            <span
+                              key={`${getDoctorStableId(item.doctor)}-${modality}`}
+                              className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                modalityMatchesDoctor(missingRequest.modality, item.doctor) &&
+                                modalityToKey(modality) === modalityToKey(missingRequest.modality)
+                                  ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {modality}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-1 text-xs">
+                        {item.isScheduled && (
+                          <span className="rounded-full bg-blue-600 px-2 py-0.5 font-semibold text-white">
+                            выставлен
+                          </span>
+                        )}
+                        <span className="text-slate-600">{formatMetric(item.monthlyLoad, 1)} УП/мес.</span>
+                        {capacity > 0 && <span className="text-slate-500">{formatMetric(capacity, 1)} УП/день</span>}
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                  Нет активных врачей, которые покрывают выбранную модальность.
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -603,7 +886,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
               {formatDateFullLabel(forecast?.date_from)} — {formatDateFullLabel(forecast?.date_to)}
             </div>
             <div className="text-xs text-slate-600 mt-1">
-              Исследований: {formatMetric(summary?.total_expected_studies, 1)} · УП: {formatMetric(summary?.total_expected_up, 2)}
+              Исследований: {formatStudiesCount(summary?.total_expected_studies)} · УП: {formatMetric(summary?.total_expected_up, 2)}
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -626,7 +909,7 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                       <div className="font-medium text-slate-900">{day.weekday}</div>
                       <div className="text-xs text-slate-500">{formatDateFullLabel(day.date)}</div>
                     </td>
-                    <td className="px-4 py-3 align-top font-medium text-slate-900">{formatMetric(day.expected_studies_total, 1)}</td>
+                    <td className="px-4 py-3 align-top font-medium text-slate-900">{formatStudiesCount(day.expected_studies_total)}</td>
                     <td className="px-4 py-3 align-top text-slate-900">{formatMetric(day.expected_up_total, 2)}</td>
                     <td className="px-4 py-3 align-top text-slate-900">{day.scheduled_doctors}</td>
                     <td className="px-4 py-3 align-top font-semibold text-slate-900">{day.min_doctors}</td>
@@ -647,9 +930,9 @@ export const ShiftForecastPanel: React.FC<ShiftForecastPanelProps> = ({ refreshK
                           <span
                             key={`${day.date}-${item.modality}`}
                             className="inline-flex px-2 py-1 rounded-full text-xs bg-slate-100 text-slate-700"
-                            title={`Ожидается ${formatMetric(item.expected_studies, 1)} исследований / ${formatMetric(item.expected_up, 2)} УП`}
+                            title={`Ожидается ${formatStudiesCount(item.expected_studies)} исследований / ${formatMetric(item.expected_up, 2)} УП`}
                           >
-                            {item.modality}: {formatMetric(item.expected_studies, 1)}
+                            {item.modality}: {formatStudiesCount(item.expected_studies)}
                           </span>
                         )) : (
                           <span className="text-xs text-slate-400">—</span>
