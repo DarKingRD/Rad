@@ -78,11 +78,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const mobileMenuRef = useRef<HTMLDivElement | null>(null);
 
   const menuItems = [
-    { id: 'dashboard', label: 'Главная', icon: LayoutDashboard },
+    { id: 'dashboard', label: 'Текущее состояние', icon: LayoutDashboard },
     { id: 'planning', label: 'Смены', icon: CalendarDays },
     { id: 'distribution', label: 'Распределение', icon: GitBranch },
     { id: 'doctors', label: 'Врачи', icon: Users },
-    { id: 'reports', label: 'Отчёты', icon: BarChart2 },
+    { id: 'reports', label: 'Статистика и отчёты', icon: BarChart2 },
   ];
 
   const initials = useMemo(() => {

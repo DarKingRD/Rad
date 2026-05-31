@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Plus, X, Search, ArrowUpDown, ChevronDown, Check } from 'lucide-react';
-import { doctorsApi } from '../../services/api';
+import { dashboardApi, doctorsApi } from '../../services/api';
 import { Doctor, DoctorWithLoad } from '../../types';
 
 const DAILY_UP_DEFAULT = 8;
@@ -17,6 +17,13 @@ const MODALITY_OPTIONS = [
   'Холтеровское мониторирование электрокардиографии',
   'Электроэнцефалографическое исследование',
 ];
+
+const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 interface DoctorFormData {
   fio_alias: string;
@@ -141,8 +148,28 @@ export const DoctorsView: React.FC = () => {
   const loadDoctors = async () => {
     try {
       setLoading(true);
-      const doctorsData = await doctorsApi.getWithLoad();
-      setDoctors(doctorsData);
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const [doctorsData, statsData] = await Promise.all([
+        doctorsApi.getWithLoad(),
+        dashboardApi.getStats(formatDate(monthStart), formatDate(monthEnd), false),
+      ]);
+      const completedUpByDoctor = Object.fromEntries(
+        (statsData.doctor_performance || []).map((item) => [item.doctor_id, item.completed_up || 0])
+      );
+
+      setDoctors(
+        doctorsData.map((doctor) => {
+          const currentLoad = completedUpByDoctor[doctor.id] || 0;
+          const maxLoad = doctor.max_load || 50;
+          return {
+            ...doctor,
+            current_load: currentLoad,
+            load_percentage: maxLoad > 0 ? Math.round((currentLoad / maxLoad) * 1000) / 10 : 0,
+          };
+        })
+      );
     } catch (err) {
       console.error('Error loading doctors:', err);
     } finally {

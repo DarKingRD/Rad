@@ -7,6 +7,8 @@ import { getPriorityColor, getPriorityLabel, getStatusColor, getStatusLabel } fr
 interface DoctorCardProps {
   doc: DoctorWithLoad;
   distStat?: DoctorDistStat;
+  completedUp: number;
+  loadMonthLabel: string;
   isSelectedForAssign: boolean;
   isExpanded: boolean;
   studiesState?: DoctorStudiesState;
@@ -18,6 +20,8 @@ interface DoctorCardProps {
 const DoctorCard: React.FC<DoctorCardProps> = ({
   doc,
   distStat,
+  completedUp,
+  loadMonthLabel,
   isSelectedForAssign,
   isExpanded,
   studiesState,
@@ -27,10 +31,18 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
 }) => {
   const previewAssignedCount = distStat?.assigned_studies ?? 0;
   const assignedCount = doc.active_studies ?? 0;
-  const totalUp = doc.current_load ?? 0;
+  const totalUp = completedUp;
   const maxUp = doc.max_load ?? 50;
   const loadPct = maxUp > 0 ? Math.min((totalUp / maxUp) * 100, 100) : 0;
   const isOverloaded = loadPct > 80;
+  const assignedStudies = studiesState?.assignedStudies ?? [];
+  const completedStudies = studiesState?.completedStudies ?? [];
+  const hasDoctorStudies = assignedStudies.length > 0 || completedStudies.length > 0;
+
+  const formatUp = (value?: number | null) => {
+    const numericValue = Number(value || 0);
+    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(numericValue);
+  };
 
   const renderStudyRow = (study: Study) => (
     <div
@@ -101,9 +113,9 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
         </div>
 
         <div className="w-full shrink-0 text-left sm:w-auto sm:min-w-[150px] sm:text-right">
-          <div className="text-sm font-semibold text-slate-900">
-            {typeof totalUp === 'number' ? totalUp.toFixed(2) : totalUp}
-            <span className="text-slate-400 font-normal"> / {maxUp} УП</span>
+          <div className="text-xs font-semibold text-blue-700">
+            Факт за {loadMonthLabel}: {formatUp(typeof totalUp === 'number' ? totalUp : Number(totalUp))}
+            <span className="font-normal text-slate-400"> / {maxUp} УП</span>
           </div>
 
           <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-100 sm:w-32">
@@ -131,7 +143,7 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
                   : 'text-slate-400'
               }
             >
-              {assignedCount} исслед.
+              {assignedCount} назначенных исслед.
               {previewAssignedCount > 0 ? ` · +${previewAssignedCount} в расчёте` : ''}
             </span>
           </div>
@@ -179,11 +191,33 @@ const DoctorCard: React.FC<DoctorCardProps> = ({
             </div>
           ) : studiesState?.error ? (
             <div className="px-4 py-6 text-sm text-amber-600">{studiesState.error}</div>
-          ) : studiesState?.studies?.length ? (
-            <div>{studiesState.studies.map(renderStudyRow)}</div>
+          ) : hasDoctorStudies ? (
+            <div>
+              <div className="border-t border-slate-100 px-4 py-2 text-xs font-semibold text-slate-500">
+                Назначенные исследования за текущий месяц
+              </div>
+              {assignedStudies.length ? (
+                assignedStudies.map(renderStudyRow)
+              ) : (
+                <div className="border-t border-slate-100 px-4 py-3 text-sm text-slate-500">
+                  Нет назначенных исследований
+                </div>
+              )}
+
+              <div className="border-t border-slate-200 px-4 py-2 text-xs font-semibold text-slate-500">
+                Выполненные исследования за текущий месяц
+              </div>
+              {completedStudies.length ? (
+                completedStudies.map(renderStudyRow)
+              ) : (
+                <div className="border-t border-slate-100 px-4 py-3 text-sm text-slate-500">
+                  Нет выполненных исследований
+                </div>
+              )}
+            </div>
           ) : (
             <div className="px-4 py-6 text-sm text-slate-500">
-              У врача нет подтверждённых исследований
+              У врача нет назначенных и выполненных исследований за текущий месяц
             </div>
           )}
         </div>

@@ -7,7 +7,7 @@ import {
   UserCheck,
   Zap,
 } from 'lucide-react';
-import { distributionApi, doctorsApi, studiesApi, studyTypesApi } from '../../services/api';
+import { dashboardApi, distributionApi, doctorsApi, studiesApi, studyTypesApi } from '../../services/api';
 import type {
   Assignment,
   DistResult,
@@ -72,12 +72,20 @@ const OBJECTIVE_DESCRIPTIONS: Record<DistributionObjective, string> = {
     'Быстрый жадный алгоритм для проверки работы модуля без точного MIP-решателя.',
 };
 
+const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const CurrentDistributionView = () => {
   const formatModalityOptionLabel = (value: string) =>
     value.length > 28 ? `${value.slice(0, 28)}...` : value;
   const [studiesTotal, setStudiesTotal] = useState(0);
   const [studies, setStudies] = useState<Study[]>([]);
   const [doctors, setDoctors] = useState<DoctorWithLoad[]>([]);
+  const [doctorCompletedUpById, setDoctorCompletedUpById] = useState<Record<number, number>>({});
   const [studyTypes, setStudyTypes] = useState<StudyType[]>([]);
   const [loading, setLoading] = useState(true);
   const [studiesLoading, setStudiesLoading] = useState(false);
@@ -127,6 +135,11 @@ const CurrentDistributionView = () => {
     return map;
   }, [distResult]);
 
+  const currentMonthLabel = useMemo(
+    () => new Date().toLocaleDateString('ru-RU', { month: 'long' }),
+    []
+  );
+
   const loadStudies = async () => {
     setStudiesLoading(true);
     setError(null);
@@ -165,13 +178,22 @@ const CurrentDistributionView = () => {
     setError(null);
 
     try {
-      const [doctorsData, infoData, studyTypesData] = await Promise.all([
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const [doctorsData, infoData, studyTypesData, statsData] = await Promise.all([
         doctorsApi.getWithLoad(),
         distributionApi.getInfo(),
         studyTypesApi.getAll(),
+        dashboardApi.getStats(formatDate(monthStart), formatDate(monthEnd), false),
       ]);
 
       setDoctors(doctorsData || []);
+      setDoctorCompletedUpById(
+        Object.fromEntries(
+          (statsData.doctor_performance || []).map((item) => [item.doctor_id, item.completed_up || 0])
+        )
+      );
       setDistInfo(infoData || null);
       setStudyTypes(studyTypesData || []);
       loadDrafts();
@@ -662,6 +684,8 @@ const CurrentDistributionView = () => {
                     key={doc.id}
                     doc={doc}
                     distStat={distStatMap[doc.id]}
+                    completedUp={doctorCompletedUpById[doc.id] || 0}
+                    loadMonthLabel={currentMonthLabel}
                     isSelectedForAssign={selectedDoctor === doc.id}
                     isExpanded={expandedDoctor === doc.id}
                     studiesState={doctorStudies[doc.id]}

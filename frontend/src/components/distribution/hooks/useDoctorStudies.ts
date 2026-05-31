@@ -4,7 +4,8 @@ import type { Study } from '../../../types';
 
 export interface DoctorStudiesState {
   loading: boolean;
-  studies: Study[];
+  assignedStudies: Study[];
+  completedStudies: Study[];
   error: string | null;
 }
 
@@ -28,7 +29,7 @@ export const useDoctorStudies = () => {
 
     setDoctorStudies((prev) => ({
       ...prev,
-      [doctorId]: { loading: true, studies: [], error: null },
+      [doctorId]: { loading: true, assignedStudies: [], completedStudies: [], error: null },
     }));
 
     try {
@@ -42,21 +43,32 @@ export const useDoctorStudies = () => {
         return `${year}-${month}-${day}`;
       };
 
-      const studiesData = await studiesApi.getAll({
-        diagnostician_id: doctorId,
-        status: 'confirmed',
-        date_from: formatDate(monthStart),
-        date_to: formatDate(nextMonthStart),
-      });
+      const [assignedData, completedData] = await Promise.all([
+        studiesApi.getAll({
+          diagnostician_id: doctorId,
+          status: 'confirmed',
+          date_from: formatDate(monthStart),
+          date_to: formatDate(nextMonthStart),
+        }),
+        studiesApi.getAll({
+          diagnostician_id: doctorId,
+          status: 'signed',
+          date_from: formatDate(monthStart),
+          date_to: formatDate(nextMonthStart),
+        }),
+      ]);
+
+      const isCurrentMonthStudy = (study: Study) => {
+        const createdAt = study.created_at ? new Date(study.created_at) : null;
+        return Boolean(createdAt && createdAt >= monthStart && createdAt < nextMonthStart);
+      };
 
       setDoctorStudies((prev) => ({
         ...prev,
         [doctorId]: {
           loading: false,
-          studies: (studiesData || []).filter((study) => {
-            const createdAt = study.created_at ? new Date(study.created_at) : null;
-            return Boolean(createdAt && createdAt >= monthStart && createdAt < nextMonthStart);
-          }),
+          assignedStudies: (assignedData || []).filter(isCurrentMonthStudy),
+          completedStudies: (completedData || []).filter(isCurrentMonthStudy),
           error: null,
         },
       }));
@@ -65,7 +77,8 @@ export const useDoctorStudies = () => {
         ...prev,
         [doctorId]: {
           loading: false,
-          studies: [],
+          assignedStudies: [],
+          completedStudies: [],
           error: 'Не удалось загрузить исследования врача',
         },
       }));

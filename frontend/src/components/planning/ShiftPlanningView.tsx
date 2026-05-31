@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { schedulesApi, doctorsApi, studiesApi } from '../../services/api';
+import { schedulesApi, doctorsApi, studiesApi, dashboardApi } from '../../services/api';
 import {
   ChevronLeft,
   ChevronRight,
@@ -25,6 +25,17 @@ interface ScheduleFormData {
 }
 
 type DoctorRecord = Doctor & Record<string, unknown>;
+
+const MONTHLY_UP_LIMIT = 50;
+
+type MonthlyLoadWarning = {
+  doctorName: string;
+  monthLabel: string;
+  completedLoad: number;
+  newShiftUp: number;
+  resultingLoad: number;
+  limit: number;
+};
 
 const DAY_STATUS_OPTIONS = [
   { value: 0, label: 'Рабочий день' },
@@ -57,6 +68,51 @@ const getStartOfWeek = (date: Date) => {
   startOfWeek.setHours(0, 0, 0, 0);
 
   return startOfWeek;
+};
+
+const getIsoWeekYear = (date: Date) => {
+  const target = new Date(date);
+  target.setHours(0, 0, 0, 0);
+  target.setDate(target.getDate() + 3 - ((target.getDay() + 6) % 7));
+  return target.getFullYear();
+};
+
+const getIsoWeekNumber = (date: Date) => {
+  const target = new Date(date);
+  target.setHours(0, 0, 0, 0);
+  target.setDate(target.getDate() + 3 - ((target.getDay() + 6) % 7));
+  const week1 = new Date(target.getFullYear(), 0, 4);
+  return 1 + Math.round(((target.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
+};
+
+const formatIsoWeekValue = (date: Date) => {
+  const week = String(getIsoWeekNumber(date)).padStart(2, '0');
+  return `${getIsoWeekYear(date)}-W${week}`;
+};
+
+const parseIsoWeekValue = (value: string) => {
+  const match = value.match(/^(\d{4})-W(\d{2})$/);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  const januaryFourth = new Date(year, 0, 4);
+  const firstWeekStart = getStartOfWeek(januaryFourth);
+  const weekStart = new Date(firstWeekStart);
+  weekStart.setDate(firstWeekStart.getDate() + (week - 1) * 7);
+  return weekStart;
+};
+
+const getMonthDateRange = (dateValue: string) => {
+  const date = parseLocalDate(dateValue);
+  const start = new Date(date.getFullYear(), date.getMonth(), 1);
+  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+
+  return {
+    dateFrom: formatLocalDate(start),
+    dateTo: formatLocalDate(end),
+    monthLabel: date.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' }),
+  };
 };
 
 const getDayStatusLabel = (schedule?: Schedule | null) => {
@@ -115,6 +171,9 @@ const isDoctorActive = (doctor: Doctor): boolean => {
 const normalizeText = (value?: string | null) =>
   (value || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
 
+const formatUpValue = (value: number) =>
+  new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(value);
+
 const isDisplayableModality = (value?: string | null) => {
   const normalized = normalizeText(value);
   if (!normalized) return false;
@@ -157,6 +216,7 @@ export const ShiftPlanningView: React.FC = () => {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [studies, setStudies] = useState<Study[]>([]);
+  const [doctorMonthlyCompletedLoad, setDoctorMonthlyCompletedLoad] = useState<Record<number, number>>({});
   const [initialLoading, setInitialLoading] = useState(true);
   const [scheduleLoading, setScheduleLoading] = useState(false);
 
@@ -168,6 +228,8 @@ export const ShiftPlanningView: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
+  const [loadWarning, setLoadWarning] = useState<MonthlyLoadWarning | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState<ScheduleFormData>({
     doctor_id: 0,
     work_date: '',
@@ -203,6 +265,15 @@ export const ShiftPlanningView: React.FC = () => {
     const todayWeekStart = formatLocalDate(getStartOfWeek(new Date()));
     return selectedWeekStart === todayWeekStart ? 'Текущая неделя' : 'Выбранная неделя';
   }, [dates]);
+
+  const weekPickerValue = useMemo(() => formatIsoWeekValue(getStartOfWeek(currentDate)), [currentDate]);
+
+  const loadMonthRange = useMemo(() => getMonthDateRange(dates[0]), [dates]);
+
+  const loadMonthShortLabel = useMemo(
+    () => parseLocalDate(dates[0]).toLocaleDateString('ru-RU', { month: 'short' }),
+    [dates]
+  );
 
   const getDoctorIdFromSchedule = (schedule: Schedule, fallback: number): number => {
     if (typeof schedule.doctor === 'object' && schedule.doctor?.id) {
@@ -240,6 +311,34 @@ export const ShiftPlanningView: React.FC = () => {
   useEffect(() => {
     loadDoctors();
   }, [loadDoctors]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadMonthlyCompletedLoad = async () => {
+      try {
+        const stats = await dashboardApi.getStats(loadMonthRange.dateFrom, loadMonthRange.dateTo, false);
+        if (!isMounted) return;
+
+        setDoctorMonthlyCompletedLoad(
+          Object.fromEntries(
+            stats.doctor_performance.map((item) => [item.doctor_id, item.completed_up || 0])
+          )
+        );
+      } catch (err) {
+        console.error('Error loading doctor monthly completed load:', err);
+        if (isMounted) {
+          setDoctorMonthlyCompletedLoad({});
+        }
+      }
+    };
+
+    loadMonthlyCompletedLoad();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [loadMonthRange.dateFrom, loadMonthRange.dateTo]);
 
   useEffect(() => {
     let isMounted = true;
@@ -287,7 +386,10 @@ export const ShiftPlanningView: React.FC = () => {
 
   const handleWeekPickerChange = (value: string) => {
     if (!value) return;
-    setCurrentDate(parseLocalDate(value));
+    const weekStart = parseIsoWeekValue(value);
+    if (weekStart) {
+      setCurrentDate(weekStart);
+    }
   };
 
   const handleOpenModal = (doctorId: number, date: string, schedule?: Schedule) => {
@@ -317,6 +419,7 @@ export const ShiftPlanningView: React.FC = () => {
       });
     }
     setModalError(null);
+    setLoadWarning(null);
     setIsModalOpen(true);
   };
 
@@ -324,13 +427,44 @@ export const ShiftPlanningView: React.FC = () => {
     setIsModalOpen(false);
     setEditingSchedule(null);
     setModalError(null);
+    setLoadWarning(null);
+    setIsSaving(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const getMonthlyCompletedLoad = async () => {
+    const { dateFrom, dateTo, monthLabel } = getMonthDateRange(formData.work_date);
+    const stats = await dashboardApi.getStats(dateFrom, dateTo, false);
+    const doctorStats = stats.doctor_performance.find((item) => item.doctor_id === formData.doctor_id);
+    const completedLoad = doctorStats?.completed_up || 0;
+
+    return { completedLoad, monthLabel };
+  };
+
+  const saveSchedule = async (allowOverload = false) => {
     setModalError(null);
+    setIsSaving(true);
     try {
       const isWorking = formData.day_status === 0;
+      const plannedUp = isWorking ? Math.max(Number(formData.planned_up) || 0, 0) : 0;
+
+      if (isWorking && plannedUp > 0 && !allowOverload) {
+        const { completedLoad, monthLabel } = await getMonthlyCompletedLoad();
+        const resultingLoad = completedLoad + plannedUp;
+
+        if (resultingLoad > MONTHLY_UP_LIMIT) {
+          const doctor = doctors.find((item) => item.id === formData.doctor_id);
+          setLoadWarning({
+            doctorName: doctor?.fio_alias || `Врач ${formData.doctor_id}`,
+            monthLabel,
+            completedLoad,
+            newShiftUp: plannedUp,
+            resultingLoad,
+            limit: MONTHLY_UP_LIMIT,
+          });
+          return;
+        }
+      }
+
       const submitData = {
         doctor_id: formData.doctor_id,
         work_date: formData.work_date,
@@ -339,7 +473,7 @@ export const ShiftPlanningView: React.FC = () => {
         break_start: isWorking ? (formData.break_start || null) : null,
         break_end: isWorking ? (formData.break_end || null) : null,
         day_status: formData.day_status,
-        planned_up: isWorking ? formData.planned_up : 0,
+        planned_up: plannedUp,
       };
 
       if (editingSchedule) {
@@ -354,7 +488,14 @@ export const ShiftPlanningView: React.FC = () => {
     } catch (error) {
       console.error('Error saving schedule:', error);
       setModalError(`Не удалось сохранить смену: ${getErrorMessage(error)}`);
+    } finally {
+      setIsSaving(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await saveSchedule(false);
   };
 
   const handleDelete = async () => {
@@ -575,10 +716,10 @@ export const ShiftPlanningView: React.FC = () => {
 
               <label className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700">
                 <CalendarDays size={16} />
-                <span>Выбрать дату</span>
+                <span>Выбрать неделю</span>
                 <input
-                  type="date"
-                  value={formatLocalDate(currentDate)}
+                  type="week"
+                  value={weekPickerValue}
                   onChange={(e) => handleWeekPickerChange(e.target.value)}
                   className="h-8 w-[8.8rem] rounded-xl border border-slate-200 bg-slate-50 px-2 text-xs text-slate-700 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                 />
@@ -631,10 +772,30 @@ export const ShiftPlanningView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {visibleDoctors.map((doc) => (
+              {visibleDoctors.map((doc) => {
+                const completedUp = doctorMonthlyCompletedLoad[doc.id] || 0;
+                const isMonthlyOverload = completedUp > MONTHLY_UP_LIMIT;
+
+                return (
                 <tr key={doc.id} className="hover:bg-slate-50">
                   <td className="px-4 md:px-6 py-4 font-medium text-slate-900 sticky left-0 bg-white z-10 shadow-sm">
                     <div className="text-sm">{doc.fio_alias}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
+                      <span
+                        className={`rounded-full px-2 py-1 leading-none ${
+                          isMonthlyOverload
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-blue-50 text-blue-700'
+                        }`}
+                      >
+                        Факт за {loadMonthShortLabel}: {formatUpValue(completedUp)} / {MONTHLY_UP_LIMIT} УП
+                      </span>
+                      {isMonthlyOverload && (
+                        <span className="rounded-full bg-amber-100 px-2 py-1 leading-none text-amber-700">
+                          переработка
+                        </span>
+                      )}
+                    </div>
                     {getDoctorModalities(doc).length > 0 && (
                       <div className="mt-2 flex max-w-[240px] flex-wrap gap-1">
                         {getDoctorModalities(doc).slice(0, 2).map((modality) => (
@@ -700,7 +861,8 @@ export const ShiftPlanningView: React.FC = () => {
                     );
                   })}
                 </tr>
-              ))}
+                );
+              })}
               {visibleDoctors.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-6 py-10 text-center text-sm text-slate-500">
@@ -862,15 +1024,17 @@ export const ShiftPlanningView: React.FC = () => {
               <div className="flex flex-col gap-3 pt-4 sm:flex-row">
                 <button
                   type="submit"
-                  className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-700"
+                  disabled={isSaving}
+                  className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {editingSchedule ? 'Сохранить' : 'Добавить'}
+                  {isSaving ? 'Сохраняем...' : editingSchedule ? 'Сохранить' : 'Добавить'}
                 </button>
                 {editingSchedule && (
                   <button
                     type="button"
                     onClick={handleDelete}
-                    className="rounded-xl bg-amber-600 px-4 py-2.5 font-semibold text-white hover:bg-amber-700"
+                    disabled={isSaving}
+                    className="rounded-xl bg-amber-600 px-4 py-2.5 font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Удалить
                   </button>
@@ -878,12 +1042,65 @@ export const ShiftPlanningView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  className="flex-1 rounded-xl bg-slate-100 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-200"
+                  disabled={isSaving}
+                  className="flex-1 rounded-xl bg-slate-100 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Отмена
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {loadWarning && (
+        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-950/55 sm:items-center sm:p-4">
+          <div className="w-full max-w-md rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-xl">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                <AlertCircle size={22} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-950">Превышение месячной нагрузки</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  У врача {loadWarning.doctorName} нагрузка за {loadWarning.monthLabel} после назначения смены превысит {loadWarning.limit} УП.
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <div className="flex justify-between gap-3">
+                <span>Выполнено за месяц</span>
+                <strong>{loadWarning.completedLoad} УП</strong>
+              </div>
+              <div className="mt-1 flex justify-between gap-3">
+                <span>Новая смена</span>
+                <strong>+{loadWarning.newShiftUp} УП</strong>
+              </div>
+              <div className="mt-2 flex justify-between gap-3 border-t border-amber-200 pt-2">
+                <span>После назначения</span>
+                <strong>{loadWarning.resultingLoad} УП</strong>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => saveSchedule(true)}
+                disabled={isSaving}
+                className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSaving ? 'Сохраняем...' : 'Подтвердить назначение'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setLoadWarning(null)}
+                disabled={isSaving}
+                className="flex-1 rounded-xl bg-slate-100 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Отменить
+              </button>
+            </div>
           </div>
         </div>
       )}
