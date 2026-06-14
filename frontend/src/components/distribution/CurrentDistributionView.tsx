@@ -444,7 +444,7 @@ const CurrentDistributionView = () => {
 
             <div className="min-w-0">
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Критерий распределения
+                Модель распределения
               </label>
               <select
                 value={objective}
