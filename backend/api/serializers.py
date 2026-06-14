@@ -345,6 +345,17 @@ class DoctorPerformanceSerializer(serializers.Serializer):
     max_daily_completed_up = serializers.FloatField()
 
 
+class ModalityBreakdownSerializer(serializers.Serializer):
+    modality = serializers.CharField()
+    studies_count = serializers.IntegerField()
+    completed_studies = serializers.IntegerField()
+    pending_studies = serializers.IntegerField()
+    total_up = serializers.FloatField()
+    completed_up = serializers.FloatField()
+    share_percent = serializers.FloatField()
+    completion_rate_percent = serializers.FloatField()
+
+
 class DashboardStatsSerializer(serializers.Serializer):
     total_studies = serializers.IntegerField()
     completed_studies = serializers.IntegerField()
@@ -355,6 +366,7 @@ class DashboardStatsSerializer(serializers.Serializer):
     asap_studies = serializers.IntegerField()
     doctor_daily_up_stats = DoctorDailyUpStatsSerializer()
     doctor_performance = DoctorPerformanceSerializer(many=True)
+    modality_breakdown = ModalityBreakdownSerializer(many=True)
 
 
 class ChartDataSerializer(serializers.Serializer):

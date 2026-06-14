@@ -27,6 +27,12 @@ npm run build
 npm run preview
 ```
 
+Тесты:
+
+```bash
+npm run test:run
+```
+
 По умолчанию API подключен в `src/services/api.ts` по адресу `http://localhost:8000/api`.
 
 ## Структура
@@ -85,6 +91,8 @@ API-клиент находится в `src/services/api.ts`. Он:
 
 - `npm run dev` - dev-сервер Vite.
 - `npm run build` - TypeScript-проверка и production-сборка.
+- `npm run test` - запуск Vitest в watch-режиме.
+- `npm run test:run` - однократный запуск фронтенд-тестов.
 - `npm run preview` - локальный preview production-сборки.
 
 ## Типы

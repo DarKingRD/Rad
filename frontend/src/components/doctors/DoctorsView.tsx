@@ -1,9 +1,29 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, X, Search, ArrowUpDown } from 'lucide-react';
-import { doctorsApi } from '../../services/api';
+import { AlertCircle, Plus, X, Search, ArrowUpDown, ChevronDown, Check } from 'lucide-react';
+import { dashboardApi, doctorsApi } from '../../services/api';
 import { Doctor, DoctorWithLoad } from '../../types';
 
 const DAILY_UP_DEFAULT = 8;
+const MODALITY_OPTIONS = [
+  'Флюорографическое исследование',
+  'Маммографическое исследование совместно с искусственным интеллектом',
+  'Рентгенгеновское исследование',
+  'Компьютерная томограмма',
+  'Компьютерная томограмма с контрастом',
+  'Магнитно-резонансная томограмма',
+  'Магнитно-резонансная томограмма с контрастом',
+  'Суточное мониторирование артериального давления',
+  'Электрокардиография',
+  'Холтеровское мониторирование электрокардиографии',
+  'Электроэнцефалографическое исследование',
+];
+
+const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 interface DoctorFormData {
   fio_alias: string;
@@ -24,6 +44,8 @@ export const DoctorsView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isModalitySelectOpen, setIsModalitySelectOpen] = useState(false);
 
   const sortedDoctors = useMemo(() => {
     let result = [...doctors];
@@ -48,8 +70,8 @@ export const DoctorsView: React.FC = () => {
 
     if (sortColumn && sortDirection) {
       result = result.sort((a, b) => {
-        let valA: any;
-        let valB: any;
+        let valA: string | number;
+        let valB: string | number;
         switch (sortColumn) {
           case 'fio_alias':
             valA = (a.fio_alias || '').toLowerCase();
@@ -126,8 +148,28 @@ export const DoctorsView: React.FC = () => {
   const loadDoctors = async () => {
     try {
       setLoading(true);
-      const doctorsData = await doctorsApi.getWithLoad();
-      setDoctors(doctorsData);
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const [doctorsData, statsData] = await Promise.all([
+        doctorsApi.getWithLoad(),
+        dashboardApi.getStats(formatDate(monthStart), formatDate(monthEnd), false),
+      ]);
+      const completedUpByDoctor = Object.fromEntries(
+        (statsData.doctor_performance || []).map((item) => [item.doctor_id, item.completed_up || 0])
+      );
+
+      setDoctors(
+        doctorsData.map((doctor) => {
+          const currentLoad = completedUpByDoctor[doctor.id] || 0;
+          const maxLoad = doctor.max_load || 50;
+          return {
+            ...doctor,
+            current_load: currentLoad,
+            load_percentage: maxLoad > 0 ? Math.round((currentLoad / maxLoad) * 1000) / 10 : 0,
+          };
+        })
+      );
     } catch (err) {
       console.error('Error loading doctors:', err);
     } finally {
@@ -157,17 +199,34 @@ export const DoctorsView: React.FC = () => {
       setEditingDoctor(null);
       setFormData(getDefaultFormData());
     }
+    setFormError(null);
+    setIsModalitySelectOpen(false);
     setIsModalOpen(true);
   };
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setEditingDoctor(null);
+    setFormError(null);
+    setIsModalitySelectOpen(false);
     setFormData(getDefaultFormData());
+  };
+
+  const toggleModality = (modality: string) => {
+    setFormData((prev) => {
+      const isSelected = prev.modality.includes(modality);
+      return {
+        ...prev,
+        modality: isSelected
+          ? prev.modality.filter((item) => item !== modality)
+          : [...prev.modality, modality],
+      };
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     try {
       if (editingDoctor) {
         await doctorsApi.update(editingDoctor.id, formData);
@@ -179,7 +238,7 @@ export const DoctorsView: React.FC = () => {
     } catch (error) {
       console.error('Error saving doctor:', error);
       const message = error instanceof Error ? error.message : 'Ошибка при сохранении врача';
-      alert(message);
+      setFormError(message);
     }
   };
 
@@ -192,22 +251,25 @@ export const DoctorsView: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <h2 className="text-xl md:text-2xl font-bold text-slate-900">
-          Врачи
-          <span className="ml-2 text-sm font-normal text-slate-400">({sortedDoctors.length})</span>
-        </h2>
+    <div className="space-y-5 md:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-950">
+            Врачи
+            <span className="ml-2 text-sm font-normal text-slate-400">({sortedDoctors.length})</span>
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">Справочник специалистов, модальности и текущая нагрузка</p>
+        </div>
         <button
           onClick={() => handleOpenModal()}
-          className="px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 whitespace-nowrap shadow-sm self-start sm:self-auto"
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 sm:self-auto"
         >
           <Plus size={18} /> Добавить врача
         </button>
       </div>
 
-      <div className="relative">
-        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+      <div className="relative rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-5">
           <Search size={18} className="text-slate-400" />
         </div>
         <input
@@ -215,20 +277,20 @@ export const DoctorsView: React.FC = () => {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Поиск по ФИО, специализации..."
-          className="w-full pl-11 pr-10 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm"
+          className="w-full rounded-xl border border-transparent bg-slate-50 py-2.5 pl-11 pr-10 text-sm transition focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-100"
         />
         {searchQuery && (
           <button
             onClick={() => setSearchQuery('')}
-            className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors"
+            className="absolute inset-y-0 right-0 flex items-center pr-5 text-slate-400 transition-colors hover:text-slate-600"
           >
             <X size={18} />
           </button>
         )}
       </div>
 
-      <div className="hidden md:block bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <table className="w-full text-left text-sm">
+      <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm md:block">
+        <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="px-6 py-4 font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort('fio_alias')}>
@@ -277,14 +339,14 @@ export const DoctorsView: React.FC = () => {
                     )}
                   </td>
                   <td className="px-6 py-4">
-                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${doc.is_active ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${doc.is_active ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
                       {doc.is_active ? 'Активен' : 'В архиве'}
                     </span>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2 min-w-[140px]">
                       <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full transition-all ${doc.load_percentage > 95 ? 'bg-red-500' : doc.load_percentage > 80 ? 'bg-amber-400' : 'bg-green-500'}`}
+                        <div className={`h-full rounded-full transition-all ${doc.load_percentage > 95 ? 'bg-amber-500' : doc.load_percentage > 80 ? 'bg-amber-400' : 'bg-blue-500'}`}
                           style={{ width: `${Math.min(doc.load_percentage, 100)}%` }} />
                       </div>
                       <span className="text-xs text-slate-600 whitespace-nowrap">{doc.current_load.toFixed(1)} / {doc.max_load} УП</span>
@@ -299,7 +361,7 @@ export const DoctorsView: React.FC = () => {
               ))
             )}
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       <div className="md:hidden space-y-3">
@@ -309,20 +371,20 @@ export const DoctorsView: React.FC = () => {
           </div>
         ) : (
           sortedDoctors.map((doc) => (
-            <div key={doc.id} className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
+            <div key={doc.id} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="font-semibold text-slate-900 text-sm">{doc.fio_alias || 'Не указано'}</div>
                   <div className="text-xs text-slate-500 mt-0.5">{doc.specialty || doc.position_type || '—'}</div>
                 </div>
-                <span className={`shrink-0 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${doc.is_active ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                <span className={`shrink-0 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${doc.is_active ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
                   {doc.is_active ? 'Активен' : 'В архиве'}
                 </span>
               </div>
               {doc.modality && doc.modality.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {doc.modality.map((mod, i) => (
-                    <span key={i} className="px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-800 border border-blue-200">{mod}</span>
+                    <span key={i} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-800">{mod}</span>
                   ))}
                 </div>
               )}
@@ -332,7 +394,7 @@ export const DoctorsView: React.FC = () => {
                   <span className="font-medium text-slate-700">{doc.current_load.toFixed(1)} / {doc.max_load} УП</span>
                 </div>
                 <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full ${doc.load_percentage > 95 ? 'bg-red-500' : doc.load_percentage > 80 ? 'bg-amber-400' : 'bg-green-500'}`}
+                  <div className={`h-full rounded-full ${doc.load_percentage > 95 ? 'bg-amber-500' : doc.load_percentage > 80 ? 'bg-amber-400' : 'bg-blue-500'}`}
                     style={{ width: `${Math.min(doc.load_percentage, 100)}%` }} />
                 </div>
               </div>
@@ -348,9 +410,9 @@ export const DoctorsView: React.FC = () => {
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 sm:p-4">
-          <div className="bg-white sm:rounded-2xl shadow-2xl max-w-lg w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto rounded-t-2xl">
-            <div className="flex justify-between items-center p-5 border-b border-slate-200 sticky top-0 bg-white z-10">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4">
+          <div className="max-h-[95dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white shadow-lg sm:max-h-[90vh] sm:rounded-xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-5">
               <h3 className="text-lg font-bold text-slate-900">
                 {editingDoctor ? 'Редактировать врача' : 'Добавить врача'}
               </h3>
@@ -363,6 +425,13 @@ export const DoctorsView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSubmit} className="p-5 space-y-5">
+              {formError && (
+                <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
+                  <AlertCircle size={17} className="mt-0.5 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">
                   ФИО
@@ -371,7 +440,7 @@ export const DoctorsView: React.FC = () => {
                   type="text"
                   value={formData.fio_alias}
                   onChange={(e) => setFormData({ ...formData, fio_alias: e.target.value })}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                   required
                 />
               </div>
@@ -383,7 +452,7 @@ export const DoctorsView: React.FC = () => {
                 <select
                   value={formData.position_type}
                   onChange={(e) => setFormData({ ...formData, position_type: e.target.value })}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                 >
                   <option value="radiologist">Рентгенолог</option>
                   <option value="diagnostician">КТ-диагност</option>
@@ -399,7 +468,7 @@ export const DoctorsView: React.FC = () => {
                   type="number"
                   value={formData.max_up_per_day}
                   onChange={(e) => setFormData({ ...formData, max_up_per_day: Number(e.target.value) || DAILY_UP_DEFAULT })}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
                   min="1"
                   required
                 />
@@ -407,26 +476,71 @@ export const DoctorsView: React.FC = () => {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  Модальности (через запятую)
+                  Модальности
                 </label>
-                <input
-                  type="text"
-                  value={formData.modality.join(', ')}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      modality: e.target.value
-                        .split(',')
-                        .map((m) => m.trim())
-                        .filter(Boolean),
-                    })
-                  }
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                  placeholder="Например: Компьютерная томограмма, Рентгенгеновское исследование"
-                />
-                <p className="text-xs text-slate-500 mt-1.5">
-                  Лучше использовать полные названия модальностей из положения ОМС.
-                </p>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsModalitySelectOpen((value) => !value)}
+                    className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-left text-sm transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
+                  >
+                    <span className={formData.modality.length ? 'text-slate-900' : 'text-slate-400'}>
+                      {formData.modality.length
+                        ? `Выбрано: ${formData.modality.length}`
+                        : 'Выберите модальности'}
+                    </span>
+                    <ChevronDown
+                      size={18}
+                      className={`shrink-0 text-slate-400 transition ${isModalitySelectOpen ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+
+                  {isModalitySelectOpen && (
+                    <div className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                      {MODALITY_OPTIONS.map((modality) => {
+                        const isSelected = formData.modality.includes(modality);
+                        return (
+                          <button
+                            key={modality}
+                            type="button"
+                            onClick={() => toggleModality(modality)}
+                            className={`flex w-full items-start gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+                              isSelected ? 'bg-blue-50 text-blue-900' : 'text-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            <span
+                              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                isSelected
+                                  ? 'border-blue-600 bg-blue-600 text-white'
+                                  : 'border-slate-300 bg-white'
+                              }`}
+                            >
+                              {isSelected && <Check size={12} />}
+                            </span>
+                            <span className="leading-5">{modality}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {formData.modality.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {formData.modality.map((modality) => (
+                      <button
+                        key={modality}
+                        type="button"
+                        onClick={() => toggleModality(modality)}
+                        className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800 transition hover:bg-blue-100"
+                        title="Убрать модальность"
+                      >
+                        <span className="truncate">{modality}</span>
+                        <X size={13} className="shrink-0" />
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center">
@@ -435,24 +549,24 @@ export const DoctorsView: React.FC = () => {
                   id="is_active"
                   checked={formData.is_active}
                   onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                  className="w-5 h-5 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                  className="h-5 w-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 />
                 <label htmlFor="is_active" className="ml-3 text-sm font-medium text-slate-700">
                   Активен
                 </label>
               </div>
 
-              <div className="flex gap-4 pt-6">
+              <div className="flex flex-col gap-3 pt-4 sm:flex-row">
                 <button
                   type="submit"
-                  className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm"
+                  className="flex-1 rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white shadow-sm transition hover:bg-blue-700"
                 >
                   {editingDoctor ? 'Сохранить изменения' : 'Добавить врача'}
                 </button>
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  className="flex-1 px-6 py-3 bg-slate-100 text-slate-700 rounded-lg font-medium hover:bg-slate-200 transition-colors"
+                  className="flex-1 rounded-xl bg-slate-100 px-6 py-3 font-semibold text-slate-700 transition hover:bg-slate-200"
                 >
                   Отмена
                 </button>

@@ -1,4 +1,5 @@
 import { FormEvent, useState } from 'react';
+import { Activity, LockKeyhole } from 'lucide-react';
 import { authApi, ApiClientError } from '../../services/api';
 
 type LoginViewProps = {
@@ -28,27 +29,60 @@ export function LoginView({ onSuccess }: LoginViewProps) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex items-center justify-center px-4">
-      <form onSubmit={handleSubmit} className="w-full max-w-md bg-white shadow-lg rounded-2xl p-8 space-y-5">
-        <h1 className="text-2xl font-semibold text-slate-900">Вход для руководителя службы</h1>
-        <p className="text-sm text-slate-500">Введите учетные данные для доступа к RadPlan.</p>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">Логин</label>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full border rounded-lg px-3 py-2" required />
+    <div className="min-h-dvh bg-slate-50 px-4 py-8 flex items-center justify-center">
+      <div className="w-full max-w-md">
+        <div className="mb-6 flex items-center justify-center gap-2 text-blue-600">
+          <Activity size={30} />
+          <span className="text-2xl font-bold tracking-tight text-slate-950">РадПлан</span>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium mb-1">Пароль</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border rounded-lg px-3 py-2" required />
-        </div>
+        <form onSubmit={handleSubmit} className="rounded-xl border border-slate-200 bg-white p-5 shadow-md sm:p-8">
+          <div className="mb-6 rounded-xl bg-blue-50 p-4 text-blue-800">
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm">
+              <LockKeyhole size={20} />
+            </div>
+            <h1 className="text-xl font-semibold text-slate-950 sm:text-2xl">Вход в РадПлан</h1>
+            <p className="mt-1 text-sm text-slate-600">Доступ для руководителя и врачей.</p>
+          </div>
 
-        {error ? <p className="text-sm text-rose-600">{error}</p> : null}
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Логин</label>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
+                required
+              />
+            </div>
 
-        <button type="submit" disabled={isLoading} className="w-full bg-blue-600 text-white rounded-lg py-2.5 font-medium disabled:opacity-60">
-          {isLoading ? 'Входим...' : 'Войти'}
-        </button>
-      </form>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Пароль</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-slate-900 transition focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-100"
+                required
+              />
+            </div>
+          </div>
+
+          {error ? (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              {error}
+            </div>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="mt-6 w-full rounded-xl bg-blue-600 py-3 font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isLoading ? 'Проверяем...' : 'Войти'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

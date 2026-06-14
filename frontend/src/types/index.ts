@@ -1,5 +1,3 @@
-// === ОСНОВНЫЕ ТИПЫ ДАННЫХ ===
-
 export interface Doctor {
   id: number;
   fio_alias: string;
@@ -68,6 +66,28 @@ export interface DashboardStats {
   asap_studies: number;
   doctor_daily_up_stats: DoctorDailyUpStats;
   doctor_performance: DoctorPerformance[];
+  modality_breakdown: ModalityBreakdown[];
+}
+
+export interface DoctorPeriodStats {
+  assigned: number;
+  completed: number;
+  pending: number;
+  completed_up: number;
+}
+
+export interface DoctorMonthlyStats extends DoctorPeriodStats {
+  month: string | null;
+}
+
+export interface DoctorPortalProfile {
+  doctor: Doctor;
+  available_modalities: string[];
+  stats: {
+    today: DoctorPeriodStats;
+    current_month: DoctorPeriodStats;
+    previous_months: DoctorMonthlyStats[];
+  };
 }
 
 export interface DoctorDailyUpStats {
@@ -88,6 +108,17 @@ export interface DoctorPerformance {
   max_daily_completed_up: number;
 }
 
+export interface ModalityBreakdown {
+  modality: string;
+  studies_count: number;
+  completed_studies: number;
+  pending_studies: number;
+  total_up: number;
+  completed_up: number;
+  share_percent: number;
+  completion_rate_percent: number;
+}
+
 export interface ChartData {
   name: string;
   plan: string | number;
@@ -102,8 +133,6 @@ export interface KPICardProps {
   subtext: string;
   trend?: number;
 }
-
-// === ПРОГНОЗ СМЕН ===
 
 export interface ForecastModalityItem {
   modality: string;
@@ -194,8 +223,6 @@ export interface ForecastCompareResponse {
   };
 }
 
-// === РАСПРЕДЕЛЕНИЕ ===
-
 export interface DoctorDistStat {
   doctor_id: number;
   doctor_name: string;
@@ -209,8 +236,8 @@ export interface DoctorDistStat {
 export interface Assignment {
   study_number: string;
   study_modality?: string[];
-  doctor_id: number;
-  doctor_name: string;
+  doctor_id: number | null;
+  doctor_name: string | null;
   doctor_modality?: string[];
   priority: 'normal' | 'cito' | 'asap' | string;
   deadline: string;
@@ -324,7 +351,8 @@ export type DistributionObjective =
   | 'weighted_tardiness_lexicographic'
   | 'tardiness_lexicographic'
   | 'max_assignments'
-  | 'priority_tier_tardiness_multipass';
+  | 'priority_tier_tardiness_multipass'
+  | 'greedy_developer';
 
 export interface DistributionPreviewPayload {
   date: string;

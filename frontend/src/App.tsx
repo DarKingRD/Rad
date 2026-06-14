@@ -3,19 +3,26 @@ import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { ShiftPlanningView } from './components/planning/ShiftPlanningView';
-import CurrentDistributionView  from './components/distribution/CurrentDistributionView';
+import CurrentDistributionView from './components/distribution/CurrentDistributionView';
 import { DoctorsView } from './components/doctors/DoctorsView';
 import { ReportsView } from './components/reports/ReportsView';
-import {LoginView} from './components/auth/LoginView';
-import {authApi } from './services/api';
+import { LoginView } from './components/auth/LoginView';
+import { DoctorPortalView } from './components/doctor/DoctorPortalView';
+import { authApi } from './services/api';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [refreshKey, setRefreshKey] = useState(0);
   const [isAuthenticated, setIsAuthenticated] = useState(authApi.isAuthenticated());
   const currentUser = authApi.getCurrentUser();
+  const isDoctorAccount =
+    currentUser?.role === 'doctor' ||
+    Boolean(currentUser?.doctor_id) ||
+    /^doctor_\d+$/i.test(currentUser?.username || '') ||
+    /^\d+$/.test(currentUser?.username || '');
   const renderContent = () => {
     switch (activeTab) {
-      case 'dashboard': return <DashboardView />;
+      case 'dashboard': return <DashboardView onNavigate={setActiveTab} />;
       case 'planning': return <ShiftPlanningView />;
       case 'distribution': return <CurrentDistributionView />;
       case 'doctors': return <DoctorsView />;
@@ -25,10 +32,10 @@ export default function App() {
   };
 
   const handleRefresh = () => {
-    window.location.reload();
+    setRefreshKey((prev) => prev + 1);
   };
 
-    const handleLogout = () => {
+  const handleLogout = () => {
     authApi.logout();
     setIsAuthenticated(false);
   };
@@ -37,11 +44,15 @@ export default function App() {
     return <LoginView onSuccess={() => setIsAuthenticated(true)} />;
   }
 
+  if (isDoctorAccount) {
+    return <DoctorPortalView onLogout={handleLogout} />;
+  }
+
   const accountName = currentUser?.full_name || currentUser?.username || 'Руководитель службы';
   const accountRole = currentUser?.username ? `Логин: ${currentUser.username}` : 'Авторизованный пользователь';
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
+    <div className="flex h-dvh overflow-hidden bg-slate-50 font-sans text-slate-900">
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -50,7 +61,7 @@ export default function App() {
         onLogout={handleLogout}
       />
       
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex min-w-0 flex-col overflow-hidden">
         <Header 
           currentDate={new Date().toLocaleDateString('ru-RU', { 
             day: 'numeric', 
@@ -60,11 +71,11 @@ export default function App() {
           })} 
           onRefresh={handleRefresh}
         />
-        <div className="px-8 pt-4">
-        </div>
-        <main className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-7xl mx-auto">
-            {renderContent()}
+        <main className="flex-1 overflow-y-auto px-4 py-4 pb-24 md:px-6 md:py-6 md:pb-6 xl:px-8">
+          <div className="mx-auto w-full max-w-[1480px]">
+            <div key={`${activeTab}-${refreshKey}`}>
+              {renderContent()}
+            </div>
           </div>
         </main>
       </div>

@@ -3,7 +3,9 @@ import logging
 import uuid
 
 from django.core.cache import cache
-from django.db.models import Case, F, IntegerField, Max, Min, Sum, When
+from django.contrib.auth.models import User
+from django.db.models import Case, Count, IntegerField, Max, Min, Q, Sum, When
+from django.db.models.functions import TruncMonth
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -34,6 +36,7 @@ from .serializers import (
     StudyTypeSerializer,
 )
 from .services.doctor_queries import get_doctors_with_load_context
+from .services.modality_catalog import DISPLAY_MODALITIES
 from .services.study_queries import (
     get_pending_studies_queryset,
     get_priority_studies_queryset,
@@ -60,6 +63,175 @@ from .services.shift_forecast_multi_method import (
 )
 
 logger = logging.getLogger(__name__)
+DOCTOR_LOGIN_PREFIX = "doctor_" # подредачить!
+ADMIN_NOTIFICATIONS_CACHE_KEY = "admin_notifications"
+ADMIN_NOTIFICATIONS_LIMIT = 50
+
+
+def _resolve_doctor_from_username(username):
+    if not username:
+        return None
+
+    normalized = username.strip().lower()
+    doctor_id_part = None
+    if normalized.startswith(DOCTOR_LOGIN_PREFIX):
+        doctor_id_part = normalized.removeprefix(DOCTOR_LOGIN_PREFIX)
+    elif normalized.isdigit():
+        doctor_id_part = normalized
+
+    if not doctor_id_part or not doctor_id_part.isdigit():
+        return None
+
+    return Doctor.objects.filter(id=int(doctor_id_part), is_active=True).first()
+
+
+def _get_user_doctor(user):
+    if not user or not user.is_authenticated:
+        return None
+    if user.is_staff or user.is_superuser:
+        return None
+    return _resolve_doctor_from_username(user.username)
+
+
+def _build_user_payload(user):
+    doctor = _get_user_doctor(user)
+    payload = {
+        "id": user.id,
+        "username": user.username,
+        "full_name": user.get_full_name() or user.username,
+        "role": "doctor" if doctor else "manager",
+        "doctor_id": doctor.id if doctor else None,
+        "doctor_name": doctor.fio_alias if doctor else None,
+    }
+    return payload
+
+
+def _authenticate_doctor_default(username, password):
+    doctor = _resolve_doctor_from_username(username)
+    if not doctor:
+        return None
+
+    allowed_passwords = {username, f"{DOCTOR_LOGIN_PREFIX}{doctor.id}"}
+    if password not in allowed_passwords:
+        return None
+
+    user, created = User.objects.get_or_create(
+        username=f"{DOCTOR_LOGIN_PREFIX}{doctor.id}",
+        defaults={
+            "first_name": doctor.fio_alias or f"Врач {doctor.id}",
+            "is_staff": False,
+            "is_superuser": False,
+        },
+    )
+    if created or not user.has_usable_password():
+        user.set_password(password)
+        user.save(update_fields=["password"])
+    return authenticate(username=user.username, password=password)
+
+
+def _doctor_required_response(request):
+    doctor = _get_user_doctor(request.user)
+    if doctor is None:
+        return None, Response(
+            {"detail": "Раздел доступен только врачу."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return doctor, None
+
+
+def _study_up_sum(queryset):
+    value = queryset.aggregate(total=Sum("study_type__up_value"))["total"] or 0
+    return round(float(value), 3)
+
+
+def _build_doctor_period_stats(doctor, start_dt, end_dt):
+    qs = Study.objects.filter(
+        diagnostician=doctor,
+        created_at__gte=start_dt,
+        created_at__lt=end_dt,
+    )
+    completed_qs = qs.filter(status="signed")
+    return {
+        "assigned": qs.count(),
+        "completed": completed_qs.count(),
+        "pending": qs.filter(status="confirmed").count(),
+        "completed_up": _study_up_sum(completed_qs),
+    }
+
+
+def _month_bounds(year, month):
+    start = timezone.make_aware(datetime(year, month, 1))
+    if month == 12:
+        end = timezone.make_aware(datetime(year + 1, 1, 1))
+    else:
+        end = timezone.make_aware(datetime(year, month + 1, 1))
+    return start, end
+
+
+def _doctor_statistics_payload(doctor):
+    today = timezone.localdate()
+    today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+    tomorrow_start = today_start + timedelta(days=1)
+    month_start, next_month_start = _month_bounds(today.year, today.month)
+
+    previous_months_qs = (
+        Study.objects.filter(
+            diagnostician=doctor,
+            created_at__lt=month_start,
+            created_at__isnull=False,
+        )
+        .annotate(month=TruncMonth("created_at"))
+        .values("month")
+        .annotate(
+            assigned=Count("research_number"),
+            completed=Count("research_number", filter=Q(status="signed")),
+            pending=Count("research_number", filter=Q(status="confirmed")),
+            completed_up=Sum("study_type__up_value", filter=Q(status="signed")),
+        )
+        .order_by("-month")[:6]
+    )
+
+    previous_months = [
+        {
+            "month": item["month"].date().isoformat() if item["month"] else None,
+            "assigned": item["assigned"],
+            "completed": item["completed"],
+            "pending": item["pending"],
+            "completed_up": round(float(item["completed_up"] or 0), 3),
+        }
+        for item in previous_months_qs
+    ]
+
+    return {
+        "today": _build_doctor_period_stats(doctor, today_start, tomorrow_start),
+        "current_month": _build_doctor_period_stats(doctor, month_start, next_month_start),
+        "previous_months": previous_months,
+    }
+
+
+def _get_admin_notifications():
+    return cache.get(ADMIN_NOTIFICATIONS_CACHE_KEY, [])
+
+
+def _set_admin_notifications(notifications):
+    cache.set(
+        ADMIN_NOTIFICATIONS_CACHE_KEY,
+        notifications[:ADMIN_NOTIFICATIONS_LIMIT],
+        timeout=None,
+    )
+
+
+def _push_admin_notification(message, notification_type="study_completed", payload=None):
+    notification = {
+        "id": str(uuid.uuid4()),
+        "type": notification_type,
+        "message": message,
+        "created_at": timezone.now().isoformat(),
+        "payload": payload or {},
+    }
+    notifications = [notification, *_get_admin_notifications()]
+    _set_admin_notifications(notifications)
+    return notification
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -162,11 +334,14 @@ class StudyViewSet(viewsets.ReadOnlyModelViewSet):
         priority = self.request.query_params.get("priority")
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
+        diagnostician_id = self.request.query_params.get("diagnostician_id")
 
         if status_param:
             queryset = queryset.filter(status=status_param)
         if priority:
             queryset = queryset.filter(priority=priority)
+        if diagnostician_id:
+            queryset = queryset.filter(diagnostician_id=diagnostician_id)
         if date_from:
             queryset = queryset.filter(created_at__gte=date_from)
         if date_to:
@@ -280,9 +455,10 @@ def dashboard_stats(request):
     """
     date_from = request.query_params.get("date_from")
     date_to = request.query_params.get("date_to")
+    include_all = request.query_params.get("all_dates") in {"1", "true", "True"}
 
     try:
-        start_dt, end_dt = parse_dashboard_range(date_from, date_to)
+        start_dt, end_dt = parse_dashboard_range(date_from, date_to, include_all=include_all)
     except ValueError:
         return Response(
             {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
@@ -302,9 +478,10 @@ def chart_data(request):
     """
     date_from = request.query_params.get("date_from")
     date_to = request.query_params.get("date_to")
+    include_all = request.query_params.get("all_dates") in {"1", "true", "True"}
 
     try:
-        start_dt, end_dt = parse_dashboard_range(date_from, date_to)
+        start_dt, end_dt = parse_dashboard_range(date_from, date_to, include_all=include_all)
     except ValueError:
         return Response(
             {"error": "Неверный формат даты. Используйте YYYY-MM-DD"},
@@ -317,6 +494,8 @@ def chart_data(request):
     # Так как parse_dashboard_range для переданного date_to возвращает exclusive end_dt (+1 day),
     # для графика нужно вернуть последний реальный день периода.
     if date_from and date_to:
+        end_date = (end_dt - timedelta(days=1)).date()
+    elif include_all:
         end_date = (end_dt - timedelta(days=1)).date()
 
     if start_date > end_date:
@@ -485,6 +664,176 @@ def forecast_compare_methods(request):
     }
     return Response(response_payload)
 
+
+@api_view(["GET", "PATCH"])
+def doctor_me_view(request):
+    doctor, error_response = _doctor_required_response(request)
+    if error_response:
+        return error_response
+
+    if request.method == "PATCH":
+        if "modality" not in request.data:
+            return Response(
+                {"detail": "Передайте список modality."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = DoctorSerializer(
+            doctor,
+            data={"modality": request.data.get("modality")},
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+    return Response(
+        {
+            "doctor": DoctorSerializer(doctor).data,
+            "stats": _doctor_statistics_payload(doctor),
+            "available_modalities": DISPLAY_MODALITIES,
+        }
+    )
+
+
+@api_view(["GET"])
+def doctor_schedules_view(request):
+    doctor, error_response = _doctor_required_response(request)
+    if error_response:
+        return error_response
+
+    today = timezone.localdate()
+    date_from = request.query_params.get("date_from") or today.isoformat()
+    date_to = request.query_params.get("date_to") or (today + timedelta(days=14)).isoformat()
+
+    schedules = Schedule.objects.filter(
+        doctor=doctor,
+        work_date__gte=date_from,
+        work_date__lte=date_to,
+    ).order_by("work_date", "time_start")
+    serializer = ScheduleSerializer(schedules, many=True)
+    return Response(serializer.data)
+
+
+@api_view(["GET"])
+def doctor_studies_view(request):
+    doctor, error_response = _doctor_required_response(request)
+    if error_response:
+        return error_response
+
+    qs = Study.objects.filter(diagnostician=doctor).select_related(
+        "study_type",
+        "diagnostician",
+    )
+
+    status_param = request.query_params.get("status")
+    date_from = request.query_params.get("date_from")
+    date_to = request.query_params.get("date_to")
+
+    if status_param:
+        statuses = [item.strip() for item in status_param.split(",") if item.strip()]
+        qs = qs.filter(status__in=statuses)
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    qs = qs.order_by(
+        Case(
+            When(priority="cito", then=0),
+            When(priority="asap", then=1),
+            default=2,
+            output_field=IntegerField(),
+        ),
+        "created_at",
+    )
+    serializer = StudyWithDetailsSerializer(qs, many=True)
+    return Response(serializer.data)
+
+
+@api_view(["PATCH", "PUT"])
+def doctor_study_status_view(request, research_number):
+    doctor, error_response = _doctor_required_response(request)
+    if error_response:
+        return error_response
+
+    study = Study.objects.filter(
+        research_number=research_number,
+        diagnostician=doctor,
+    ).select_related("study_type", "diagnostician").first()
+    if study is None:
+        return Response(
+            {"detail": "Исследование не найдено среди назначений врача."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    input_serializer = StudyStatusUpdateSerializer(data=request.data)
+    input_serializer.is_valid(raise_exception=True)
+    new_status = input_serializer.validated_data["status"]
+    if new_status not in {"signed", "pending", "confirmed"}:
+        return Response(
+            {"detail": "Врач может отметить исследование выполненным или отказаться от него."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    study.status = new_status
+    if new_status == "pending":
+        doctor_name = doctor.fio_alias or f"Врач {doctor.id}"
+        study_type_name = study.study_type.name if study.study_type else None
+        message = f"{doctor_name} отказался от исследования {study.research_number}"
+        if study_type_name:
+            message = f"{message}: {study_type_name}"
+        study.diagnostician = None
+        study.save(update_fields=["status", "diagnostician"])
+        _push_admin_notification(
+            message,
+            notification_type="study_refused",
+            payload={
+                "doctor_id": doctor.id,
+                "doctor_name": doctor_name,
+                "research_number": study.research_number,
+                "study_type": study_type_name,
+            },
+        )
+    else:
+        study.save(update_fields=["status"])
+        if new_status == "signed":
+            doctor_name = doctor.fio_alias or f"Врач {doctor.id}"
+            study_type_name = study.study_type.name if study.study_type else None
+            message = f"{doctor_name} выполнил исследование {study.research_number}"
+            if study_type_name:
+                message = f"{message}: {study_type_name}"
+            _push_admin_notification(
+                message,
+                payload={
+                    "doctor_id": doctor.id,
+                    "doctor_name": doctor_name,
+                    "research_number": study.research_number,
+                    "study_type": study_type_name,
+                },
+            )
+    return Response(StudyWithDetailsSerializer(study).data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET", "POST"])
+def admin_notifications_view(request):
+    if request.method == "POST":
+        action = request.data.get("action")
+        if action == "clear":
+            _set_admin_notifications([])
+            return Response({"notifications": [], "unread_count": 0})
+        return Response(
+            {"detail": "Неизвестное действие."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    notifications = _get_admin_notifications()
+    return Response(
+        {
+            "notifications": notifications,
+            "unread_count": len(notifications),
+        }
+    )
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def login_view(request):
@@ -496,17 +845,15 @@ def login_view(request):
 
     user = authenticate(username=username, password=password)
     if user is None:
+        user = _authenticate_doctor_default(username, password)
+    if user is None:
         return Response({"detail": "Неверные учетные данные."}, status=status.HTTP_401_UNAUTHORIZED)
 
     token, _ = Token.objects.get_or_create(user=user)
     return Response(
         {
             "token": token.key,
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "full_name": user.get_full_name() or user.username,
-            },
+            "user": _build_user_payload(user),
         }
     )
 
@@ -517,11 +864,9 @@ def profile_view(request):
     if request.method == "GET":
         return Response(
             {
-                "id": user.id,
-                "username": user.username,
                 "first_name": user.first_name,
                 "last_name": user.last_name,
-                "full_name": user.get_full_name() or user.username,
+                **_build_user_payload(user),
             }
         )
 
@@ -545,11 +890,9 @@ def profile_view(request):
     user.save(update_fields=update_fields)
     return Response(
         {
-            "id": user.id,
-            "username": user.username,
             "first_name": user.first_name,
             "last_name": user.last_name,
-            "full_name": user.get_full_name() or user.username,
+            **_build_user_payload(user),
         }
     )
 

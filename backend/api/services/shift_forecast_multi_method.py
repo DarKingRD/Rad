@@ -327,6 +327,13 @@ def _get_scheduled_doctors_map(date_from: date, date_to: date) -> dict[date, int
     }
 
 
+def _day_has_observations(day_series: dict[str, dict[str, float]] | None) -> bool:
+    return any(
+        float((values or {}).get("studies_count") or 0.0) > 0
+        for values in (day_series or {}).values()
+    )
+
+
 
 def _select_source_days(
     *,
@@ -360,7 +367,11 @@ def _build_profile_for_day(
     recent_weeks: int,
     moving_window_days: int,
 ) -> list[dict]:
-    history_days = [current_day for current_day in _daterange(history_start, history_end)]
+    history_days = [
+        current_day
+        for current_day in _daterange(history_start, history_end)
+        if _day_has_observations(daily_series.get(current_day))
+    ]
     source_days = _select_source_days(
         target_day=target_day,
         history_days=history_days,
@@ -455,7 +466,12 @@ def _smooth_daily_totals(
 
     for target_key in ("studies_count", "total_up"):
         for weekday in range(7):
-            weekday_days = [day for day in history_days if day.weekday() == weekday]
+            weekday_days = [
+                day
+                for day in history_days
+                if day.weekday() == weekday
+                and float((totals_map.get(day) or {}).get("studies_count") or 0.0) > 0
+            ]
             peer_values = [
                 float((totals_map.get(day) or {}).get(target_key) or 0.0)
                 for day in weekday_days

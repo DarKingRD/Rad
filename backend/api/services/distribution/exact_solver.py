@@ -21,6 +21,8 @@ from .config import (
 from .entities import DoctorData, ScheduleOption, StudyData
 from .time_utils import add_work_minutes, execution_segments, occupied_slot_indices, slot_boundaries
 
+_WORKER_CONTEXT = {}
+
 
 def _solver_available(solver) -> bool:
     try:
@@ -115,25 +117,54 @@ def _solve_with_pulp_mip(
     problem = pulp.LpProblem(f"Exact_{objective_code}", pulp.LpMinimize)
     x = {option.option_id: pulp.LpVariable(f"x_{option.option_id}", cat="Binary") for option in options}
 
+    added_study_constraints = 0
+    skipped_study_constraints = 0
     for study_idx, option_ids in options_by_study.items():
-        if option_ids:
+        if len(option_ids) > 1:
             problem += (pulp.lpSum(x[option_id] for option_id in option_ids) <= 1, f"StudyChoice_{study_idx}")
+            added_study_constraints += 1
+        else:
+            skipped_study_constraints += 1
 
+    added_slot_constraints = 0
+    skipped_slot_constraints = 0
     for (doctor_idx, slot_idx), option_ids in options_by_doctor_slot.items():
-        problem += (pulp.lpSum(x[option_id] for option_id in option_ids) <= 1, f"Cap_d{doctor_idx}_s{slot_idx}")
+        if len(option_ids) > 1:
+            problem += (pulp.lpSum(x[option_id] for option_id in option_ids) <= 1, f"Cap_d{doctor_idx}_s{slot_idx}")
+            added_slot_constraints += 1
+        else:
+            skipped_slot_constraints += 1
 
+    added_up_constraints = 0
+    skipped_up_constraints = 0
     for doctor_idx, doctor in enumerate(doctors):
         doctor_option_ids = options_by_doctor.get(doctor_idx, [])
-        if doctor_option_ids:
+        if not doctor_option_ids:
+            skipped_up_constraints += 1
+            continue
+
+        # Если даже выбор всех опций врача не превышает его дневной лимит УП,
+        # ограничение не сужает feasible set: бинарность переменных уже достаточна.
+        max_possible_up = sum(up_by_option[option_id] for option_id in doctor_option_ids)
+        if max_possible_up <= doctor.max_up + 1e-9:
+            skipped_up_constraints += 1
+        else:
             problem += (
                 pulp.lpSum(up_by_option[option_id] * x[option_id] for option_id in doctor_option_ids)
                 <= doctor.max_up,
                 f"UP_{doctor_idx}",
             )
+            added_up_constraints += 1
 
     problem += (
         base_constant + pulp.lpSum(reduced_cost_by_option[option_id] * x[option_id] for option_id in x),
         "Obj",
+    )
+    log(
+        "CBC constraints: "
+        f"study added={added_study_constraints}, skipped_redundant={skipped_study_constraints}; "
+        f"slot added={added_slot_constraints}, skipped_redundant={skipped_slot_constraints}; "
+        f"up added={added_up_constraints}, skipped_redundant={skipped_up_constraints}"
     )
     log(f"TIMING build_model_cbc: {time.perf_counter() - t_build_model:.2f}s")
 
@@ -265,10 +296,10 @@ def _build_rows_for_doctor(
                     )
                 )
 
-            ranked.sort(key=lambda item: (item[0], item[1], item[2]))
             if EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR is None:
                 rows.extend(ranked)
             else:
+                ranked.sort(key=lambda item: (item[0], item[1], item[2]))
                 rows.extend(ranked[:EXACT_MAX_VARIANTS_PER_STUDY_DOCTOR])
 
     return rows
@@ -287,25 +318,30 @@ def _auto_options_workers(doctors_count: int) -> int:
     return max(1, min(cpu_count, doctors_count))
 
 
+def _init_option_worker(studies, objective, priority_weights, planning_now):
+    """Инициализировать общий контекст процесса для генерации options."""
+    _WORKER_CONTEXT.clear()
+    _WORKER_CONTEXT.update(
+        {
+            "studies": studies,
+            "objective": objective,
+            "priority_weights": priority_weights,
+            "planning_now": planning_now,
+        }
+    )
+
+
 def _build_rows_for_doctor_worker(payload):
     """Worker для ProcessPoolExecutor: генерирует options одного врача."""
-    (
-        doctor_idx,
-        doctor,
-        studies,
-        objective,
-        priority_weights,
-        planning_now,
-        prebooked_minutes,
-    ) = payload
+    doctor_idx, doctor, prebooked_minutes = payload
 
     rows = _build_rows_for_doctor(
         doctor_idx=doctor_idx,
         doctor=doctor,
-        studies=studies,
-        objective=objective,
-        priority_weights=priority_weights,
-        planning_now=planning_now,
+        studies=_WORKER_CONTEXT["studies"],
+        objective=_WORKER_CONTEXT["objective"],
+        priority_weights=_WORKER_CONTEXT["priority_weights"],
+        planning_now=_WORKER_CONTEXT["planning_now"],
         prebooked_minutes=prebooked_minutes,
     )
     return doctor_idx, doctor.id, rows
@@ -347,15 +383,7 @@ def _collect_raw_option_rows(
         return collect_sequential()
 
     payloads = [
-        (
-            doctor_idx,
-            doctor,
-            studies,
-            objective,
-            priority_weights,
-            planning_now,
-            prebooked_map.get(doctor.id, 0.0),
-        )
+        (doctor_idx, doctor, prebooked_map.get(doctor.id, 0.0))
         for doctor_idx, doctor in enumerate(doctors)
     ]
 
@@ -363,7 +391,11 @@ def _collect_raw_option_rows(
     raw_rows_by_doctor: Dict[int, List[tuple]] = {}
 
     try:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_init_option_worker,
+            initargs=(studies, objective, priority_weights, planning_now),
+        ) as executor:
             future_map = {
                 executor.submit(_build_rows_for_doctor_worker, payload): payload[0]
                 for payload in payloads

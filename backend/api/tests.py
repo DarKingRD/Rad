@@ -4,6 +4,8 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory
+from django.contrib.auth.models import AnonymousUser, User
+from rest_framework.test import APIRequestFactory, force_authenticate
 
 from .serializers import DistributionRunSerializer
 from .services.distribution.entities import DoctorData, StudyData
@@ -229,16 +231,71 @@ class ForecastCompareMethodsTests(SimpleTestCase):
         self.assertGreater(smoothed[mondays[-1]]["total_up"], 180.0)
         self.assertLess(smoothed[saturdays[-1]]["total_up"], 40.0)
 
+    def test_outlier_smoothing_ignores_empty_calendar_days(self):
+        from .services.shift_forecast_multi_method import _smooth_daily_totals
+
+        mondays = [date(2025, 10, 6) + timedelta(days=7 * offset) for offset in range(8)]
+        totals_map = {
+            current_day: {"studies_count": 0.0, "total_up": 0.0}
+            for current_day in mondays
+        }
+        totals_map[mondays[1]] = {"studies_count": 12.0, "total_up": 24.0}
+        totals_map[mondays[5]] = {"studies_count": 18.0, "total_up": 36.0}
+
+        smoothed = _smooth_daily_totals(
+            totals_map=totals_map,
+            history_days=mondays,
+        )
+
+        self.assertEqual(smoothed[mondays[1]]["studies_count"], 12.0)
+        self.assertEqual(smoothed[mondays[5]]["studies_count"], 18.0)
+        self.assertEqual(smoothed[mondays[1]]["total_up"], 24.0)
+        self.assertEqual(smoothed[mondays[5]]["total_up"], 36.0)
+
+    def test_weekday_mean_ignores_empty_history_days(self):
+        from .services.shift_forecast_multi_method import FORECAST_XRAY, _build_profile_for_day
+
+        first_monday = date(2025, 10, 6)
+        empty_monday = date(2025, 10, 13)
+        second_monday = date(2025, 10, 20)
+        forecast_monday = date(2025, 10, 27)
+        daily_series = {
+            first_monday: {
+                FORECAST_XRAY: {"studies_count": 10.0, "total_up": 20.0},
+            },
+            empty_monday: {},
+            second_monday: {
+                FORECAST_XRAY: {"studies_count": 20.0, "total_up": 40.0},
+            },
+        }
+
+        profile = _build_profile_for_day(
+            target_day=forecast_monday,
+            daily_series=daily_series,
+            modalities=[FORECAST_XRAY],
+            history_start=first_monday,
+            history_end=second_monday,
+            method="weekday_mean",
+            recent_weeks=4,
+            moving_window_days=14,
+        )
+
+        self.assertEqual(len(profile), 1)
+        self.assertEqual(profile[0]["expected_studies"], 15.0)
+        self.assertEqual(profile[0]["expected_up"], 30.0)
+
 
 class DashboardAndChartViewsTests(SimpleTestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
+        self.user = User(username="test_manager", is_staff=True)
 
     @patch("api.views.parse_dashboard_range", side_effect=ValueError)
     def test_dashboard_stats_returns_400_for_invalid_date_format(self, _parse_mock):
         request = self.factory.get(
             "/api/dashboard/stats/", {"date_from": "bad", "date_to": "date"}
         )
+        force_authenticate(request, user=self.user) 
 
         response = dashboard_stats(request)
 
@@ -263,6 +320,8 @@ class DashboardAndChartViewsTests(SimpleTestCase):
             "/api/dashboard/chart/",
             {"date_from": "2026-03-01", "date_to": "2026-03-10"},
         )
+        
+        force_authenticate(request, user=self.user)
 
         response = chart_data(request)
 
@@ -278,6 +337,8 @@ class DashboardAndChartViewsTests(SimpleTestCase):
         )
         request = self.factory.get("/api/dashboard/chart/")
 
+        force_authenticate(request, user=self.user)
+        
         response = chart_data(request)
 
         self.assertEqual(response.status_code, 400)
@@ -423,6 +484,7 @@ class ExactSolverOptionBuilderTests(SimpleTestCase):
 class DistributionViewsTests(SimpleTestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
+        self.user = User(username="test_manager", is_staff=True)
 
     @patch("api.views.run_distribution")
     @patch("api.views.parse_distribution_datetime_end")
@@ -448,6 +510,8 @@ class DistributionViewsTests(SimpleTestCase):
             },
             format="json",
         )
+        
+        force_authenticate(request, user=self.user)
 
         response = distribute_studies_view(request)
 
@@ -471,6 +535,8 @@ class DistributionViewsTests(SimpleTestCase):
             {"distribution_id": "missing-id"},
             format="json",
         )
+        
+        force_authenticate(request, user=self.user)
 
         response = confirm_distribution(request)
 
@@ -495,6 +561,8 @@ class DistributionViewsTests(SimpleTestCase):
 
         request = self.factory.get("/api/distribute/preview/")
 
+        force_authenticate(request, user=self.user)
+        
         response = distribution_preview(request)
 
         self.assertEqual(response.status_code, 200)
@@ -504,6 +572,8 @@ class DistributionViewsTests(SimpleTestCase):
     def test_distribution_preview_returns_400_for_invalid_date(self):
         request = self.factory.get("/api/distribute/preview/", {"date": "23-03-2026"})
 
+        force_authenticate(request, user=self.user)
+        
         response = distribution_preview(request)
 
         self.assertEqual(response.status_code, 400)

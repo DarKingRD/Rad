@@ -1,11 +1,11 @@
 from datetime import date as date_class, datetime
 from decimal import Decimal
 
-from django.db.models import Count, DecimalField, Q, Sum, Value
+from django.db.models import Count, DecimalField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
-from ..models import Doctor, Schedule
+from ..models import Doctor, Schedule, Study
 
 MONTHLY_NORM = 50
 DAILY_NORM = 8
@@ -54,17 +54,25 @@ def get_doctors_with_load_context():
     else:
         month_end = now.replace(month=now.month + 1, day=1)
 
+    completed_load_subquery = (
+        Study.objects.filter(
+            diagnostician_id=OuterRef("pk"),
+            created_at__gte=month_start,
+            created_at__lt=month_end,
+            status="signed",
+        )
+        .values("diagnostician_id")
+        .annotate(total=Sum("study_type__up_value"))
+        .values("total")[:1]
+    )
+
     doctors_qs = (
         Doctor.objects.all()
         .annotate(
             current_load=Coalesce(
-                Sum(
-                    "studies__study_type__up_value",
-                    filter=Q(
-                        studies__created_at__gte=month_start,
-                        studies__created_at__lt=month_end,
-                        studies__status__in=["confirmed", "pending", "signed"],
-                    ),
+                Subquery(
+                    completed_load_subquery,
+                    output_field=DecimalField(max_digits=10, decimal_places=3),
                 ),
                 Value(Decimal("0.000")),
                 output_field=DecimalField(max_digits=10, decimal_places=3),

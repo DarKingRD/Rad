@@ -3,18 +3,52 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from statistics import median
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, DecimalField, Max, Min, Q, Sum, Value
+from django.db.models.functions import Coalesce
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 
 from ..models import Doctor, Study
+from .modality_catalog import (
+    CT,
+    CT_CONTRAST,
+    FLUOROGRAPHY,
+    MRI,
+    MRI_CONTRAST,
+    OTHER_MODALITY,
+    XRAY,
+    normalize_modality_name,
+)
+
+REPORT_MAIN_MODALITIES = {
+    FLUOROGRAPHY,
+    XRAY,
+    CT,
+    CT_CONTRAST,
+    MRI,
+    MRI_CONTRAST,
+}
+REPORT_OTHER_MODALITY = "Прочее"
 
 
-def parse_dashboard_range(date_from: str | None, date_to: str | None):
+def parse_dashboard_range(date_from: str | None, date_to: str | None, include_all: bool = False):
     """
     Возвращает (start_dt, end_dt_exclusive).
     Если даты не переданы — текущий месяц до текущего момента.
     """
+    if include_all:
+        bounds = Study.objects.aggregate(
+            min_created=Min("created_at"),
+            max_created=Max("created_at"),
+        )
+        if bounds["min_created"] and bounds["max_created"]:
+            start_dt = bounds["min_created"].replace(hour=0, minute=0, second=0, microsecond=0)
+            end_dt = bounds["max_created"] + timedelta(days=1)
+            return start_dt, end_dt
+
+        now = timezone.now()
+        return now.replace(hour=0, minute=0, second=0, microsecond=0), now
+
     if not date_from or not date_to:
         now = timezone.now()
         start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -71,6 +105,7 @@ def get_dashboard_stats_data(start_dt, end_dt):
     total_up = studies_agg["total_up"] or Decimal("0")
     avg_load = int(total_up / active_doctors) if active_doctors > 0 else 0
     doctor_performance = get_doctor_performance_data(studies_qs)
+    modality_breakdown = get_modality_breakdown_data(studies_qs)
     daily_up_values = [
         item["daily_up"]
         for item in get_completed_daily_up_by_doctor(studies_qs)
@@ -91,6 +126,7 @@ def get_dashboard_stats_data(start_dt, end_dt):
             "max": round(float(max(daily_up_values)), 3) if daily_up_values else 0,
         },
         "doctor_performance": doctor_performance,
+        "modality_breakdown": modality_breakdown,
     }
 
 
@@ -164,6 +200,89 @@ def get_doctor_performance_data(studies_qs):
             -item["completed_studies"],
             -item["completed_up"],
             item["doctor_name"],
+        ),
+    )
+
+
+def get_modality_breakdown_data(studies_qs):
+    """
+    Возвращает управленческую сводку по основным модальностям.
+    Считаем весь поток, выполненный поток, очередь и УП внутри выбранного периода.
+    """
+    total_studies = studies_qs.count()
+    rows = (
+        studies_qs.values("study_type__modality")
+        .annotate(
+            studies_count=Count("research_number"),
+            completed_studies=Count("research_number", filter=Q(status="signed")),
+            pending_studies=Count("research_number", filter=Q(diagnostician_id__isnull=True)),
+            total_up=Coalesce(
+                Sum("study_type__up_value"),
+                Value(Decimal("0.000")),
+                output_field=DecimalField(max_digits=12, decimal_places=3),
+            ),
+            completed_up=Coalesce(
+                Sum("study_type__up_value", filter=Q(status="signed")),
+                Value(Decimal("0.000")),
+                output_field=DecimalField(max_digits=12, decimal_places=3),
+            ),
+        )
+    )
+
+    grouped_result: dict[str, dict] = {}
+    for row in rows:
+        normalized_modality = normalize_modality_name(row["study_type__modality"])
+        modality = (
+            normalized_modality
+            if normalized_modality in REPORT_MAIN_MODALITIES
+            else REPORT_OTHER_MODALITY
+        )
+        if normalized_modality == OTHER_MODALITY:
+            modality = REPORT_OTHER_MODALITY
+
+        studies_count = int(row["studies_count"] or 0)
+        completed_studies = int(row["completed_studies"] or 0)
+        pending_studies = int(row["pending_studies"] or 0)
+        total_up = float(row["total_up"] or 0)
+        completed_up = float(row["completed_up"] or 0)
+
+        current = grouped_result.setdefault(
+            modality,
+            {
+                "modality": modality,
+                "studies_count": 0,
+                "completed_studies": 0,
+                "pending_studies": 0,
+                "total_up": 0.0,
+                "completed_up": 0.0,
+                "share_percent": 0.0,
+                "completion_rate_percent": 0.0,
+            },
+        )
+        current["studies_count"] += studies_count
+        current["completed_studies"] += completed_studies
+        current["pending_studies"] += pending_studies
+        current["total_up"] += total_up
+        current["completed_up"] += completed_up
+
+    result = []
+    for item in grouped_result.values():
+        studies_count = item["studies_count"]
+        completed_studies = item["completed_studies"]
+        item["total_up"] = round(item["total_up"], 3)
+        item["completed_up"] = round(item["completed_up"], 3)
+        item["share_percent"] = round((studies_count / total_studies) * 100, 2) if total_studies else 0
+        item["completion_rate_percent"] = (
+            round((completed_studies / studies_count) * 100, 2) if studies_count else 0
+        )
+        result.append(item)
+
+    return sorted(
+        result,
+        key=lambda item: (
+            -item["studies_count"],
+            -item["total_up"],
+            item["modality"],
         ),
     )
 
